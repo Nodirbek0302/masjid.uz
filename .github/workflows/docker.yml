@@ -41,30 +41,39 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Image nomini aniqlash
+      - name: Docker Hub sozlanganmi?
+        id: cfg
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_ACCESS_TOKEN: ${{ secrets.DOCKERHUB_ACCESS_TOKEN }}
         run: |
-          if [ -z "${DOCKERHUB_USERNAME:-}" ]; then
-            echo "::error::DOCKERHUB_USERNAME secret'i yo'q. Settings → Secrets and variables → Actions → New repository secret"
-            exit 1
+          # GitHub secret'lari repozitoriyga tegishli: boshqa loyihadagi secret bu yerga o'tmaydi.
+          # Yo'q bo'lsa workflow yiqilmaydi — image yuborish shunchaki o'tkazib yuboriladi.
+          if [ -z "${DOCKERHUB_USERNAME:-}" ] || [ -z "${DOCKERHUB_ACCESS_TOKEN:-}" ]; then
+            echo "::notice::DOCKERHUB_USERNAME / DOCKERHUB_ACCESS_TOKEN secret'lari yo'q — image Docker Hub'ga yuborilmadi (Settings → Secrets and variables → Actions)."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "IMAGE=${DOCKERHUB_USERNAME}/${IMAGE_NAME}" >> "$GITHUB_ENV"
           fi
-          echo "IMAGE=${DOCKERHUB_USERNAME}/${IMAGE_NAME}" >> "$GITHUB_ENV"
 
       - name: QEMU (boshqa arxitektura uchun)
-        if: contains(env.PLATFORMS, 'arm64')
+        if: steps.cfg.outputs.enabled == 'true' && contains(env.PLATFORMS, 'arm64')
         uses: docker/setup-qemu-action@v3
 
       - name: Buildx
+        if: steps.cfg.outputs.enabled == 'true'
         uses: docker/setup-buildx-action@v3
 
       - name: Docker Hub'ga kirish
+        if: steps.cfg.outputs.enabled == 'true'
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_ACCESS_TOKEN }}
 
       - name: Teg va label'lar
+        if: steps.cfg.outputs.enabled == 'true'
         id: meta
         uses: docker/metadata-action@v5
         with:
@@ -77,6 +86,7 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Qurish va push
+        if: steps.cfg.outputs.enabled == 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -92,6 +102,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Xulosa
+        if: steps.cfg.outputs.enabled == 'true'
         run: |
           echo "### Image tayyor" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
