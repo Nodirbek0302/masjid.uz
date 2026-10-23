@@ -385,10 +385,14 @@
         el("p", m.address ? { text: m.address } : { class: "missing", text: T("m.addr_unknown") }),
         el("div", { class: "muted stack" }, [
           el("div", { text: m.lat.toFixed(6) + ", " + m.lon.toFixed(6) + " · " + T("m.version", { v: m.version }) }),
-          el("div", { text: T("m.updated", { t: I18N.fmtDate(m.updated_at) }) }),
           m.verification_note ? el("div", { text: T("m.verif", { note: m.verification_note }) }) : null
         ]),
         el("h3", { text: T("m.times") }), timesGrid(m),
+        el("div", { class: "times-meta muted", text: m.times_updated_at ? T("times.updated", { t: I18N.fmtDate(m.times_updated_at) }) : T("times.never") }),
+        el("div", { class: "cta" }, [
+          el("p", { text: T(m.times_updated_at ? "cta.have" : "cta.empty") }),
+          btn(m.times_updated_at ? "ghost small" : "small", T("cta.btn"), function () { editForm(m); })
+        ]),
         el("div", { class: "row" }, yandexLinks(m)),
         el("div", { class: "row" }, [
           btn("", T("btn.edit"), function () { editForm(m); }),

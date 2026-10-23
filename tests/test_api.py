@@ -221,6 +221,21 @@ class Api(unittest.TestCase):
         self.assertEqual(r2["updated"], 0)
         self.assertEqual(self.call("GET", "/api/mosques/" + ids["Near number"])[1]["address"], "Muqimiy ko'chasi 166, Toshkent")
 
+    def test_times_updated_at_tracks_only_changes_of_the_times(self):
+        s, m = self.add(31.0, 73.0, name="Times stamp")                       # no times yet
+        self.assertIsNone(m["times_updated_at"])
+        s, m = self.call("PATCH", "/api/mosques/" + m["id"], {"expected_version": 1, "name": "Times stamp 2"})
+        self.assertIsNone(m["times_updated_at"])                              # a name edit is not a times change
+        s, m2 = self.call("PATCH", "/api/mosques/" + m["id"], {"expected_version": m["version"], "prayer_times": {"fajr": "05:10"}})
+        stamp = m2["times_updated_at"]
+        self.assertTrue(stamp)
+        s, m3 = self.call("PATCH", "/api/mosques/" + m["id"], {"expected_version": m2["version"], "address": "Somewhere"})
+        self.assertEqual(m3["times_updated_at"], stamp)                       # unrelated edit keeps the stamp
+        s, m4 = self.call("PATCH", "/api/mosques/" + m["id"], {"expected_version": m3["version"], "prayer_times": {"fajr": None}})
+        self.assertIsNone(m4["times_updated_at"])                             # all times cleared -> "not entered"
+        s, c = self.add(31.5, 73.5, name="Born with times", prayer_times={"isha": "20:00"})
+        self.assertTrue(c["times_updated_at"])                                # entered at creation
+
     def test_nearest_mosques_are_really_the_nearest(self):
         import math
         pts = [(34.0000, 72.0000), (34.0030, 72.0000), (34.0100, 72.0100), (34.1000, 72.1000), (34.5000, 72.5000)]

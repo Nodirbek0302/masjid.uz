@@ -134,3 +134,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--g500);bo
 .chip-btn:hover{background:var(--g50)}.chip-btn:active{transform:scale(.96)}.chip-btn[disabled]{opacity:.6;pointer-events:none}
 .me-dot{width:18px;height:18px;border-radius:50%;background:#2563eb;border:3px solid #fff;box-shadow:0 0 0 6px rgba(37,99,235,.22),0 1px 5px rgba(0,0,0,.35)}
 .dist{display:inline-flex;align-items:center;gap:6px;margin:8px 0 2px;padding:5px 11px;border-radius:99px;background:var(--g50);border:1px solid var(--g200);color:var(--g800);font-weight:700;font-size:13px}
+
+.times-meta{margin:8px 2px 0;font-weight:600}
+.cta{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:10px 0 2px;padding:12px 14px;border-radius:14px;background:var(--g50);border:1px dashed var(--g200)}
+.cta p{margin:0;flex:1 1 200px;color:var(--g800);font-size:14px}

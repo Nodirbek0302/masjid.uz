@@ -187,6 +187,7 @@ class Store:
             d.pop("creator_id", None)        # never expose Telegram/device ids in public responses
         for k in ("created_at", "updated_at"):
             d[k] = iso(d[k])
+        d["times_updated_at"] = iso(d["times_updated_at"]) if d.get("times_updated_at") else None
         return d
 
     @staticmethod
@@ -282,9 +283,9 @@ class Store:
             dups = self._nearby(cur, lat, lon, self.cfg.dup_radius_m)
             if dups and not body.get("force"):
                 raise ApiError(409, "possible_duplicate", "A mosque already exists nearby", duplicates=dups)
-            cur.execute("INSERT INTO mosques(lat,lon,name,address,prayer_times,source,origin,status,creator_id,name_search) "
-                        "VALUES (%s,%s,%s,%s,%s,'community-app','community','unverified',%s,%s) RETURNING *",
-                        (lat, lon, name, address, Jsonb(times), actor, translit.search_key(name)))
+            cur.execute("INSERT INTO mosques(lat,lon,name,address,prayer_times,source,origin,status,creator_id,name_search,times_updated_at) "
+                        "VALUES (%s,%s,%s,%s,%s,'community-app','community','unverified',%s,%s,CASE WHEN %s THEN now() END) RETURNING *",
+                        (lat, lon, name, address, Jsonb(times), actor, translit.search_key(name), bool(times)))
             m = self.row(cur.fetchone())
             self._history(cur, m["id"], 1, "create", actor, {
                 "lat": [None, lat], "lon": [None, lon], "name": [None, name],
@@ -328,6 +329,8 @@ class Store:
             if "name" in changes:
                 sets += ", name_search=%s"
                 vals.append(translit.search_key(changes["name"][1]))
+            if "prayer_times" in changes:                  # the congregation times themselves changed: stamp that moment
+                sets += ", times_updated_at=" + ("now()" if changes["prayer_times"][1] else "NULL")
             cur.execute("UPDATE mosques SET " + sets + ", version=%s, updated_at=now() WHERE id=%s RETURNING *",
                         vals + [version, m_id])
             out = self.row(cur.fetchone())
