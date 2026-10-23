@@ -1,5 +1,5 @@
 #!/bin/sh
-# Bitta image — bir nechta rol:  web (standart) | bot | import-osm [args] | istalgan buyruq
+# Bitta image — bir nechta rol:  web (standart) | bot | osm-sync | import-osm [args] | istalgan buyruq
 set -eu
 
 cmd="${1:-web}"
@@ -23,6 +23,7 @@ PY
 case "$cmd" in
   web)        wait_for_db; exec python server/app.py ;;          # migratsiyalar app ishga tushganda qo'llanadi
   bot)        exec python server/bot.py ;;
+  osm-sync)   wait_for_db; exec python server/osm_sync.py ;;     # kuniga 1 marta OSM'dan yangilaydi
   import-osm) wait_for_db; exec python server/import_osm.py "$@" ;;
   *)          exec "$cmd" "$@" ;;
 esac

@@ -32,6 +32,9 @@ services:
   bot:
     <<: *app-common
 
+  osm-sync:
+    <<: *app-common
+
   postgres:
     restart: always
     logging:

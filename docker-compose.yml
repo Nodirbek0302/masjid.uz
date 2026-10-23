@@ -4,6 +4,7 @@
 # qayta yonganda ham (restart: unless-stopped + docker avtomatik ishga tushadi) o'zi qaytib ko'tariladi.
 #   web, postgres         — doim
 #   profil "bot"          — Telegram bot            (TELEGRAM_BOT_TOKEN kerak)
+#   profil "osm"          — OSM masjidlarini kuniga 1 marta avtomatik yangilaydi (birinchi ishga tushishda ham to'ldiradi)
 #   profil "https"        — Caddy: domen + avtomatik HTTPS (80/443)  (DOMAIN kerak)
 #   profil "cloudflare"   — Cloudflare Tunnel       (CLOUDFLARE_TUNNEL_TOKEN kerak)
 # Profillar .env dagi COMPOSE_PROFILES=https,bot orqali tanlanadi.
@@ -80,6 +81,28 @@ services:
       resources:
         limits:
           memory: 128M
+
+  # OpenStreetMap'dan masjidlar: ishga tushganda bir marta, keyin har OSM_SYNC_HOURS (standart 24) soatda.
+  # Tahrirlangan yozuvlarga tegmaydi. Overpass ochiq xizmat: kuniga 1 marta — ahloqli chastota.
+  osm-sync:
+    build: .
+    image: ${IMAGE:-no0404ir0302/masjid-uz:latest}
+    profiles: ["osm"]
+    restart: unless-stopped
+    command: ["osm-sync"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-masjid}:${POSTGRES_PASSWORD:-masjid}@postgres:5432/${POSTGRES_DB:-masjid}
+    healthcheck:
+      disable: true
+    depends_on:
+      web: {condition: service_healthy}
+    deploy:
+      resources:
+        limits:
+          memory: 192M
 
   # Domen + avtomatik HTTPS (Let's Encrypt). Profil "https": .env da DOMAIN=masjid.example.uz va domenning
   # A yozuvi server IP'siga qaragan bo'lishi kerak; 80 va 443 portlar ochiq bo'lsin.

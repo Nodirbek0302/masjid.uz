@@ -1,4 +1,14 @@
-# Importing mosques from OpenStreetMap (one-off, run on your own machine/server)
+# Importing mosques from OpenStreetMap
+
+**Automatic (Docker):** the `osm` compose profile runs `server/osm_sync.py`: one download at start (this also fills an empty
+database) and then every `OSM_SYNC_HOURS` (default 24). New OSM mosques are added; imported rows nobody has edited follow
+OSM (name/coordinates/address, logged in history as `osm_sync`); anything a person edited or a moderator archived is never
+touched; objects that vanished from OSM are only counted in the log. Failed downloads retry after 1 h, never in a loop.
+Why not query Overpass live from the app: it is a shared free service with fair-use limits and no guarantee (it has
+returned 502/504 and takes seconds to minutes), and our records need their own ids for prayer times, edits and history.
+
+**Manual (below):** the same importer by hand.
+
 
 Data: `amenity=place_of_worship` + `religion=muslim` inside Uzbekistan. Licence: ODbL 1.0, © OpenStreetMap contributors.
 Run it once (and again only occasionally): Overpass is a shared free service.

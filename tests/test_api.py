@@ -107,6 +107,29 @@ class Api(unittest.TestCase):
         s, g = self.call("GET", "/api/export/osm-derived.geojson")
         self.assertEqual(len(g["features"]), 2); self.assertIn("ODbL", g["license"])
 
+    def test_osm_resync_updates_untouched_and_protects_edited(self):
+        import import_osm
+        def el(i, lat, name): return {"type": "node", "id": i, "lat": lat, "lon": 70.0, "tags": {"name": name}}
+        first = {"elements": [el(901, 38.1, "Old A"), el(902, 38.2, "Old B"), el(903, 38.3, "Old C")]}
+        r = import_osm.run(first, app.Config()); self.assertEqual(r["added"], 3)
+        s, lst = self.call("GET", "/api/mosques?bbox=69.9,38.0,70.1,38.4")
+        by_name = {m["name"]: m for m in lst["items"]}
+        # a human edits B; C gets archived by a moderator; A is untouched
+        s, _ = self.call("PATCH", "/api/mosques/" + by_name["Old B"]["id"], {"expected_version": 1, "name": "Community B"})
+        self.assertEqual(s, 200)
+        self.call("POST", "/api/admin/mosques/%s/archive" % by_name["Old C"]["id"], {}, admin=True)
+        second = {"elements": [el(901, 38.1, "New A"), el(902, 38.2, "OSM B changed"), el(903, 38.3, "New C")]}
+        r = import_osm.run(second, app.Config())
+        self.assertEqual((r["updated"], r["protected_edited"]), (1, 2))
+        self.assertEqual(self.call("GET", "/api/mosques/" + by_name["Old A"]["id"])[1]["name"], "New A")        # followed OSM
+        self.assertEqual(self.call("GET", "/api/mosques/" + by_name["Old B"]["id"])[1]["name"], "Community B")  # human edit wins
+        self.assertEqual(self.call("GET", "/api/mosques/" + by_name["Old C"]["id"])[1]["status"], "archived")
+        actions = [h["action"] for h in self.call("GET", "/api/mosques/%s/history" % by_name["Old A"]["id"])[1]["items"]]
+        self.assertEqual(actions, ["osm_sync", "create"])                                                       # audit trail kept
+        r = import_osm.run(second, app.Config()); self.assertEqual(r["updated"], 0)                             # idempotent
+        third = {"elements": [el(901, 38.1, "New A")] + [el(1000 + i, 38.5 + i / 100.0, "X%d" % i) for i in range(3)]}
+        self.assertEqual(import_osm.run(third, app.Config())["missing_in_osm"] >= 2, True)                      # vanished: counted only
+
     def test_search_and_admin_views(self):
         self.add(37.5, 64.5, name="Alisher Navoiy jome masjidi")
         self.add(37.6, 64.6, name="100%_special")

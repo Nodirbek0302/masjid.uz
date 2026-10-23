@@ -68,8 +68,8 @@ Compose'da `ADMIN_LOCAL_ONLY=1`: `/admin.html` ommaviy domen orqali **ochilmaydi
 ssh -L 8080:127.0.0.1:8080 <user>@<server>        # keyin brauzerda  http://localhost:8080/admin.html
 ```
 
-## 5. OSM masjidlarini import (serverda, bir marta)
-`osm-mosques.json` ni yuklab (docs/IMPORT-OSM.md, 2-qadam) serverga qo'ying, so'ng `make import-osm`.
+## 5. OSM masjidlari
+`COMPOSE_PROFILES` da `osm` bo'lsa hech narsa qilish shart emas: birinchi ishga tushishda baza to'ladi, keyin har 24 soatda yangilanadi (`docker compose logs osm-sync`). Qo'lda: docs/IMPORT-OSM.md.
 
 ## 6. Zaxira
 `make backup` (yoki cron: `15 3 * * * cd ~/masjid-uz && make backup`). Tiklash:
