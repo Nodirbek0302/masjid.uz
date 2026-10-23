@@ -97,21 +97,19 @@ p{margin:8px 0}
 .badge.reported{background:var(--warn-bg);color:var(--warn)}.badge.reported::before{background:var(--warn)}
 
 /* prayer-time tiles */
-.times{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
-.tile{padding:10px 8px;border-radius:12px;background:var(--soft);border:1px solid var(--line);text-align:center}
+.times,.grid{display:flex;flex-wrap:wrap;gap:8px}
+.tile{flex:1 1 calc(33.333% - 8px);min-width:92px;padding:10px 8px;border-radius:12px;background:var(--soft);border:1px solid var(--line);text-align:center}
 .tile b{display:block;font-size:19px;color:var(--g800);font-variant-numeric:tabular-nums}
 .tile small{display:block;color:var(--muted);font-size:12px}
 .tile.empty b{color:#b6c4be;font-weight:500}
-.tile.jumuah{background:var(--g50);border-color:var(--g200)}
 
 /* forms */
 label{display:block;margin:12px 0 4px;font-size:13px;font-weight:600;color:var(--muted)}
 input,select,textarea{width:100%;padding:10px 12px;border-radius:12px;border:1px solid var(--line);background:#fff;transition:border-color .15s,box-shadow .15s}
 input:focus,select:focus,textarea:focus{outline:none;border-color:var(--g500);box-shadow:0 0 0 4px rgba(16,185,129,.16)}
-.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.grid>div{flex:1 1 calc(33.333% - 8px);min-width:92px}
 .grid label{margin-top:4px;font-size:12px}
 .grid input{padding:8px 6px;text-align:center}
-@media(max-width:380px){.grid,.times{grid-template-columns:repeat(2,1fr)}}
 
 .hist{margin:10px 0;padding:2px 0 2px 12px;border-left:3px solid var(--g200);font-size:13.5px}
 .hist b{color:var(--g800)}

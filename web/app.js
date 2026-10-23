@@ -3,7 +3,7 @@
 (function () {
   "use strict";
   var T = I18N.t;
-  var PRAYERS = ["fajr", "dhuhr", "asr", "maghrib", "isha", "jumuah"];
+  var PRAYERS = ["fajr", "dhuhr", "asr", "maghrib", "isha"];      // five daily prayers (no separate Friday time)
   var $ = function (id) { return document.getElementById(id); };
 
   // ---- identity: random client id (per device) + Telegram initData when inside Mini App
@@ -55,11 +55,8 @@
 
   // ---- navigation: opens an external app/site; nothing is requested from or stored by Yandex
   function yandexLinks(m) {
-    var ll = m.lon + "," + m.lat;
-    return [
-      el("a", { class: "btn ghost", target: "_blank", rel: "noopener noreferrer", href: "https://yandex.com/maps/?pt=" + ll + "&z=17&l=map", text: T("link.yandex") }),
-      el("a", { class: "btn ghost", target: "_blank", rel: "noopener noreferrer", href: "https://yandex.com/maps/?rtext=~" + m.lat + "," + m.lon + "&rtt=auto", text: T("link.route") })
-    ];
+    return [el("a", { class: "btn ghost", target: "_blank", rel: "noopener noreferrer",
+      href: "https://yandex.com/maps/?rtext=~" + m.lat + "," + m.lon + "&rtt=auto", text: "🧭 " + T("link.route") })];
   }
 
   // ---- own mosque icon (drawn here; no third-party artwork): green badge with dome and minaret
@@ -368,7 +365,7 @@
     var g = el("div", { class: "times" });
     PRAYERS.forEach(function (p) {
       var v = m.prayer_times[p];
-      g.appendChild(el("div", { class: "tile" + (v ? "" : " empty") + (p === "jumuah" ? " jumuah" : "") }, [el("small", { text: T("pn." + p) }), el("b", { text: v || "—" })]));
+      g.appendChild(el("div", { class: "tile" + (v ? "" : " empty") }, [el("small", { text: T("pn." + p) }), el("b", { text: v || "—" })]));
     });
     return g;
   }
@@ -391,7 +388,7 @@
         el("div", { class: "times-meta muted", text: m.times_updated_at ? T("times.updated", { t: I18N.fmtDate(m.times_updated_at) }) : T("times.never") }),
         el("div", { class: "cta" }, [
           el("p", { text: T(m.times_updated_at ? "cta.have" : "cta.empty") }),
-          btn(m.times_updated_at ? "ghost small" : "small", T("cta.btn"), function () { editForm(m); })
+          btn(m.times_updated_at ? "ghost small" : "small", T("cta.btn"), function () { editForm(m, { timesOnly: true }); })
         ]),
         el("div", { class: "row" }, yandexLinks(m)),
         el("div", { class: "row" }, [
@@ -425,7 +422,8 @@
   }
   function fmtC(lat, lng) { return lat.toFixed(6) + ", " + lng.toFixed(6); }
 
-  function editForm(m) {
+  function editForm(m, opts) {
+    var timesOnly = !!(opts && opts.timesOnly);                  // short form: only the congregation times (the "add the times" button)
     var name = el("input", { value: m.name || "", maxlength: 200, autocomplete: "off" });
     var addr = el("input", { value: m.address || "", maxlength: 300, autocomplete: "off" });
     var grid = timesInputs(m.prayer_times);
@@ -433,10 +431,11 @@
     var coords = el("div", { class: "muted", text: T("edit.loc", { c: fmtC(m.lat, m.lon) }) });
     var newPos = null;
     var node = el("div", {}, [
-      el("h2", { text: T("edit.title") }), field(T("f.name"), name), field(T("f.addr"), addr),
-      el("h3", { text: T("m.times") }), grid, field(T("f.note"), note),
-      el("div", { class: "row" }, [coords]),
-      el("div", { class: "row" }, [
+      el("h2", { text: timesOnly ? T("cta.btn") : T("edit.title") }),
+      timesOnly ? el("h3", { text: m.name || T("m.name_unknown") }) : field(T("f.name"), name), timesOnly ? null : field(T("f.addr"), addr),
+      timesOnly ? null : el("h3", { text: T("m.times") }), grid, field(T("f.note"), note),
+      timesOnly ? null : el("div", { class: "row" }, [coords]),
+      timesOnly ? null : el("div", { class: "row" }, [
         btn("ghost", T("edit.pick"), function () {
           mode = "pick"; $("add-bar").hidden = false; $("add-hint").textContent = T("add.pick_new"); hidePanel();
           pickDone = function (ll) { newPos = ll; mode = "browse"; $("add-bar").hidden = true; clearPick(); showPanel(node); coords.textContent = T("edit.newloc", { c: fmtC(ll.lat, ll.lng) }); };
@@ -445,7 +444,8 @@
       el("div", { class: "row" }, [
         btn("", T("btn.save"), function (ev) {
           var b = ev.currentTarget; b.disabled = true;
-          var body = { expected_version: m.version, name: name.value, address: addr.value, prayer_times: readTimes(grid), note: note.value };
+          var body = timesOnly ? { expected_version: m.version, prayer_times: readTimes(grid), note: note.value }
+            : { expected_version: m.version, name: name.value, address: addr.value, prayer_times: readTimes(grid), note: note.value };
           if (newPos) { body.lat = newPos.lat; body.lon = newPos.lng; }
           api("PATCH", "/api/mosques/" + m.id, body).then(function (u) { toast(T("toast.saved")); loadMosques(); openMosque(u.id); })
             .catch(function (e) {
