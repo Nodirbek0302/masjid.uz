@@ -305,9 +305,9 @@ class Bot:
         self.say(chat, tx["reading"])
         best = max(photos, key=lambda p: p.get("file_size", 0) or p.get("width", 0))
         texts = self.ocr_read(self.fetch_photo(best["file_id"]))
-        parsed = [timetable.parse(t) for t in texts]
-        parsed.sort(key=lambda r: (r["complete"], len(r["times"]), bool(r["alt"])), reverse=True)
-        r = parsed[0] if parsed else {"complete": False, "times": {}, "alt": None}
+        if texts is None:                                   # OCR engine disappeared after start-up
+            return self.say(chat, tx["no_ocr"])
+        r = timetable.best_of(texts)
         if r.get("alt"):
             st.update(step="confirm", times=r["times"], alt=r["alt"], ts=time.time())
             return self.say(chat, tx["two_cols"].format(a=fmt_times(tx, r["times"]), b=fmt_times(tx, r["alt"])),

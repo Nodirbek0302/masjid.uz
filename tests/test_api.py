@@ -395,6 +395,9 @@ class TimetableParser(unittest.TestCase):
             self.assertTrue(r["complete"], text); self.assertEqual(r["times"], want, text)
         two = T.parse("Bomdod 05:20 05:40\nPeshin 12:30 12:45\nAsr 16:00 16:15\nShom 17:35 17:40\nXufton 19:00 19:15")
         self.assertFalse(two["complete"]); self.assertEqual(two["alt"]["fajr"], "05:40"); self.assertIn("two_columns", two["warnings"])
+        rep = T.parse("Bomdod 05:20\nPeshin 12:30\nAsr 6:00\nShom 17:35\nXufton 19:00")           # OCR lost the "1" of 16:00
+        self.assertTrue(rep["complete"]); self.assertEqual(rep["times"]["asr"], "16:00"); self.assertIn("repaired", rep["warnings"])
+        self.assertFalse(T.parse("05:20 12:30 11:00 03:00 19:00")["complete"])                  # not repairable -> never complete
         for bad in ("Bomdod 05:20\nAsr 16:00", "Assalomu alaykum 2026", "05:20 12:30 11:00 17:35 19:00", "99:99 88:88", ""):
             self.assertFalse(T.parse(bad)["complete"], bad)                # never "complete" on doubtful input
 
@@ -460,6 +463,15 @@ class BotFlow(unittest.TestCase):
         self.send(text="hello")                                                                 # session is over
         self.assertIn("lokatsiya", self.msgs()[-1])
 
+    def test_best_of_prefers_two_columns_and_majority(self):
+        import timetable as T
+        one = "Bomdod 05:40\nPeshin 12:45\nAsr 16:15\nShom 17:40\nXufton 19:15"                # a pass that lost the second column
+        two = "Bomdod 05:40 05:20\nPeshin 12:45 12:30\nAsr 16:15 16:00\nShom 17:40 17:35\nXufton 19:15 19:00"
+        self.assertTrue(T.best_of([one, one, two])["alt"])                                      # one pass seeing two columns is enough
+        good, odd = "05:20 12:30 16:00 17:35 19:00", "05:20 12:31 16:00 17:35 19:00"
+        self.assertEqual(T.best_of([odd, good, good])["times"]["dhuhr"], "12:30")               # majority wins
+        self.assertEqual(T.best_of([])["complete"], False)
+
     def test_two_columns_asks_which_one(self):
         self.send(location={"latitude": 40.0, "longitude": 66.0}); self.click("pick:" + self.m["id"])
         self.ocr_text = ["Bomdod 05:20 05:40\nPeshin 12:30 12:45\nAsr 16:00 16:15\nShom 17:35 17:40\nXufton 19:00 19:15"]
@@ -484,6 +496,22 @@ class BotFlow(unittest.TestCase):
         self.assertEqual(len(self.msgs()), 1)
         self.user = {"id": 7, "first_name": "Owner", "language_code": "ru"}; self.send(text="/admin")
         self.assertTrue(self.buttons()[0]["web_app"]["url"].endswith("/admin.html"))
+
+
+@unittest.skipUnless(__import__("ocr").available() and os.path.exists("/System/Library/Fonts/Supplemental/Arial Bold.ttf"), "needs tesseract and a font")
+class RealOcr(unittest.TestCase):
+    def test_generated_timetable_photo_is_read(self):
+        import io
+        import ocr
+        import timetable
+        from PIL import Image, ImageDraw, ImageFont
+        font = ImageFont.truetype("/System/Library/Fonts/Supplemental/Arial Bold.ttf", 44)
+        im = Image.new("RGB", (900, 600), (236, 246, 238)); d = ImageDraw.Draw(im)
+        for i, (n, v) in enumerate((("Bomdod", "05:20"), ("Peshin", "12:30"), ("Asr", "16:00"), ("Shom", "17:35"), ("Xufton", "19:00"))):
+            d.text((80, 60 + i * 100), n, font=font, fill=(10, 60, 40)); d.text((600, 60 + i * 100), v, font=font, fill=(10, 60, 40))
+        buf = io.BytesIO(); im.save(buf, "JPEG", quality=60)
+        r = timetable.best_of(ocr.read_texts(buf.getvalue()))
+        self.assertTrue(r["complete"]); self.assertEqual(r["times"]["asr"], "16:00"); self.assertEqual(r["times"]["isha"], "19:00")
 
 
 class AdminLocalOnly(unittest.TestCase):

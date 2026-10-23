@@ -48,6 +48,25 @@ def _minutes(t):
     return int(t[:2]) * 60 + int(t[3:])
 
 
+def _repair(found):
+    """If exactly the afternoon/evening times are out of order, try the usual OCR slips (lost leading 1: 6:00 -> 16:00, or 12h shift).
+    Returns a repaired dict only when the result is strictly increasing, else None."""
+    out = dict(found)
+    prev = _minutes(out["fajr"])
+    for k in ORDER[1:]:
+        m = _minutes(out[k])
+        if m <= prev:
+            h, mi = int(out[k][:2]), out[k][3:]
+            cands = [h + 10, h + 12]
+            ok = [c for c in cands if c < 24 and prev < c * 60 + int(mi)]
+            if not ok:
+                return None
+            out[k] = "%02d:%s" % (ok[0], mi)
+            m = _minutes(out[k])
+        prev = m
+    return out
+
+
 def parse(text):
     """-> {"times": {prayer: "HH:MM"}, "alt": {...}|None, "complete": bool, "warnings": [...]}
     `alt` is the second column when the board has two (azon + jamoat): the caller lets the user choose."""
@@ -77,6 +96,30 @@ def parse(text):
     if complete:
         mins = [_minutes(found[k]) for k in ORDER]
         if mins != sorted(mins) or len(set(mins)) != 5:
-            warnings.append("not_in_order")
+            fixed = _repair(found)
+            if fixed:                                   # e.g. OCR dropped the leading "1" of "16:00"; the user still confirms
+                found = fixed
+                warnings.append("repaired")
+            else:
+                warnings.append("not_in_order")
     bad = {"not_in_order", "too_many_times", "two_columns"} & set(warnings)
     return {"times": {k: found[k] for k in ORDER if k in found}, "alt": alt, "complete": complete and not bad, "warnings": warnings}
+
+
+def best_of(texts):
+    """Combine several OCR readings of one photo.
+    1) any reading that shows two time columns wins (another pass may have silently dropped one column);
+    2) otherwise the complete reading most passes agree on; 3) otherwise the reading with the most recognised times."""
+    parsed = [parse(x) for x in texts]
+    if not parsed:
+        return {"times": {}, "alt": None, "complete": False, "warnings": []}
+    two = [r for r in parsed if r["alt"]]
+    if two:
+        return max(two, key=lambda r: len(r["times"]))
+    comp = [r for r in parsed if r["complete"]]
+    if comp:
+        votes = {}
+        for r in comp:
+            votes.setdefault(tuple(sorted(r["times"].items())), []).append(r)
+        return max(votes.values(), key=len)[0]
+    return max(parsed, key=lambda r: len(r["times"]))
