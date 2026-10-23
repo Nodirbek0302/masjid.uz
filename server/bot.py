@@ -36,14 +36,36 @@ def log(msg):
     sys.stderr.flush()
 
 
-def reply_start(chat_id):
-    text = ("Assalomu alaykum! Bu bepul masjid xaritasi: masjidlarni toping, jamoat namozi vaqtlarini ko‘ring, "
-            "yangi masjid qo‘shing yoki noto‘g‘ri ma’lumot haqida xabar bering.")
+TEXTS = {
+    "uz": {"hello": "Assalomu alaykum! Bu bepul masjid xaritasi: masjidlarni toping, jamoat namozi vaqtlarini koʻring, "
+                    "yangi masjid qoʻshing yoki notoʻgʻri maʼlumot haqida xabar bering.",
+           "pending": "(Mini App hali ulanmagan: HTTPS manzil kutilmoqda.)", "open": "🕌 Xaritani ochish"},
+    "ru": {"hello": "Ассаламу алайкум! Это бесплатная карта мечетей: находите мечети, смотрите время джамаат-намазов, "
+                    "добавляйте новые мечети и сообщайте о неверных данных.",
+           "pending": "(Mini App ещё не подключено: ожидается HTTPS-адрес.)", "open": "🕌 Открыть карту"},
+    "en": {"hello": "Assalamu alaykum! This is a free mosque map: find mosques, see congregation prayer times, "
+                    "add new mosques and report incorrect information.",
+           "pending": "(The Mini App is not connected yet: waiting for an HTTPS address.)", "open": "🕌 Open the map"},
+}
+
+
+def pick_lang(code):
+    """Telegram language_code -> one of our texts (Uzbek is the default; the Mini App itself also offers Cyrillic)."""
+    code = (code or "").lower()
+    if code.startswith("ru") or code[:2] in ("kk", "ky", "tg", "tk", "be", "uk"):
+        return "ru"
+    if code.startswith("en"):
+        return "en"
+    return "uz"
+
+
+def reply_start(chat_id, language_code=None):
+    tx = TEXTS[pick_lang(language_code)]
     if WEBAPP_URL.startswith("https://"):
-        markup = {"inline_keyboard": [[{"text": "🕌 Xaritani ochish", "web_app": {"url": WEBAPP_URL}}]]}
-        call("sendMessage", chat_id=chat_id, text=text, reply_markup=markup)
+        markup = {"inline_keyboard": [[{"text": tx["open"], "web_app": {"url": WEBAPP_URL}}]]}
+        call("sendMessage", chat_id=chat_id, text=tx["hello"], reply_markup=markup)
     else:
-        call("sendMessage", chat_id=chat_id, text=text + "\n\n(Mini App hali ulanmagan: HTTPS manzil kutilmoqda.)")
+        call("sendMessage", chat_id=chat_id, text=tx["hello"] + "\n\n" + tx["pending"])
 
 
 def main():
@@ -52,8 +74,10 @@ def main():
     me = call("getMe")
     log("bot @%s started; mini app url: %s" % (me["username"], WEBAPP_URL or "(not set)"))
     call("deleteWebhook", drop_pending_updates=False)    # long polling and webhooks are mutually exclusive
-    call("setMyCommands", commands=[{"command": "start", "description": "Boshlash"},
-                                    {"command": "help", "description": "Yordam"}])
+    cmds = {"uz": ("Boshlash", "Yordam"), "ru": ("Начать", "Помощь"), "en": ("Start", "Help")}
+    for lc, (d1, d2) in cmds.items():             # command menu in the user's own language; Uzbek is the default
+        kw = {} if lc == "uz" else {"language_code": lc}
+        call("setMyCommands", commands=[{"command": "start", "description": d1}, {"command": "help", "description": d2}], **kw)
     if WEBAPP_URL.startswith("https://"):
         call("setChatMenuButton", menu_button={"type": "web_app", "text": "Xarita", "web_app": {"url": WEBAPP_URL}})
     offset, backoff = None, 1
@@ -64,7 +88,7 @@ def main():
                 msg = u.get("message") or {}
                 text = (msg.get("text") or "").strip()
                 if msg.get("chat", {}).get("type") == "private" and text.split("@")[0] in ("/start", "/help"):
-                    reply_start(msg["chat"]["id"])
+                    reply_start(msg["chat"]["id"], (msg.get("from") or {}).get("language_code"))
                     log("replied to /start in chat %s" % msg["chat"]["id"])
             backoff = 1
         except Exception as e:                             # network blips, rate limits: retry with backoff

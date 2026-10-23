@@ -14,12 +14,14 @@ import re
 import sys
 import threading
 import time
+import unicodedata
 import uuid
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qsl, unquote, urlparse
 
+import translit
 import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
@@ -88,12 +90,23 @@ class ApiError(Exception):
 
 
 # ---------------------------------------------------------------- validation
-def clean_text(value, field, limit):
+# Control characters and invisible/bidi-override characters are never legitimate in names, addresses or reasons.
+_BAD_CHARS = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]")
+
+
+def clean_text(value, field, limit, multiline=False):
     if value is None:
         return None
     if not isinstance(value, str):
         raise ApiError(400, "invalid_" + field, field + " must be text")
-    value = value.strip()
+    try:
+        value.encode("utf-8")                    # lone surrogates (broken emoji, "\ud83d") would crash the DB driver
+    except UnicodeEncodeError:
+        raise ApiError(400, "invalid_text", field + " contains invalid characters")
+    value = unicodedata.normalize("NFC", value)  # one canonical form for Cyrillic/Latin letters with diacritics
+    if not multiline:
+        value = re.sub(r"[\r\n\t]+", " ", value)
+    value = _BAD_CHARS.sub("", value).strip()
     if len(value) > limit:
         raise ApiError(400, "invalid_" + field, field + " too long")
     return value or None
@@ -155,6 +168,12 @@ class Store:
         migrate(cfg.database_url)
         self.pool = ConnectionPool(cfg.database_url, min_size=1, max_size=10, open=True,
                                    kwargs={"row_factory": dict_row})
+        self._backfill_search()
+
+    def _backfill_search(self):
+        with self.pool.connection() as c:
+            for r in c.execute("SELECT id, name FROM mosques WHERE name IS NOT NULL AND name_search IS NULL").fetchall():
+                c.execute("UPDATE mosques SET name_search=%s WHERE id=%s", (translit.search_key(r["name"]), r["id"]))
 
     @staticmethod
     def row(r, private=False):
@@ -246,9 +265,9 @@ class Store:
             dups = self._nearby(cur, lat, lon, self.cfg.dup_radius_m)
             if dups and not body.get("force"):
                 raise ApiError(409, "possible_duplicate", "A mosque already exists nearby", duplicates=dups)
-            cur.execute("INSERT INTO mosques(lat,lon,name,address,prayer_times,source,origin,status,creator_id) "
-                        "VALUES (%s,%s,%s,%s,%s,'community-app','community','unverified',%s) RETURNING *",
-                        (lat, lon, name, address, Jsonb(times), actor))
+            cur.execute("INSERT INTO mosques(lat,lon,name,address,prayer_times,source,origin,status,creator_id,name_search) "
+                        "VALUES (%s,%s,%s,%s,%s,'community-app','community','unverified',%s,%s) RETURNING *",
+                        (lat, lon, name, address, Jsonb(times), actor, translit.search_key(name)))
             m = self.row(cur.fetchone())
             self._history(cur, m["id"], 1, "create", actor, {
                 "lat": [None, lat], "lon": [None, lon], "name": [None, name],
@@ -289,6 +308,9 @@ class Store:
             version = old["version"] + 1
             sets = ", ".join(k + "=%s" for k in changes)
             vals = [Jsonb(v[1]) if k == "prayer_times" else v[1] for k, v in changes.items()]
+            if "name" in changes:
+                sets += ", name_search=%s"
+                vals.append(translit.search_key(changes["name"][1]))
             cur.execute("UPDATE mosques SET " + sets + ", version=%s, updated_at=now() WHERE id=%s RETURNING *",
                         vals + [version, m_id])
             out = self.row(cur.fetchone())
@@ -307,14 +329,15 @@ class Store:
                              for r in rows]}
 
     def search(self, q, limit=20):
-        q = (q or "").strip()
-        if len(q) < 2:
+        """Finds names typed in any script/apostrophe form: masjid = масжид, o'zbek = oʻzbek = ўзбек, mechet = мечеть."""
+        q = (q or "").strip()[:60]
+        if len(q.strip("'ʻʼ‘’`´")) < 2:
             return []
-        like = "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        pats = ["%" + v.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%" for v in translit.search_variants(q)]
         with self.pool.connection() as c:
             return [dict(r, id=str(r["id"])) for r in c.execute(
-                "SELECT id,name,lat,lon,status FROM mosques WHERE status<>'archived' AND name ILIKE %s "
-                "ORDER BY char_length(name), name LIMIT %s", (like, limit))]
+                "SELECT id,name,lat,lon,status FROM mosques WHERE status<>'archived' AND name_search LIKE ANY(%s) "
+                "ORDER BY char_length(name), name LIMIT %s", (pats, limit))]
 
     def admin_list(self, status, limit=100, offset=0):
         if status not in ("unverified", "reported", "verified", "archived"):
@@ -365,7 +388,7 @@ class Store:
         kind = body.get("kind", "incorrect")
         if kind not in REPORT_KINDS:
             raise ApiError(400, "invalid_kind", "kind must be one of " + ", ".join(REPORT_KINDS))
-        reason = clean_text(body.get("reason"), "reason", 1000)
+        reason = clean_text(body.get("reason"), "reason", 1000, multiline=True)
         if not reason:
             raise ApiError(400, "reason_required", "a reason is required")
         with self.pool.connection() as c:
@@ -702,7 +725,10 @@ def make_handler(cfg, store):
             if gz is not None and self.wants_gzip():
                 body = gz
                 self.send_header("Content-Encoding", "gzip")
-            self.send_header("Content-Type", mimetypes.guess_type(str(f))[0] or "application/octet-stream")
+            ctype = mimetypes.guess_type(str(f))[0] or "application/octet-stream"
+            if ctype.startswith("text/") or ctype in ("application/javascript", "application/json", "image/svg+xml"):
+                ctype += "; charset=utf-8"             # never leave the encoding to the browser's guess
+            self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             if self.command != "HEAD":

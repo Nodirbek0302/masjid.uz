@@ -3,33 +3,56 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Masjid xaritasi</title>
+<meta name="theme-color" content="#047857">
+<title data-i18n="app.title">Masjid xaritasi</title>
 <link rel="preconnect" href="https://tiles.openfreemap.org" crossorigin>
 <link rel="preload" as="fetch" href="https://tiles.openfreemap.org/styles/liberty" crossorigin>
 <link rel="preload" as="fetch" href="https://tiles.openfreemap.org/planet" crossorigin>
 <link rel="preload" as="fetch" href="/api/config" crossorigin>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="vendor/maplibre-gl.css">
+<script src="i18n.js" defer></script>
 <script src="vendor/maplibre-gl.js" defer></script>
 <script src="prayer.js" defer></script>
 <script src="app.js" defer></script>
-<link rel="stylesheet" href="vendor/maplibre-gl.css">
-<link rel="stylesheet" href="style.css">
 </head>
 <body>
-<div id="prayer" role="region" aria-label="Namoz vaqtlari">
-  <select id="region" aria-label="Hudud"></select>
+<header id="prayer" role="region" data-i18n-aria="prayer.region">
+  <select id="region" data-i18n-aria="prayer.region"></select>
   <div id="ptimes"></div>
-  <button id="prefresh" aria-label="Yangilash" title="Yangilash">↻</button>
-</div>
+  <button id="prefresh" class="icon-btn" data-i18n-aria="btn.refresh" type="button">
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg>
+  </button>
+  <select id="lang" data-i18n-aria="lang.label"></select>
+</header>
+
 <div id="map"></div>
-<div id="search"><input id="q" type="search" placeholder="Masjid nomi bo‘yicha qidirish" autocomplete="off" maxlength="60"><ul id="results" hidden></ul></div>
-<div id="crosshair" hidden></div>
-<button id="add-btn" class="fab">+ Masjid qo‘shish</button>
-<div id="add-bar" hidden>
-  <span id="add-hint">Xaritada masjid joyini bosing</span>
-  <button id="add-cancel" class="ghost">Bekor</button>
+
+<div id="search">
+  <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="m20 20-3.5-3.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  <input id="q" type="search" data-i18n-ph="search.ph" autocomplete="off" maxlength="60" enterkeyhint="search">
+  <ul id="results" hidden></ul>
 </div>
-<aside id="panel" hidden><button id="panel-close" class="close" aria-label="Yopish">×</button><div id="panel-body"></div></aside>
-<div id="maperr" role="alert" hidden><span id="maperr-text"></span> <button id="maperr-retry">Qayta urinish</button></div>
-<div id="toast" hidden></div>
+
+<button id="add-btn" class="fab" type="button">
+  <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
+  <span data-i18n="btn.add">Masjid qoʻshish</span>
+</button>
+
+<div id="add-bar" hidden>
+  <span id="add-hint"></span>
+  <button id="add-cancel" class="btn ghost small" type="button" data-i18n="btn.cancel">Bekor</button>
+</div>
+
+<aside id="panel" hidden>
+  <div class="grabber" aria-hidden="true"></div>
+  <button id="panel-close" class="icon-btn close" data-i18n-aria="btn.close" type="button">
+    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+  </button>
+  <div id="panel-body"></div>
+</aside>
+
+<div id="maperr" role="alert" hidden><span id="maperr-text"></span> <button id="maperr-retry" class="btn small" type="button" data-i18n="btn.retry">Qayta urinish</button></div>
+<div id="toast" role="status" aria-live="polite" hidden></div>
 </body>
 </html>

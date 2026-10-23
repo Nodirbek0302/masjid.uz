@@ -1,47 +1,129 @@
-:root{--strip:38px;--bg:#fff;--fg:#1b1f23;--muted:#667;--accent:#0b7a5b;--warn:#b45309;--line:#dde;}
-@media(prefers-color-scheme:dark){:root{--bg:#1c2127;--fg:#e8ecef;--muted:#9aa5b1;--line:#333c46}}
-*{box-sizing:border-box}html,body{margin:0;height:100%;height:100dvh;overflow:hidden;overscroll-behavior:none;-webkit-text-size-adjust:100%;font:15px/1.4 system-ui,sans-serif;background:var(--bg);color:var(--fg)}
-#map{position:absolute;inset:0}
-.maplibregl-ctrl-top-right{top:var(--strip)}
-button{font:inherit;cursor:pointer;border:0;border-radius:8px;padding:10px 14px;background:var(--accent);color:#fff}
-button.ghost{background:transparent;color:var(--accent);border:1px solid var(--accent)}
-button.danger{background:transparent;color:var(--warn);border:1px solid var(--warn)}
-.fab{position:absolute;right:12px;bottom:calc(24px + env(safe-area-inset-bottom));box-shadow:0 2px 8px #0005;z-index:5}
-#add-bar{position:absolute;left:12px;right:12px;top:calc(var(--strip) + 8px + env(safe-area-inset-top));background:var(--bg);padding:8px 12px;border-radius:10px;display:flex;gap:8px;align-items:center;justify-content:space-between;box-shadow:0 2px 8px #0005;z-index:6}
-#crosshair{position:absolute;left:50%;top:50%;width:0;height:0;z-index:4;pointer-events:none}
-#crosshair:after{content:"";position:absolute;left:-12px;top:-34px;width:24px;height:34px;background:var(--accent);clip-path:polygon(50% 100%,0 40%,10% 10%,50% 0,90% 10%,100% 40%)}
-#panel{position:absolute;left:0;right:0;bottom:0;max-height:52vh;max-height:52dvh;overflow:auto;overscroll-behavior:contain;background:var(--bg);border-radius:16px 16px 0 0;padding:16px 16px calc(16px + env(safe-area-inset-bottom));box-shadow:0 -2px 12px #0006;z-index:7}
-/* Wide screens and phones in landscape: side panel, so the map is never covered and nothing reflows. */
-@media(min-width:700px),(orientation:landscape) and (max-height:520px){#panel{left:12px;right:auto;top:calc(var(--strip) + 64px);bottom:12px;width:min(380px,55vw);max-height:none;border-radius:14px}}
-@media(max-width:699px) and (orientation:portrait){input,select,textarea{font-size:16px}}   /* stops iOS zooming into fields */
-.close{position:absolute;right:8px;top:8px;background:transparent;color:var(--muted);font-size:24px;padding:4px 10px}
-h2{margin:0 28px 6px 0;font-size:19px}h3{font-size:14px;margin:16px 0 6px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
-.badge{display:inline-block;padding:2px 8px;border-radius:99px;font-size:12px;background:#0b7a5b22;color:var(--accent)}
-.badge.reported{background:#b4530922;color:var(--warn)}
-.muted{color:var(--muted);font-size:13px}.missing{color:var(--muted);font-style:italic}
-table{border-collapse:collapse;width:100%}td{padding:4px 0;border-bottom:1px solid var(--line)}td:last-child{text-align:right}
-.row{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}
-label{display:block;margin:8px 0 2px;font-size:13px;color:var(--muted)}
-input,select,textarea{width:100%;font:inherit;padding:8px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg)}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 10px}
-.hist{font-size:13px;border-left:3px solid var(--line);padding-left:8px;margin:8px 0}
-.dup{border:1px solid var(--warn);border-radius:10px;padding:10px;margin:10px 0}
-#toast{position:absolute;left:50%;transform:translateX(-50%);bottom:calc(90px + env(safe-area-inset-bottom));background:#222;color:#fff;padding:10px 16px;border-radius:10px;z-index:9;max-width:90%}
-a.btn{display:inline-block;padding:10px 14px;border-radius:8px;background:transparent;color:var(--accent);border:1px solid var(--accent);text-decoration:none}
+/* masjid-uz: white + green, light, fast (no web fonts, no frameworks). */
+:root{
+  --g900:#064e3b;--g800:#065f46;--g700:#047857;--g600:#059669;--g500:#10b981;--g200:#a7f3d0;--g100:#d1fae5;--g50:#ecfdf5;
+  --bg:#fff;--soft:#f6faf8;--fg:#0f2a21;--muted:#5b7068;--line:#e2ece7;
+  --warn:#b45309;--warn-bg:#fef3c7;--danger:#b91c1c;
+  --strip:46px;--r:14px;--sh:0 4px 18px rgba(6,78,59,.16);--sh-sm:0 2px 8px rgba(6,78,59,.14);
+  --ease:cubic-bezier(.2,.8,.2,1);
+  color-scheme:light;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 [hidden]{display:none!important}
-#search{position:absolute;left:12px;top:calc(var(--strip) + 8px + env(safe-area-inset-top));width:min(320px,calc(100% - 80px));z-index:5}
-#search input{box-shadow:0 2px 8px #0004;padding:10px 12px}
-#results{list-style:none;margin:4px 0 0;padding:0;background:var(--bg);border-radius:10px;box-shadow:0 2px 8px #0005;max-height:50vh;overflow:auto}
-#results li{padding:10px 12px;border-bottom:1px solid var(--line);cursor:pointer}
-#results li:last-child{border-bottom:0}#results li:hover,#results li.on{background:#0b7a5b22}
+html,body{margin:0;height:100%;height:100dvh;overflow:hidden;overscroll-behavior:none;-webkit-text-size-adjust:100%;
+  font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans","Helvetica Neue",Arial,sans-serif;background:var(--bg);color:var(--fg)}
+body{-webkit-font-smoothing:antialiased}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:3px solid var(--g200);outline-offset:1px}
+#map{position:absolute;inset:0;background:#f4f8f5}
 
-/* daily prayer times strip */
-#prayer{position:absolute;left:0;right:0;top:0;height:calc(var(--strip) + env(safe-area-inset-top));padding-top:env(safe-area-inset-top);display:flex;align-items:center;gap:8px;background:#0b4f3b;color:#fff;z-index:8;padding-left:8px;padding-right:8px;font-size:13px}
-#prayer select{width:auto;max-width:150px;flex:none;padding:4px 6px;font-size:13px;border-radius:6px;background:#0b6a4e;color:#fff;border:1px solid #ffffff44}
-#ptimes{display:flex;gap:12px;overflow-x:auto;white-space:nowrap;flex:1;scrollbar-width:none;align-items:center}
+/* ---------- top strip: daily prayer times ---------- */
+#prayer{position:absolute;left:0;right:0;top:0;z-index:20;height:calc(var(--strip) + env(safe-area-inset-top));padding:env(safe-area-inset-top) 8px 0;
+  display:flex;align-items:center;gap:8px;color:#fff;font-size:13px;background:linear-gradient(90deg,var(--g800),var(--g600));box-shadow:0 2px 10px rgba(6,78,59,.28)}
+#prayer select{flex:none;width:auto;max-width:176px;text-overflow:ellipsis;height:32px;padding:0 8px;border-radius:10px;border:1px solid rgba(255,255,255,.35);background:rgba(255,255,255,.14);
+  color:#fff;font-size:13px;appearance:none;-webkit-appearance:none;cursor:pointer;transition:background .15s}
+#prayer select:hover{background:rgba(255,255,255,.24)}
+#prayer select option{color:#0f2a21;background:#fff}
+#lang{max-width:64px!important;text-align:center;font-weight:700;letter-spacing:.02em}
+#ptimes{display:flex;align-items:center;gap:6px;flex:1;min-width:0;overflow-x:auto;white-space:nowrap;scrollbar-width:none;mask-image:linear-gradient(90deg,#000 92%,transparent)}
 #ptimes::-webkit-scrollbar{display:none}
-#ptimes span{flex:none;opacity:.85}#ptimes span.next{opacity:1;font-weight:700;background:#ffffff26;border-radius:6px;padding:2px 6px}
-#prayer button{flex:none;background:transparent;border:1px solid #ffffff44;padding:2px 9px;font-size:16px;line-height:1.2}
-@media(max-width:699px) and (orientation:portrait){#prayer select{font-size:13px}}
-#maperr{position:absolute;left:12px;right:12px;top:calc(var(--strip) + 64px);z-index:9;background:#7c2d12;color:#fff;border-radius:10px;padding:10px 12px;display:flex;gap:10px;align-items:center;justify-content:space-between;box-shadow:0 2px 10px #0006}
-#maperr button{flex:none;background:#fff;color:#7c2d12}
+#ptimes span{flex:none;padding:3px 9px;border-radius:99px;opacity:.9}
+#ptimes span.next{background:#fff;color:var(--g800);font-weight:700;opacity:1;box-shadow:0 1px 4px rgba(0,0,0,.18)}
+#ptimes span.info{opacity:.75;padding-left:2px}
+.icon-btn{flex:none;display:inline-grid;place-items:center;width:32px;height:32px;padding:0;border-radius:10px;border:1px solid rgba(255,255,255,.35);background:rgba(255,255,255,.14);color:#fff;transition:background .15s,transform .15s}
+.icon-btn:hover{background:rgba(255,255,255,.26)}.icon-btn:active{transform:scale(.92)}
+.icon-btn.spin svg{animation:spin .7s linear}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ---------- search ---------- */
+#search{position:absolute;z-index:15;left:12px;top:calc(var(--strip) + 10px + env(safe-area-inset-top));width:min(360px,calc(100% - 76px))}
+#search>svg{position:absolute;left:13px;top:12px;color:var(--g600);pointer-events:none}
+#search input{width:100%;height:42px;padding:0 14px 0 38px;border-radius:99px;border:1px solid var(--line);background:#fff;box-shadow:var(--sh-sm);transition:box-shadow .2s,border-color .2s}
+#search input:focus{outline:none;border-color:var(--g500);box-shadow:0 0 0 4px rgba(16,185,129,.18),var(--sh-sm)}
+#results{list-style:none;margin:6px 0 0;padding:6px;background:#fff;border-radius:var(--r);box-shadow:var(--sh);max-height:52vh;overflow:auto;animation:pop .16s var(--ease)}
+#results li{padding:10px 12px;border-radius:10px;cursor:pointer;transition:background .12s}
+#results li:hover,#results li:focus{background:var(--g50)}
+#results li.muted{color:var(--muted);cursor:default}
+@keyframes pop{from{opacity:0;transform:translateY(-4px) scale(.98)}to{opacity:1;transform:none}}
+
+/* ---------- map chrome ---------- */
+.maplibregl-ctrl-top-right{top:calc(var(--strip) + env(safe-area-inset-top))!important}
+.maplibregl-ctrl-group{border-radius:12px!important;box-shadow:var(--sh-sm)!important;overflow:hidden}
+.maplibregl-ctrl-group button{width:36px;height:36px}
+.maplibregl-popup-content{border-radius:var(--r)!important;padding:14px!important;box-shadow:var(--sh)!important;font:inherit}
+.maplibregl-popup-close-button{font-size:20px;padding:4px 9px;color:var(--muted)}
+
+/* ---------- buttons ---------- */
+.btn,.fab{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:42px;padding:0 16px;border:1px solid transparent;border-radius:12px;font-weight:600;
+  background:var(--g600);color:#fff;text-decoration:none;transition:background .15s,transform .12s,box-shadow .2s}
+.btn:hover,.fab:hover{background:var(--g700)}
+.btn:active,.fab:active{transform:scale(.97)}
+.btn.small{min-height:34px;padding:0 12px;border-radius:10px;font-size:14px}
+.btn.ghost{background:#fff;color:var(--g700);border-color:var(--g200)}
+.btn.ghost:hover{background:var(--g50)}
+.btn.danger{background:#fff;color:var(--danger);border-color:#fecaca}
+.btn.danger:hover{background:#fef2f2}
+.btn[disabled]{opacity:.55;pointer-events:none}
+.fab{position:absolute;z-index:15;right:12px;bottom:calc(22px + env(safe-area-inset-bottom));min-height:50px;padding:0 20px;border-radius:99px;box-shadow:var(--sh);font-size:15px;animation:pop .3s var(--ease)}
+#add-bar{position:absolute;z-index:16;left:12px;right:12px;top:calc(var(--strip) + 10px + env(safe-area-inset-top));display:flex;gap:10px;align-items:center;justify-content:space-between;
+  padding:8px 8px 8px 16px;border-radius:99px;background:var(--g700);color:#fff;font-weight:600;box-shadow:var(--sh);animation:pop .2s var(--ease)}
+#add-bar .btn.ghost{background:rgba(255,255,255,.16);color:#fff;border-color:rgba(255,255,255,.4)}
+
+/* ---------- panel (bottom sheet on phones, card on wide screens) ---------- */
+#panel{position:absolute;z-index:18;left:0;right:0;bottom:0;max-height:56vh;max-height:56dvh;overflow:auto;overscroll-behavior:contain;background:#fff;border-radius:22px 22px 0 0;
+  padding:8px 18px calc(20px + env(safe-area-inset-bottom));box-shadow:0 -6px 28px rgba(6,78,59,.2);animation:sheet .28s var(--ease);scrollbar-width:thin}
+.grabber{width:42px;height:4px;border-radius:4px;background:var(--line);margin:2px auto 8px}
+#panel .close{position:absolute;right:10px;top:10px;border-color:var(--line);background:var(--soft);color:var(--muted)}
+#panel .close:hover{background:var(--g50);color:var(--g700)}
+@keyframes sheet{from{transform:translateY(40px);opacity:0}to{transform:none;opacity:1}}
+@keyframes slide{from{transform:translateX(-24px);opacity:0}to{transform:none;opacity:1}}
+@media(min-width:700px),(orientation:landscape) and (max-height:520px){
+  #panel{left:12px;right:auto;top:calc(var(--strip) + 64px);bottom:12px;width:min(390px,56vw);max-height:none;border-radius:20px;padding-top:18px;animation:slide .28s var(--ease);box-shadow:var(--sh)}
+  .grabber{display:none}
+}
+#panel-body>div{animation:fade .22s var(--ease)}
+@keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+h2{margin:6px 40px 8px 0;font-size:20px;line-height:1.25;color:var(--g900)}
+h3{margin:18px 0 8px;font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+p{margin:8px 0}
+.muted{color:var(--muted);font-size:13px}.missing{color:var(--muted);font-style:italic}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 4px}
+.stack>*+*{margin-top:6px}
+
+.badge{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:99px;font-size:12.5px;font-weight:600;background:var(--g100);color:var(--g800)}
+.badge::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--g600)}
+.badge.verified{background:var(--g700);color:#fff}.badge.verified::before{background:#fff}
+.badge.neutral{background:#eef3f0;color:var(--muted)}.badge.neutral::before{background:#9fb3aa}
+.badge.reported{background:var(--warn-bg);color:var(--warn)}.badge.reported::before{background:var(--warn)}
+
+/* prayer-time tiles */
+.times{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.tile{padding:10px 8px;border-radius:12px;background:var(--soft);border:1px solid var(--line);text-align:center}
+.tile b{display:block;font-size:19px;color:var(--g800);font-variant-numeric:tabular-nums}
+.tile small{display:block;color:var(--muted);font-size:12px}
+.tile.empty b{color:#b6c4be;font-weight:500}
+.tile.jumuah{background:var(--g50);border-color:var(--g200)}
+
+/* forms */
+label{display:block;margin:12px 0 4px;font-size:13px;font-weight:600;color:var(--muted)}
+input,select,textarea{width:100%;padding:10px 12px;border-radius:12px;border:1px solid var(--line);background:#fff;transition:border-color .15s,box-shadow .15s}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--g500);box-shadow:0 0 0 4px rgba(16,185,129,.16)}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.grid label{margin-top:4px;font-size:12px}
+.grid input{padding:8px 6px;text-align:center}
+@media(max-width:380px){.grid,.times{grid-template-columns:repeat(2,1fr)}}
+
+.hist{margin:10px 0;padding:2px 0 2px 12px;border-left:3px solid var(--g200);font-size:13.5px}
+.hist b{color:var(--g800)}
+.dup{margin:10px 0;padding:12px;border:1px solid #fcd34d;background:#fffbeb;border-radius:12px}
+.link-btn{margin-top:8px}
+
+/* skeleton while a mosque loads */
+.sk{border-radius:10px;background:linear-gradient(90deg,#eef4f1 25%,#e2ece7 37%,#eef4f1 63%);background-size:400% 100%;animation:sk 1.2s ease infinite}
+@keyframes sk{0%{background-position:100% 0}100%{background-position:0 0}}
+
+#toast{position:absolute;z-index:40;left:50%;transform:translateX(-50%);bottom:calc(92px + env(safe-area-inset-bottom));max-width:min(92vw,420px);padding:11px 18px;border-radius:99px;
+  background:var(--g900);color:#fff;font-weight:500;box-shadow:var(--sh);text-align:center;animation:pop .2s var(--ease)}
+#maperr{position:absolute;z-index:30;left:12px;right:12px;top:calc(var(--strip) + 64px + env(safe-area-inset-top));display:flex;gap:10px;align-items:center;justify-content:space-between;
+  padding:10px 12px;border-radius:var(--r);background:#fff7ed;border:1px solid #fdba74;color:#7c2d12;box-shadow:var(--sh)}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important}}

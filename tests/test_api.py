@@ -172,6 +172,16 @@ class Api(unittest.TestCase):
         self.assertEqual([x["actor_id"] for x in ac["items"]], ["device:dev-ABCDEF123456"])
         self.assertEqual(self.call("GET", "/api/admin/actors")[0], 401)
 
+    def test_osm_address_building(self):
+        import import_osm as io_
+        a = io_.osm_address
+        self.assertEqual(a({"addr:full": "  Оқлон маҳалла, Кўкча дарвоза кўчаси 27 "}), "Оқлон маҳалла, Кўкча дарвоза кўчаси 27")
+        self.assertEqual(a({"addr:street": "Quva ko'chasi", "addr:housenumber": "81a", "addr:city": "Farg'ona"}), "Quva ko'chasi 81a, Farg'ona")
+        self.assertEqual(a({"addr:city": "Angren", "addr:postcode": "110200"}), "Angren, 110200")
+        self.assertIsNone(a({"addr:postcode": "110200"}))              # postcode alone is not an address
+        self.assertIsNone(a({"name": "x"}))
+        self.assertEqual(a({"addr:full": "A\u202eB\x00C"}), "ABC")                # control/bidi characters are stripped
+
     def test_search_and_admin_views(self):
         self.add(37.5, 64.5, name="Alisher Navoiy jome masjidi")
         self.add(37.6, 64.6, name="100%_special")

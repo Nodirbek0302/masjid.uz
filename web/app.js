@@ -1,8 +1,9 @@
 /* masjid-uz web client. Runs in browsers, mobile webviews and as a Telegram Mini App.
- * All user-supplied text is inserted with textContent (never innerHTML). */
+ * All user-supplied text is inserted with textContent (never innerHTML). UI text comes from i18n.js. */
 (function () {
   "use strict";
-  var PRAYERS = [["fajr", "Bomdod"], ["dhuhr", "Peshin"], ["asr", "Asr"], ["maghrib", "Shom"], ["isha", "Xufton"], ["jumuah", "Juma"]];
+  var T = I18N.t;
+  var PRAYERS = ["fajr", "dhuhr", "asr", "maghrib", "isha", "jumuah"];
   var $ = function (id) { return document.getElementById(id); };
 
   // ---- identity: random client id (per device) + Telegram initData when inside Mini App
@@ -39,28 +40,26 @@
   }
   function toast(msg) {
     var t = $("toast"); t.textContent = msg; t.hidden = false;
-    clearTimeout(toast.t); toast.t = setTimeout(function () { t.hidden = true; }, 3500);
+    clearTimeout(toast.t); toast.t = setTimeout(function () { t.hidden = true; }, 3600);
   }
-  function errText(e) { return (e && e.message) || "Xatolik yuz berdi"; }
+  function errText(e) { return I18N.errMessage(e); }
+  function btn(cls, text, onclick) { return el("button", { class: "btn " + cls, type: "button", text: text, onclick: onclick }); }
 
   // ---- labels: must reflect real status, never imply verification
   function label(m) {
-    if (m.status === "verified") return ["Tasdiqlangan", ""];
-    if (m.status === "reported") return ["Xabar berilgan (tekshirilmoqda)", "reported"];
-    if (m.origin === "community") return ["Foydalanuvchi qo‘shgan masjid", ""];
-    if (m.source === "openstreetmap") return ["OpenStreetMap ma’lumoti · tasdiqlanmagan", ""];
-    return ["Tasdiqlanmagan", ""];
+    if (m.status === "verified") return [T("status.verified"), "verified"];
+    if (m.status === "reported") return [T("status.reported"), "reported"];
+    if (m.origin === "community") return [T("status.community"), ""];
+    if (m.source === "openstreetmap") return [T("status.osm"), "neutral"];
+    return [T("status.unverified"), "neutral"];
   }
-  function fmtTime(iso) { return iso ? new Date(iso).toLocaleString("uz-UZ") : "—"; }
 
   // ---- navigation: opens an external app/site; nothing is requested from or stored by Yandex
   function yandexLinks(m) {
     var ll = m.lon + "," + m.lat;
     return [
-      el("a", { class: "btn", target: "_blank", rel: "noopener noreferrer",
-        href: "https://yandex.com/maps/?pt=" + ll + "&z=17&l=map", text: "Yandex Maps‘da ochish" }),
-      el("a", { class: "btn", target: "_blank", rel: "noopener noreferrer",
-        href: "https://yandex.com/maps/?rtext=~" + m.lat + "," + m.lon + "&rtt=auto", text: "Yo‘nalish" })
+      el("a", { class: "btn ghost", target: "_blank", rel: "noopener noreferrer", href: "https://yandex.com/maps/?pt=" + ll + "&z=17&l=map", text: T("link.yandex") }),
+      el("a", { class: "btn ghost", target: "_blank", rel: "noopener noreferrer", href: "https://yandex.com/maps/?rtext=~" + m.lat + "," + m.lon + "&rtt=auto", text: T("link.route") })
     ];
   }
 
@@ -124,7 +123,7 @@
       applyMosques();
     }).catch(function () {});
   }
-  function loadMosques() {                          // compatibility: force-refresh the current window
+  function loadMosques() {                          // force-refresh the current window
     loadedBox = null; ensureMosques();
   }
   function ensureMosques() {
@@ -134,13 +133,26 @@
     fetchMosques([w - px, s - py, e + px, n + py].map(function (v) { return +v.toFixed(5); }));
   }
 
+  // Map labels follow the interface language. The base style prints "latin + native"; we pick one name per language.
+  function labelExpr(lang) {
+    if (lang === "ru") return ["coalesce", ["get", "name:ru"], ["get", "name:nonlatin"], ["get", "name"]];
+    if (lang === "uz-cyrl") return ["coalesce", ["get", "name:nonlatin"], ["get", "name"]];
+    if (lang === "uz") return ["coalesce", ["get", "name:latin"], ["get", "name_en"], ["get", "name"]];
+    return null;                                    // English: keep the style's own expression
+  }
+
   function patchStyle(style, c) {
     // Only mosques should be visible: drop the base style's other POIs; add our own sources/layers up front
     // so nothing has to wait for the "load" event.
     style.layers = style.layers.filter(function (l) { return l["source-layer"] !== "poi" && l["source-layer"] !== "housenumber"; });
+    var expr = labelExpr(I18N.lang());
+    if (expr) style.layers.forEach(function (l) {
+      var tf = l.layout && l.layout["text-field"];
+      if (Array.isArray(tf) && JSON.stringify(tf).indexOf("name:nonlatin") >= 0) l.layout["text-field"] = expr;
+    });
     style.sources.mosques = { type: "geojson", data: lastFC };
     var font = ["Noto Sans Regular"];
-    var halo = { "text-color": "#0b4f3b", "text-halo-color": "#fff", "text-halo-width": 1.5 };
+    var halo = { "text-color": "#064e3b", "text-halo-color": "#fff", "text-halo-width": 1.6 };
     if (c.show_tile_mosques !== false && style.sources.openmaptiles) {
       // Mosques already present in the OSM tiles, drawn live and never stored. The tile schema has no religion
       // field, so this matches on the name (masjid/мечеть/...): an interim, incomplete heuristic.
@@ -160,24 +172,37 @@
     return style;
   }
 
+  // ---- language switch: store the choice, reload at the same map view (labels are baked into the style) ----
+  function initLang() {
+    var sel = $("lang");
+    I18N.langs.forEach(function (l) { sel.appendChild(el("option", { value: l[0], text: l[1], title: l[2] })); });
+    sel.value = I18N.lang();
+    sel.onchange = function () {
+      I18N.set(sel.value);
+      var u = new URL(location.href);
+      u.searchParams.delete("lang");
+      if (map) { var c = map.getCenter(); u.searchParams.set("c", c.lat.toFixed(5) + "," + c.lng.toFixed(5) + "," + map.getZoom().toFixed(2)); }
+      location.href = u.toString();                // keeps the #tgWebAppData hash inside Telegram
+    };
+  }
+
   // ---- daily prayer times strip (computed on the device; region can be switched) ----------------
-  var REGIONS = [["Toshkent shahri", 41.3111, 69.2797], ["Toshkent viloyati", 41.0167, 69.35], ["Andijon", 40.7821, 72.3442],
-    ["Buxoro", 39.7747, 64.4286], ["Farg‘ona", 40.3864, 71.7864], ["Jizzax", 40.1158, 67.8422], ["Xorazm", 41.55, 60.6333],
-    ["Namangan", 41.0011, 71.6683], ["Navoiy", 40.0844, 65.3792], ["Qashqadaryo", 38.8606, 65.7891],
-    ["Qoraqalpog‘iston", 42.4531, 59.6103], ["Samarqand", 39.6542, 66.9597], ["Sirdaryo", 40.4897, 68.7842], ["Surxondaryo", 37.2242, 67.2783]];
-  var PNAMES = [["fajr", "Bomdod"], ["sunrise", "Quyosh"], ["dhuhr", "Peshin"], ["asr", "Asr"], ["maghrib", "Shom"], ["isha", "Xufton"]];
-  var prayerSel = "me", prayerDay = "";
+  var REGIONS = [[41.3111, 69.2797], [41.0167, 69.35], [40.7821, 72.3442], [39.7747, 64.4286], [40.3864, 71.7864], [40.1158, 67.8422], [41.55, 60.6333],
+    [41.0011, 71.6683], [40.0844, 65.3792], [38.8606, 65.7891], [42.4531, 59.6103], [39.6542, 66.9597], [40.4897, 68.7842], [37.2242, 67.2783]];
+  var PNAMES = ["fajr", "sunrise", "dhuhr", "asr", "maghrib", "isha"];
+  var prayerSel = "me";
   try { prayerSel = localStorage.getItem("preg") || "me"; } catch (e) {}
+  function regionName(i) { return T("region." + i); }
   function nearestRegion(lat, lon) {
     var best = 0, bd = 1e9;
-    REGIONS.forEach(function (r, i) { var d = Math.pow(r[1] - lat, 2) + Math.pow((r[2] - lon) * Math.cos(lat * Math.PI / 180), 2); if (d < bd) { bd = d; best = i; } });
+    REGIONS.forEach(function (r, i) { var d = Math.pow(r[0] - lat, 2) + Math.pow((r[1] - lon) * Math.cos(lat * Math.PI / 180), 2); if (d < bd) { bd = d; best = i; } });
     return best;
   }
   function prayerPos(startCenter) {
-    if (prayerSel !== "me" && REGIONS[+prayerSel]) { var r = REGIONS[+prayerSel]; return { lat: r[1], lon: r[2], name: r[0] }; }
+    if (prayerSel !== "me" && REGIONS[+prayerSel]) { var r = REGIONS[+prayerSel]; return { lat: r[0], lon: r[1], name: regionName(+prayerSel) }; }
     var sp = savedPos(), c = map ? map.getCenter() : null;
     var p = sp ? { lat: sp.lat, lon: sp.lon } : c ? { lat: c.lat, lon: c.lng } : { lat: startCenter[1], lon: startCenter[0] };
-    return { lat: p.lat, lon: p.lon, name: (sp ? "Mening joyim" : "Xarita markazi") + " · " + REGIONS[nearestRegion(p.lat, p.lon)][0] };
+    return { lat: p.lat, lon: p.lon, name: T(sp ? "prayer.where_me" : "prayer.where_map") + " · " + regionName(nearestRegion(p.lat, p.lon)) };
   }
   function renderPrayer() {
     var now = new Date(), p = prayerPos(start0), o = cfg.prayer || {};
@@ -186,24 +211,25 @@
       { fajr: o.fajr_angle, isha: o.isha_angle, asr: o.asr_factor, dhuhrMin: o.dhuhr_offset_min });
     var nowH = (now.getUTCHours() + now.getUTCMinutes() / 60 + tz + 24) % 24;       // current time in that region
     var nextKey = null;
-    PNAMES.forEach(function (n) { if (!nextKey && t[n[0]] > nowH && n[0] !== "sunrise") nextKey = n[0]; });
-    if (!nextKey) nextKey = "fajr";                                                   // after Xufton: tomorrow's Bomdod
+    PNAMES.forEach(function (n) { if (!nextKey && t[n] > nowH && n !== "sunrise") nextKey = n; });
+    if (!nextKey) nextKey = "fajr";                                                   // after Isha: tomorrow's Fajr
     var box = $("ptimes"); box.textContent = "";
-    PNAMES.forEach(function (n) { box.appendChild(el("span", { class: n[0] === nextKey ? "next" : "", text: n[1] + " " + Prayer.format(t[n[0]]) })); });
+    PNAMES.forEach(function (n) { box.appendChild(el("span", { class: n === nextKey ? "next" : "", text: T("pn." + n) + " " + Prayer.format(t[n]) })); });
     var diff = t[nextKey] - nowH; if (diff <= 0) diff += 24;
     var mins = Math.round(diff * 60);
-    box.appendChild(el("span", { text: "· " + p.name + " · taxminiy · keyingi: " + (mins >= 60 ? Math.floor(mins / 60) + " soat " : "") + (mins % 60) + " daq" }));
-    prayerDay = now.toDateString();
-    $("prayer").title = "Quyosh holatidan hisoblangan taxminiy vaqt. Masjid jamoat vaqti boshqacha bo‘lishi mumkin.";
+    var left = mins >= 60 ? T("dur.hm", { h: Math.floor(mins / 60), m: mins % 60 }) : T("dur.m", { m: mins });
+    box.appendChild(el("span", { class: "info", text: "· " + p.name + " · " + T("prayer.approx") + " · " + T("prayer.next") + ": " + left }));
+    $("prayer").title = T("prayer.tip");
   }
   var start0 = TASHKENT;
   function initPrayer() {
     var sel = $("region");
-    sel.appendChild(el("option", { value: "me", text: "📍 Mening joyim" }));
-    REGIONS.forEach(function (r, i) { sel.appendChild(el("option", { value: String(i), text: r[0] })); });
+    sel.appendChild(el("option", { value: "me", text: T("prayer.me") }));
+    REGIONS.forEach(function (r, i) { sel.appendChild(el("option", { value: String(i), text: regionName(i) })); });
     sel.value = prayerSel;
     sel.onchange = function () { prayerSel = sel.value; try { localStorage.setItem("preg", prayerSel); } catch (e) {} renderPrayer(); };
     $("prefresh").onclick = function () {
+      var b = $("prefresh"); b.classList.remove("spin"); void b.offsetWidth; b.classList.add("spin");
       if (prayerSel === "me" && navigator.geolocation) {                       // fresh device position, then recompute
         navigator.geolocation.getCurrentPosition(function (p) {
           if (inRegion(p.coords.longitude, p.coords.latitude)) try { localStorage.setItem("lastpos", JSON.stringify({ lat: p.coords.latitude, lon: p.coords.longitude })); } catch (e) {}
@@ -215,12 +241,21 @@
     renderPrayer();
   }
 
+  function mapLocale() {
+    return { "NavigationControl.ZoomIn": T("map.zoom_in"), "NavigationControl.ZoomOut": T("map.zoom_out"),
+      "GeolocateControl.FindMyLocation": T("map.locate"), "GeolocateControl.LocationNotAvailable": T("map.locate"),
+      "AttributionControl.ToggleAttribution": T("map.attrib"), "AttributionControl.MapFeedback": T("map.attrib") };
+  }
+
   function init() {
-    var q = /[?&]c=([-\d.]+),([-\d.]+),([\d.]+)/.exec(location.search);   // optional deep link: ?c=lat,lon,zoom
+    var qs = new URLSearchParams(location.search).get("c");                    // optional deep link: ?c=lat,lon,zoom
+    var qm = qs && /^(-?[\d.]+),(-?[\d.]+),([\d.]+)$/.exec(qs);
+    var q = !!qm;
     var sp = savedPos();
-    var start = q ? { center: [+q[2], +q[1]], zoom: +q[3] }
+    var start = q ? { center: [+qm[2], +qm[1]], zoom: +qm[3] }
       : sp ? { center: [sp.lon, sp.lat], zoom: 14 } : { center: TASHKENT, zoom: 12 };
     start0 = start.center;
+    initLang();
     configPromise.then(function (c) { cfg = c; initPrayer(); });
     // first mosque query right away, around the start position (~11 km window), in parallel with the style
     var d = 0.1;
@@ -231,11 +266,11 @@
       var sp2 = c.style_url && c.style_url !== DEFAULT_STYLE ? fetch(c.style_url).then(function (r) { return r.json(); }) : stylePromise;
       return sp2.then(function (style) { return patchStyle(style, c); });
     }).then(function (style) {
-      map = new maplibregl.Map({ container: "map", style: style, center: start.center, zoom: start.zoom,
+      map = new maplibregl.Map({ container: "map", style: style, center: start.center, zoom: start.zoom, locale: mapLocale(),
         minZoom: 5, maxBounds: REGION, fadeDuration: 0, pixelRatio: Math.min(window.devicePixelRatio || 1, 2),
         attributionControl: { compact: true } });
       map.on("styleimagemissing", function (e) {      // our own icons, created on demand
-        var colors = { "mosque-green": "#0b7a5b", "mosque-amber": "#b45309", "mosque-osm": "#4aa586" };
+        var colors = { "mosque-green": "#059669", "mosque-amber": "#b45309", "mosque-osm": "#4aa586" };
         if (colors[e.id] && !map.hasImage(e.id)) map.addImage(e.id, mosqueIcon(colors[e.id]), { pixelRatio: 2 });
       });
       map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
@@ -249,13 +284,13 @@
       map.on("click", onMapClick);
       if (!q) locate(start);
       var errs = 0;
-      map.on("error", function (e) {                  // tile/style/sprite request failures: say so instead of a silent blank map
-        if (++errs >= 3 && !map.loaded()) mapProblem("Xarita ma’lumotlari yuklanmayapti (tiles.openfreemap.org). Internet, VPN yoki tarmoq filtrini tekshiring.");
+      map.on("error", function () {                   // tile/style/sprite request failures: say so instead of a silent blank map
+        if (++errs >= 3 && !map.loaded()) mapProblem(T("map.err_tiles"));
       });
       map.on("idle", function () { if (map.loaded()) $("maperr").hidden = true; });
-      setTimeout(function () { if (!map.loaded()) mapProblem("Xarita uzoq yuklanmoqda. Ulanish sekin bo‘lishi mumkin."); }, 20000);
+      setTimeout(function () { if (!map.loaded()) mapProblem(T("map.err_slow")); }, 20000);
     }).catch(function () {
-      mapProblem("Xarita uslubini yuklab bo‘lmadi (tiles.openfreemap.org). Internet, VPN yoki tarmoq filtrini tekshiring.");
+      mapProblem(T("map.err_style"));
     });
   }
 
@@ -290,15 +325,15 @@
 
   function showProviderPoi(poi, lngLat) {
     var c = poi.geometry.coordinates;
-    var body = el("div", { style: "max-width:230px;color:#1b1f23" }, [
-      el("b", { text: poi.properties.name || "Masjid" }),
-      el("div", { class: "muted", text: "Xarita ma’lumoti (© OpenStreetMap). Hali bizning bazamizda yo‘q." }),
+    var body = el("div", { style: "max-width:230px" }, [
+      el("b", { text: poi.properties.name || T("poi.name") }),
+      el("div", { class: "muted", text: T("poi.note") }),
       el("div", { class: "row" }, [])
     ]);
     var row = body.lastChild;
     api("GET", "/api/mosques/nearby?lat=" + c[1] + "&lon=" + c[0] + "&radius=" + cfg.duplicate_radius_m).then(function (r) {
-      if (r.items.length) row.appendChild(el("button", { text: "Bizning sahifani ochish", onclick: function () { closePopup(); openMosque(r.items[0].id); } }));
-      else row.appendChild(el("button", { text: "Bazaga qo‘shish", onclick: function () { closePopup(); startAdd(); setPicked({ lng: c[0], lat: c[1] }); } }));
+      if (r.items.length) row.appendChild(btn("small", T("poi.open"), function () { closePopup(); openMosque(r.items[0].id); }));
+      else row.appendChild(btn("small", T("poi.add"), function () { closePopup(); startAdd(); setPicked({ lng: c[0], lat: c[1] }); }));
     }).catch(function () {});
     closePopup();
     popup = new maplibregl.Popup({ maxWidth: "260px" }).setLngLat(lngLat).setDOMContent(body).addTo(map);
@@ -310,8 +345,8 @@
   function mapPadding() {
     var shown = !$("panel").hidden;
     if (!shown) return { top: 0, right: 0, bottom: 0, left: 0 };
-    if (sideLayout()) return { top: 0, right: 0, bottom: 0, left: Math.min(392, innerWidth * 0.55 + 12) };
-    return { top: 0, right: 0, left: 0, bottom: Math.round(innerHeight * 0.52) };   // matches the sheet height
+    if (sideLayout()) return { top: 0, right: 0, bottom: 0, left: Math.min(402, innerWidth * 0.56 + 12) };
+    return { top: 0, right: 0, left: 0, bottom: Math.round(innerHeight * 0.56) };   // matches the sheet height
   }
   function revealPoint(lon, lat) { map.easeTo({ center: [lon, lat], duration: 350, padding: mapPadding() }); }
 
@@ -322,41 +357,49 @@
   });
 
   // ---- panel
-  function showPanel(node) { var b = $("panel-body"); b.textContent = ""; b.appendChild(node); $("panel").hidden = false; }
+  function showPanel(node) { var b = $("panel-body"); b.textContent = ""; b.appendChild(node); $("panel").hidden = false; $("panel").scrollTop = 0; }
   function hidePanel() { $("panel").hidden = true; if (map) map.easeTo({ padding: mapPadding(), duration: 200 }); }
   $("panel-close").onclick = hidePanel;
+  function skeleton() {                                    // instant feedback while the mosque loads
+    return el("div", {}, [el("div", { class: "sk", style: "height:26px;width:70%;margin:8px 0" }), el("div", { class: "sk", style: "height:18px;width:45%;margin:8px 0" }),
+      el("div", { class: "sk", style: "height:16px;width:85%;margin:14px 0" }), el("div", { class: "sk", style: "height:120px;margin:14px 0" })]);
+  }
 
-  function timesTable(m) {
-    var t = el("table");
+  function timesGrid(m) {
+    var g = el("div", { class: "times" });
     PRAYERS.forEach(function (p) {
-      var v = m.prayer_times[p[0]];
-      t.appendChild(el("tr", {}, [el("td", { text: p[1] }), el("td", v ? { text: v } : { class: "missing", text: "ma’lum emas" })]));
+      var v = m.prayer_times[p];
+      g.appendChild(el("div", { class: "tile" + (v ? "" : " empty") + (p === "jumuah" ? " jumuah" : "") }, [el("small", { text: T("pn." + p) }), el("b", { text: v || "—" })]));
     });
-    return t;
+    return g;
   }
 
   function openMosque(id) {
+    showPanel(skeleton());
     api("GET", "/api/mosques/" + id).then(function (m) {
       var lb = label(m);
       var node = el("div", {}, [
-        el("h2", m.name ? { text: m.name } : { class: "missing", text: "Nomi ma’lum emas" }),
+        el("h2", m.name ? { text: m.name } : { class: "missing", text: T("m.name_unknown") }),
         el("span", { class: "badge " + lb[1], text: lb[0] }),
-        el("p", m.address ? { text: m.address } : { class: "missing", text: "Manzil ma’lum emas" }),
-        el("div", { class: "muted", text: m.lat.toFixed(6) + ", " + m.lon.toFixed(6) + " · versiya " + m.version }),
-        el("div", { class: "muted", text: "Oxirgi o‘zgarish: " + fmtTime(m.updated_at) }),
-        m.source === "openstreetmap" ? el("div", { class: "muted", text: "Joylashuv va nom: © OpenStreetMap contributors (ODbL). Namoz vaqtlari jamoa tomonidan kiritiladi." }) : null,
-        m.verification_note ? el("div", { class: "muted", text: "Tasdiq asosi: " + m.verification_note }) : null,
-        el("h3", { text: "Jamoat namozi vaqtlari" }), timesTable(m),
+        el("p", m.address ? { text: m.address } : { class: "missing", text: T("m.addr_unknown") }),
+        el("div", { class: "muted stack" }, [
+          el("div", { text: m.lat.toFixed(6) + ", " + m.lon.toFixed(6) + " · " + T("m.version", { v: m.version }) }),
+          el("div", { text: T("m.updated", { t: I18N.fmtDate(m.updated_at) }) }),
+          m.source === "openstreetmap" ? el("div", { text: T("m.osm_credit") }) : null,
+          m.verification_note ? el("div", { text: T("m.verif", { note: m.verification_note }) }) : null
+        ]),
+        el("h3", { text: T("m.times") }), timesGrid(m),
         el("div", { class: "row" }, yandexLinks(m)),
         el("div", { class: "row" }, [
-          el("button", { text: "Tahrirlash", onclick: function () { editForm(m); } }),
-          el("button", { class: "ghost", text: "Tarix", onclick: function () { historyView(m); } }),
-          el("button", { class: "danger", text: "Xato haqida xabar", onclick: function () { reportForm(m); } })
+          btn("", T("btn.edit"), function () { editForm(m); }),
+          btn("ghost", T("btn.history"), function () { historyView(m); }),
+          btn("danger", T("btn.report"), function () { reportForm(m); })
         ])
       ]);
       showPanel(node);
       revealPoint(m.lon, m.lat);
-    }).catch(function (e) { toast(errText(e)); });
+    }).catch(function (e) { hidePanel(); toast(errText(e)); });
+    revealPoint(map.getCenter().lng, map.getCenter().lat);
   }
 
   function field(labelText, input) { return el("div", {}, [el("label", { text: labelText }), input]); }
@@ -364,7 +407,7 @@
   function timesInputs(values) {
     var grid = el("div", { class: "grid" });
     PRAYERS.forEach(function (p) {
-      grid.appendChild(field(p[1], el("input", { type: "time", "data-p": p[0], value: values[p[0]] || "" })));
+      grid.appendChild(field(T("pn." + p), el("input", { type: "time", "data-p": p, value: values[p] || "" })));
     });
     return grid;
   }
@@ -373,90 +416,109 @@
     root.querySelectorAll("input[data-p]").forEach(function (i) { out[i.getAttribute("data-p")] = i.value || null; });
     return out;
   }
+  function fmtC(lat, lng) { return lat.toFixed(6) + ", " + lng.toFixed(6); }
 
   function editForm(m) {
-    var name = el("input", { value: m.name || "", maxlength: 200 });
-    var addr = el("input", { value: m.address || "", maxlength: 300 });
+    var name = el("input", { value: m.name || "", maxlength: 200, autocomplete: "off" });
+    var addr = el("input", { value: m.address || "", maxlength: 300, autocomplete: "off" });
     var grid = timesInputs(m.prayer_times);
-    var note = el("input", { placeholder: "Qisqa izoh (ixtiyoriy)", maxlength: 300 });
-    var coords = el("div", { class: "muted", text: "Joylashuv: " + m.lat.toFixed(6) + ", " + m.lon.toFixed(6) });
+    var note = el("input", { placeholder: T("f.note_ph"), maxlength: 300 });
+    var coords = el("div", { class: "muted", text: T("edit.loc", { c: fmtC(m.lat, m.lon) }) });
     var newPos = null;
-    showPanel(el("div", {}, [
-      el("h2", { text: "Tahrirlash" }), field("Nomi", name), field("Manzil", addr),
-      el("h3", { text: "Jamoat namozi vaqtlari" }), grid, field("Izoh", note),
-      coords,
+    var node = el("div", {}, [
+      el("h2", { text: T("edit.title") }), field(T("f.name"), name), field(T("f.addr"), addr),
+      el("h3", { text: T("m.times") }), grid, field(T("f.note"), note),
+      el("div", { class: "row" }, [coords]),
       el("div", { class: "row" }, [
-        el("button", { class: "ghost", text: "Joyni xaritadan o‘zgartirish", onclick: function () {
-          mode = "pick"; $("add-bar").hidden = false; $("add-hint").textContent = "Yangi joyni bosing"; hidePanel();
-          pickDone = function (ll) { newPos = ll; mode = "browse"; $("add-bar").hidden = true; clearPick(); showPanel(back); coords.textContent = "Yangi joy: " + ll.lat.toFixed(6) + ", " + ll.lng.toFixed(6); };
-        } })
+        btn("ghost", T("edit.pick"), function () {
+          mode = "pick"; $("add-bar").hidden = false; $("add-hint").textContent = T("add.pick_new"); hidePanel();
+          pickDone = function (ll) { newPos = ll; mode = "browse"; $("add-bar").hidden = true; clearPick(); showPanel(node); coords.textContent = T("edit.newloc", { c: fmtC(ll.lat, ll.lng) }); };
+        })
       ]),
       el("div", { class: "row" }, [
-        el("button", { text: "Saqlash", onclick: function () {
+        btn("", T("btn.save"), function (ev) {
+          var b = ev.currentTarget; b.disabled = true;
           var body = { expected_version: m.version, name: name.value, address: addr.value, prayer_times: readTimes(grid), note: note.value };
           if (newPos) { body.lat = newPos.lat; body.lon = newPos.lng; }
-          api("PATCH", "/api/mosques/" + m.id, body).then(function (u) { toast("Saqlandi"); loadMosques(); openMosque(u.id); })
+          api("PATCH", "/api/mosques/" + m.id, body).then(function (u) { toast(T("toast.saved")); loadMosques(); openMosque(u.id); })
             .catch(function (e) {
-              if (e.error === "version_conflict") { toast("Boshqa kishi o‘zgartirgan. Yangilandi, qayta urining."); openMosque(m.id); }
-              else toast(errText(e));
+              b.disabled = false;
+              toast(errText(e));
+              if (e.error === "version_conflict") openMosque(m.id);
             });
-        } }),
-        el("button", { class: "ghost", text: "Bekor", onclick: function () { openMosque(m.id); } })
+        }),
+        btn("ghost", T("btn.cancel"), function () { openMosque(m.id); })
       ])
-    ]));
-    var back = $("panel-body").firstChild;
+    ]);
+    showPanel(node);
   }
   var pickDone = null;
 
+  function fmtVal(field, v) {
+    if (v === null || v === undefined || v === "") return "—";
+    if (field === "status") return T("sv." + v);
+    if (field === "lat" || field === "lon") return Number(v).toFixed(6);
+    return String(v);
+  }
+  function describeChange(field, pair) {                       // -> list of readable lines for one changed field
+    var a = pair[0], b = pair[1];
+    if (field === "prayer_times") {
+      var keys = PRAYERS.filter(function (p) { return (a && a[p]) !== (b && b[p]); });
+      return keys.map(function (p) { return T("pn." + p) + ": " + fmtVal("", a && a[p]) + " → " + fmtVal("", b && b[p]); });
+    }
+    var fl = T("fld." + field);
+    return [(fl === "fld." + field ? field : fl) + ": " + fmtVal(field, a) + " → " + fmtVal(field, b)];
+  }
+
   function historyView(m) {
-    var box = el("div", {}, [el("h2", { text: "O‘zgarishlar tarixi" }), el("div", { class: "muted", text: "Yuklanmoqda…" })]);
+    var box = el("div", {}, [el("h2", { text: T("hist.title") }), skeleton()]);
     showPanel(box);
     api("GET", "/api/mosques/" + m.id + "/history").then(function (r) {
       box.textContent = "";
-      box.appendChild(el("h2", { text: "O‘zgarishlar tarixi" }));
+      box.appendChild(el("h2", { text: T("hist.title") }));
       r.items.forEach(function (h) {
-        var lines = Object.keys(h.changes).map(function (k) {
-          return k + ": " + JSON.stringify(h.changes[k][0]) + " → " + JSON.stringify(h.changes[k][1]);
-        });
-        box.appendChild(el("div", { class: "hist" }, [
-          el("b", { text: h.action + " · v" + h.version }),
-          el("div", { class: "muted", text: fmtTime(h.at) + (h.actor ? " · " + ({ moderator: "moderator", osm: "OpenStreetMap", user: "foydalanuvchi" }[h.actor] || h.actor) : "") }),
-          el("div", { text: lines.join("; ") }), h.note ? el("div", { class: "muted", text: h.note }) : null
+        var lines = [];
+        Object.keys(h.changes).forEach(function (k) { lines = lines.concat(describeChange(k, h.changes[k])); });
+        var act = T("act." + h.action); if (act === "act." + h.action) act = h.action;
+        box.appendChild(el("div", { class: "hist stack" }, [
+          el("b", { text: act + " · v" + h.version }),
+          el("div", { class: "muted", text: I18N.fmtDate(h.at) + (h.actor ? " · " + T("role." + h.actor) : "") }),
+          lines.length ? el("div", { text: lines.join("; ") }) : null, h.note ? el("div", { class: "muted", text: h.note }) : null
         ]));
       });
-      box.appendChild(el("button", { class: "ghost", text: "Orqaga", onclick: function () { openMosque(m.id); } }));
+      box.appendChild(el("div", { class: "row" }, [btn("ghost", T("btn.back"), function () { openMosque(m.id); })]));
     }).catch(function (e) { toast(errText(e)); });
   }
 
   function reportForm(m) {
-    var kind = el("select", {}, [["incorrect", "Noto‘g‘ri ma’lumot"], ["duplicate", "Takroriy yozuv"], ["relocated", "Ko‘chirilgan"], ["closed", "Mavjud emas / yopilgan"], ["other", "Boshqa"]]
-      .map(function (k) { return el("option", { value: k[0], text: k[1] }); }));
-    var reason = el("textarea", { rows: 3, maxlength: 1000, placeholder: "Sababini yozing (majburiy)" });
+    var kind = el("select", {}, ["incorrect", "duplicate", "relocated", "closed", "other"].map(function (k) { return el("option", { value: k, text: T("rk." + k) }); }));
+    var reason = el("textarea", { rows: 3, maxlength: 1000, placeholder: T("rep.reason_ph") });
     showPanel(el("div", {}, [
-      el("h2", { text: "Xato haqida xabar" }),
-      el("p", { class: "muted", text: "Yozuv darhol o‘chirilmaydi: xabarlar guruhlanib moderator tomonidan ko‘rib chiqiladi. Tarix saqlanadi." }),
-      field("Turi", kind), field("Sabab", reason),
+      el("h2", { text: T("rep.title") }),
+      el("p", { class: "muted", text: T("rep.intro") }),
+      field(T("rep.type"), kind), field(T("rep.reason"), reason),
       el("div", { class: "row" }, [
-        el("button", { text: "Yuborish", onclick: function () {
+        btn("", T("btn.send"), function (ev) {
+          var b = ev.currentTarget; b.disabled = true;
           api("POST", "/api/mosques/" + m.id + "/reports", { kind: kind.value, reason: reason.value })
-            .then(function () { toast("Xabaringiz qabul qilindi"); loadMosques(); openMosque(m.id); })
-            .catch(function (e) { toast(errText(e)); });
-        } }),
-        el("button", { class: "ghost", text: "Bekor", onclick: function () { openMosque(m.id); } })
+            .then(function () { toast(T("toast.reported")); loadMosques(); openMosque(m.id); })
+            .catch(function (e) { b.disabled = false; toast(errText(e)); });
+        }),
+        btn("ghost", T("btn.cancel"), function () { openMosque(m.id); })
       ])
     ]));
   }
 
-  // ---- search by name (our own database only)
-  var searchTimer = null;
+  // ---- search by name (our own database only; the server matches any script/apostrophe form)
+  var searchTimer = null, searchSeq = 0;
   function hideResults() { $("results").hidden = true; }
   function runSearch() {
-    var v = $("q").value.trim(), ul = $("results");
+    var v = $("q").value.trim(), ul = $("results"), seq = ++searchSeq;
     if (v.length < 2) { hideResults(); return; }
     api("GET", "/api/search?q=" + encodeURIComponent(v)).then(function (r) {
-      if ($("q").value.trim() !== v) return;
+      if (seq !== searchSeq) return;
       ul.textContent = "";
-      if (!r.items.length) ul.appendChild(el("li", { class: "muted", text: "Hech narsa topilmadi" }));
+      if (!r.items.length) ul.appendChild(el("li", { class: "muted", text: T("search.none") }));
       r.items.forEach(function (m) {
         ul.appendChild(el("li", { text: m.name, onclick: function () {
           hideResults(); $("q").value = m.name;
@@ -467,7 +529,7 @@
       ul.hidden = false;
     }).catch(function () {});
   }
-  $("q").addEventListener("input", function () { clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 250); });
+  $("q").addEventListener("input", function () { clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 220); });
   $("q").addEventListener("keydown", function (e) {
     if (e.key === "Enter") { var f = $("results").querySelector("li:not(.muted)"); if (f) f.click(); }
     if (e.key === "Escape") hideResults();
@@ -480,14 +542,14 @@
     if (pickDone) { var f = pickDone; pickDone = null; f(ll); return; }
     picked = { lat: +ll.lat.toFixed(6), lng: +ll.lng.toFixed(6) };
     clearPick();
-    pickMarker = new maplibregl.Marker({ color: "#0b7a5b", draggable: true }).setLngLat([picked.lng, picked.lat]).addTo(map);
+    pickMarker = new maplibregl.Marker({ color: "#059669", draggable: true }).setLngLat([picked.lng, picked.lat]).addTo(map);
     pickMarker.on("dragend", function () { var p = pickMarker.getLngLat(); picked = { lat: +p.lat.toFixed(6), lng: +p.lng.toFixed(6) }; showAddForm(); });
     showAddForm();
     revealPoint(picked.lng, picked.lat);          // keep the chosen point above the sheet
   }
   function startAdd() {
     mode = "pick"; picked = null; pickDone = null; clearPick(); closePopup();
-    $("add-btn").hidden = true; $("search").hidden = true; $("add-bar").hidden = false; $("add-hint").textContent = "Xaritada masjid joyini bosing"; hidePanel();
+    $("add-btn").hidden = true; $("search").hidden = true; $("add-bar").hidden = false; $("add-hint").textContent = T("add.pick"); hidePanel();
   }
   function endAdd() {
     mode = "browse"; pickDone = null; picked = null; clearPick();
@@ -496,38 +558,39 @@
   $("add-btn").onclick = startAdd;
   $("add-cancel").onclick = endAdd;
 
-  function showAddForm(dups) {
-    var name = el("input", { maxlength: 200, placeholder: "Ixtiyoriy" });
-    var addr = el("input", { maxlength: 300, placeholder: "Ixtiyoriy" });
+  function showAddForm() {
+    var name = el("input", { maxlength: 200, placeholder: T("f.optional"), autocomplete: "off" });
+    var addr = el("input", { maxlength: 300, placeholder: T("f.optional"), autocomplete: "off" });
     var grid = timesInputs({});
     var kids = [
-      el("h2", { text: "Yangi masjid" }),
-      el("div", { class: "muted", text: "Tanlangan joy: " + picked.lat.toFixed(6) + ", " + picked.lng.toFixed(6) + " (markerni sudrab to‘g‘rilash mumkin)" }),
-      el("div", { class: "muted", text: "Bu yozuv “Foydalanuvchi qo‘shgan masjid” deb belgilanadi va tasdiqlangan hisoblanmaydi." }),
-      field("Nomi", name), field("Manzil", addr), el("h3", { text: "Jamoat namozi vaqtlari (ixtiyoriy)" }), grid
+      el("h2", { text: T("add.title") }),
+      el("div", { class: "muted stack" }, [el("div", { text: T("add.selected", { c: fmtC(picked.lat, picked.lng) }) }), el("div", { text: T("add.notice") })]),
+      field(T("f.name"), name), field(T("f.addr"), addr), el("h3", { text: T("m.times_opt") }), grid
     ];
-    function submit(force) {
+    function submit(force, b) {
+      if (b) b.disabled = true;
       var body = { lat: picked.lat, lon: picked.lng, name: name.value, address: addr.value, prayer_times: readTimes(grid), force: !!force };
-      api("POST", "/api/mosques", body).then(function (m) { toast("Qo‘shildi"); endAdd(); loadMosques(); openMosque(m.id); })
+      api("POST", "/api/mosques", body).then(function (m) { toast(T("toast.added")); endAdd(); loadMosques(); openMosque(m.id); })
         .catch(function (e) {
+          if (b) b.disabled = false;
           if (e.error === "possible_duplicate") {
-            var box = el("div", {}, [el("h2", { text: "Yaqin atrofda masjid bor" })]);
+            var box = el("div", {}, [el("h2", { text: T("dup.title") })]);
             e.duplicates.forEach(function (d) {
-              box.appendChild(el("div", { class: "dup" }, [
-                el("b", d.name ? { text: d.name } : { class: "missing", text: "Nomi ma’lum emas" }),
-                el("div", { class: "muted", text: Math.round(d.distance_m) + " m uzoqlikda · " + label(d)[0] }),
-                el("button", { text: "Shuni ochish", onclick: function () { endAdd(); openMosque(d.id); } })
+              box.appendChild(el("div", { class: "dup stack" }, [
+                el("b", d.name ? { text: d.name } : { class: "missing", text: T("m.name_unknown") }),
+                el("div", { class: "muted", text: T("dup.dist", { d: Math.round(d.distance_m), s: label(d)[0] }) }),
+                btn("small", T("dup.open"), function () { endAdd(); openMosque(d.id); })
               ]));
             });
             box.appendChild(el("div", { class: "row" }, [
-              el("button", { class: "danger", text: "Baribir yangisini qo‘shish", onclick: function () { submit(true); } }),
-              el("button", { class: "ghost", text: "Orqaga", onclick: function () { showAddForm(); } })
+              btn("danger", T("dup.force"), function (ev) { submit(true, ev.currentTarget); }),
+              btn("ghost", T("btn.back"), function () { showAddForm(); })
             ]));
             showPanel(box);
           } else toast(errText(e));
         });
     }
-    kids.push(el("div", { class: "row" }, [el("button", { text: "Saqlash", onclick: function () { submit(false); } }), el("button", { class: "ghost", text: "Bekor", onclick: endAdd })]));
+    kids.push(el("div", { class: "row" }, [btn("", T("btn.save"), function (ev) { submit(false, ev.currentTarget); }), btn("ghost", T("btn.cancel"), endAdd)]));
     showPanel(el("div", {}, kids));
   }
 

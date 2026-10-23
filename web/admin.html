@@ -4,31 +4,41 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
-<title>Moderator paneli</title>
-<link rel="stylesheet" href="style.css">
+<meta name="theme-color" content="#047857">
+<title data-i18n="adm.title">Moderator paneli</title>
 <link rel="stylesheet" href="admin.css">
+<script src="i18n.js" defer></script>
 <script src="admin.js" defer></script>
 </head>
-<body class="admin">
-<header>
-  <b>Moderator paneli</b>
+<body>
+<header class="top">
+  <div class="brand">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M12 2c1.5 2 3.5 2.6 3.5 5 0 1-.4 1.8-1 2.4C16.8 10 19 12.2 19 15v1h1v6H4v-6h1v-1c0-2.8 2.2-5 4.5-5.6-.6-.6-1-1.4-1-2.4 0-2.4 2-3 3.5-5Z" opacity=".95"/></svg>
+    <b data-i18n="adm.title">Moderator paneli</b>
+  </div>
   <nav id="tabs" hidden>
-    <button data-tab="reports">Xabarlar</button>
-    <button data-tab="reported">Xabar berilgan</button>
-    <button data-tab="archived">Arxiv</button>
-    <button data-tab="activity">Faoliyat</button>
+    <button data-tab="reports" data-i18n="adm.tab_reports" type="button">Xabarlar</button>
+    <button data-tab="reported" data-i18n="adm.tab_reported" type="button">Xabar berilgan</button>
+    <button data-tab="archived" data-i18n="adm.tab_archived" type="button">Arxiv</button>
+    <button data-tab="activity" data-i18n="adm.tab_activity" type="button">Faoliyat</button>
   </nav>
-  <button id="logout" class="ghost" hidden>Chiqish</button>
+  <div class="right">
+    <a class="pill" href="/" data-i18n="adm.open_map">Xarita</a>
+    <select id="lang" data-i18n-aria="lang.label"></select>
+    <button id="logout" class="pill" type="button" data-i18n="adm.logout" hidden>Chiqish</button>
+  </div>
 </header>
 <main>
-  <form id="login">
-    <p class="muted">Admin tokenni kiriting. U faqat shu brauzer oynasida (sessiya) saqlanadi.</p>
-    <input id="token" type="password" autocomplete="off" placeholder="ADMIN_TOKEN">
-    <button>Kirish</button>
+  <form id="login" class="login card">
+    <p class="muted" data-i18n="adm.login_hint">Admin tokenni kiriting.</p>
+    <div class="login-row">
+      <input id="token" type="password" autocomplete="off" data-i18n-ph="adm.token_ph" spellcheck="false">
+      <button class="btn" data-i18n="adm.login">Kirish</button>
+    </div>
   </form>
   <div id="stats" class="stats" hidden></div>
   <div id="view"></div>
 </main>
-<div id="toast" hidden></div>
+<div id="toast" role="status" aria-live="polite" hidden></div>
 </body>
 </html>

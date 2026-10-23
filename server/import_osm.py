@@ -18,10 +18,33 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import app  # noqa: E402
+import translit  # noqa: E402
 
 QUERY = ('[out:json][timeout:180];area["ISO3166-1"="UZ"][admin_level=2]->.a;'
          'nwr["amenity"="place_of_worship"]["religion"="muslim"](area.a);out center tags;')
 UA = "masjid-uz-import/0.1 (%s)" % os.environ.get("OSM_CONTACT", "no contact set")
+
+
+def osm_address(tags):
+    """Best human-readable address from OSM tags: addr:full when present, else street/house/place/city/district/region."""
+    full = (tags.get("addr:full") or "").strip()
+    if full:
+        try:
+            return app.clean_text(full[:300], "address", 300)     # never let one odd tag abort a whole sync
+        except app.ApiError:
+            return None
+    street = " ".join(x for x in (tags.get("addr:street"), tags.get("addr:housenumber")) if x)
+    parts = [street, tags.get("addr:place") or tags.get("addr:suburb") or tags.get("addr:neighbourhood"),
+             tags.get("addr:city"), tags.get("addr:district"), tags.get("addr:region")]
+    parts = [p.strip() for p in parts if p and p.strip()]
+    if not parts and tags.get("addr:postcode"):
+        return None                                   # a bare postcode is not an address
+    if tags.get("addr:postcode") and parts:
+        parts.append(tags["addr:postcode"])
+    try:
+        return app.clean_text(", ".join(parts)[:300], "address", 300)
+    except app.ApiError:
+        return None
 
 
 def fetch(endpoint):
@@ -48,7 +71,7 @@ def run(data, cfg, store=None):
         tags = el.get("tags", {})
         lat, lon = app.clean_coord(*pt)
         name = (tags.get("name") or tags.get("name:uz") or tags.get("name:ru") or "")[:200] or None
-        addr = ", ".join(tags[k] for k in ("addr:street", "addr:housenumber", "addr:city") if tags.get(k))[:300] or None
+        addr = osm_address(tags)
         with store.pool.connection() as c:
             cur = c.cursor()
             cur.execute("SELECT * FROM mosques WHERE osm_ref=%s FOR UPDATE", (ref,))
@@ -63,17 +86,17 @@ def run(data, cfg, store=None):
                     unchanged += 1
                     continue
                 version = row["version"] + 1
-                cur.execute("UPDATE mosques SET lat=%s, lon=%s, name=%s, address=%s, version=%s, updated_at=now() WHERE id=%s",
-                            (lat, lon, name, addr, version, row["id"]))
+                cur.execute("UPDATE mosques SET lat=%s, lon=%s, name=%s, address=%s, name_search=%s, version=%s, updated_at=now() WHERE id=%s",
+                            (lat, lon, name, addr, translit.search_key(name), version, row["id"]))
                 store._history(cur, str(row["id"]), version, "osm_sync", "import:osm", changes, "Refreshed from OpenStreetMap " + ref)
                 updated += 1
                 continue
             if store._nearby(cur, lat, lon, 25):      # another record already covers this spot
                 near += 1
                 continue
-            cur.execute("INSERT INTO mosques(lat,lon,name,address,source,origin,status,creator_id,osm_ref) "
-                        "VALUES (%s,%s,%s,%s,'openstreetmap','imported','unverified','import:osm',%s) RETURNING id",
-                        (lat, lon, name, addr, ref))
+            cur.execute("INSERT INTO mosques(lat,lon,name,address,source,origin,status,creator_id,osm_ref,name_search) "
+                        "VALUES (%s,%s,%s,%s,'openstreetmap','imported','unverified','import:osm',%s,%s) RETURNING id",
+                        (lat, lon, name, addr, ref, translit.search_key(name)))
             m_id = str(cur.fetchone()["id"])
             store._history(cur, m_id, 1, "create", "import:osm",
                            {"lat": [None, lat], "lon": [None, lon], "name": [None, name], "address": [None, addr]},

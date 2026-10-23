@@ -8,3 +8,4 @@ osm-mosques.json
 .env.*
 !.env.example
 .idea/
+docs/screens/
