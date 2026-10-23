@@ -50,7 +50,7 @@
     if (m.status === "verified") return [T("status.verified"), "verified"];
     if (m.status === "reported") return [T("status.reported"), "reported"];
     if (m.origin === "community") return [T("status.community"), ""];
-    return [T("status.unverified"), "neutral"];
+    return null;                                    // plain unverified record: no badge (it never claims to be verified)
   }
 
   // ---- navigation: opens an external app/site; nothing is requested from or stored by Yandex
@@ -380,7 +380,7 @@
       var lb = label(m);
       var node = el("div", {}, [
         el("h2", m.name ? { text: m.name } : { class: "missing", text: T("m.name_unknown") }),
-        el("span", { class: "badge " + lb[1], text: lb[0] }),
+        lb ? el("span", { class: "badge " + lb[1], text: lb[0] }) : null,
         opts.dist != null ? el("div", { class: "dist", text: "📍 " + T("m.distance", { d: fmtDist(opts.dist) }) }) : null,
         el("p", m.address ? { text: m.address } : { class: "missing", text: T("m.addr_unknown") }),
         el("div", { class: "muted stack" }, [
@@ -609,7 +609,7 @@
             e.duplicates.forEach(function (d) {
               box.appendChild(el("div", { class: "dup stack" }, [
                 el("b", d.name ? { text: d.name } : { class: "missing", text: T("m.name_unknown") }),
-                el("div", { class: "muted", text: T("dup.dist", { d: Math.round(d.distance_m), s: label(d)[0] }) }),
+                el("div", { class: "muted", text: T("dup.dist", { d: Math.round(d.distance_m), s: (label(d) || [""])[0] }).replace(/ · $/, "") }),
                 btn("small", T("dup.open"), function () { endAdd(); openMosque(d.id); })
               ]));
             });
