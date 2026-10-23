@@ -23,10 +23,14 @@ _LOOSE = re.compile(r"(?<![\w])([\dOolI|]{1,2})\s*[:.·\-]\s*([\dOolI|]{2})(?![\
 _TR = str.maketrans({"O": "0", "o": "0", "l": "1", "I": "1", "|": "1"})
 
 
+_DATE = re.compile(r"(?<!\d)\d{1,2}\s*[./-]\s*\d{1,2}\s*[./-]\s*\d{2,4}(?!\d)")
+
+
 def _times_in(line):
-    """HH:MM values in a line. OCR confuses O/0 and l/1: letters are repaired only inside tokens shaped like a time."""
+    """HH:MM values in a line. OCR confuses O/0 and l/1: letters are repaired only inside tokens shaped like a time.
+    Dates such as 23.10.2026 (common on boards) are removed first so that "23.10" is not read as 23:10."""
     out = []
-    for h, m in _LOOSE.findall(line):
+    for h, m in _LOOSE.findall(_DATE.sub(" ", line)):
         h, m = h.translate(_TR), m.translate(_TR)
         if h.isdigit() and m.isdigit() and 0 <= int(h) <= 23 and 0 <= int(m) <= 59:
             out.append("%02d:%02d" % (int(h), int(m)))

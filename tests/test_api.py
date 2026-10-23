@@ -406,6 +406,9 @@ class TimetableParser(unittest.TestCase):
         self.assertEqual({rows["times"]["fajr"], rows["alt"]["fajr"]}, {"05:40", "05:20"})
         two = T.parse("Bomdod 05:20 05:40\nPeshin 12:30 12:45\nAsr 16:00 16:15\nShom 17:35 17:40\nXufton 19:00 19:15")
         self.assertFalse(two["complete"]); self.assertEqual(two["alt"]["fajr"], "05:40"); self.assertIn("two_columns", two["warnings"])
+        dated = T.parse("JOME MASJIDI\n23.10.2026\n05:20\n06:40\n12:30\n16:00\n17:35\n19:00")           # a date line must not become 23:10
+        self.assertTrue(dated["complete"]); self.assertEqual(dated["times"]["fajr"], "05:20"); self.assertIn("sunrise_dropped", dated["warnings"])
+        self.assertTrue(T.parse("23/10/2026 05:20 12:30 16:00 17:35 19:00")["complete"])
         rep = T.parse("Bomdod 05:20\nPeshin 12:30\nAsr 6:00\nShom 17:35\nXufton 19:00")           # OCR lost the "1" of 16:00
         self.assertTrue(rep["complete"]); self.assertEqual(rep["times"]["asr"], "16:00"); self.assertIn("repaired", rep["warnings"])
         self.assertFalse(T.parse("05:20 12:30 11:00 03:00 19:00")["complete"])                  # not repairable -> never complete

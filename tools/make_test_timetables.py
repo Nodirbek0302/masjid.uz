@@ -25,8 +25,9 @@ def board(name, title, rows, size=(900, 700), bg=(236, 246, 238), ink=(10, 60, 4
     for r in rows:
         d.line([40, y - 10, size[0] - 40, y - 10], fill=ink, width=2)
         d.text((70, y + rh // 2 - 10), r[0], font=ImageFont.truetype(BOLD, 40), fill=ink, anchor="lm")
+        n = len(r) - 1
         for i, t in enumerate(r[1:]):
-            d.text((size[0] - 120 - i * 230, y + rh // 2 - 10), t, font=ImageFont.truetype(BOLD, 46), fill=ink, anchor="rm")
+            d.text((size[0] - 120 - (n - 1 - i) * 230, y + rh // 2 - 10), t, font=ImageFont.truetype(BOLD, 46), fill=ink, anchor="rm")
         y += rh
     if rot:
         im = im.rotate(rot, expand=True, fillcolor=(120, 120, 120), resample=Image.BICUBIC)
@@ -96,4 +97,47 @@ wide("10-uzun-azon-jamoat-ikki-qator", "AZON VA JAMOAT VAQTLARI", ["Bomdod", "Pe
      [["Azon", "05:40", "12:45", "16:15", "17:40", "19:15"], ["Jamoat", "05:20", "12:30", "16:00", "17:35", "19:00"]],
      bg=(18, 40, 30), head=(220, 240, 225), digit=(250, 220, 90), size=(1800, 560))
 wide("11-uzun-qiyshiq-xira", "NAMOZ VAQTLARI", ["Bomdod", "Peshin", "Asr", "Shom", "Xufton"], [[T[0], T[2], T[3], T[4], T[5]]], rot=-3, blur=1.2, noise=45)
+
+
+def tall(name, mosque, rows, header_rows=(), rot=0, blur=0.0, noise=0, dark=0.0, bg=(236, 246, 238), ink=(10, 60, 40), quality=72):
+    """Long portrait board (like a wall banner or a phone screenshot): mosque name, a date line, one big row per prayer."""
+    W, H = 760, 1750
+    im = Image.new("RGB", (W, H), bg)
+    d = ImageDraw.Draw(im)
+    d.rectangle([16, 16, W - 16, H - 16], outline=ink, width=8)
+    d.rectangle([16, 16, W - 16, 330], fill=ink)
+    d.text((W // 2, 110), mosque, font=ImageFont.truetype(BOLD, 52), fill=(255, 255, 255), anchor="mm")
+    d.text((W // 2, 200), "23.10.2026", font=ImageFont.truetype(FONT, 46), fill=(220, 240, 225), anchor="mm")
+    d.text((W // 2, 275), header_rows[0] if header_rows else "", font=ImageFont.truetype(FONT, 38), fill=(220, 240, 225), anchor="mm")
+    y, rh = 350, (H - 400) // len(rows)
+    for i, r in enumerate(rows):
+        if i % 2 == 0:
+            d.rectangle([30, y, W - 30, y + rh - 6], fill=(214, 236, 220))
+        n = len(r) - 1
+        d.text((50, y + rh // 2), r[0], font=ImageFont.truetype(BOLD, 62 if n == 1 else 48), fill=ink, anchor="lm")
+        for j, t in enumerate(r[1:]):
+            d.text((W - 60 - (n - 1 - j) * 250, y + rh // 2), t, font=ImageFont.truetype(BOLD, 78 if n == 1 else 62), fill=ink, anchor="rm")
+        y += rh
+    if rot:
+        im = im.rotate(rot, expand=True, fillcolor=(110, 110, 110), resample=Image.BICUBIC)
+    if blur:
+        im = im.filter(ImageFilter.GaussianBlur(blur))
+    if dark:
+        im = Image.eval(im, lambda v: int(v * (1 - dark)))
+    if noise:
+        px = im.load()
+        for _ in range(im.width * im.height // noise):
+            x, yy, v = random.randrange(im.width), random.randrange(im.height), random.randrange(60, 200)
+            px[x, yy] = (v, v, v)
+    (OUT / "uzun").mkdir(parents=True, exist_ok=True)
+    im.save(OUT / "uzun" / (name + ".jpg"), "JPEG", quality=quality)
+
+
+tall("u1-lotin", "JOME MASJIDI", [("Bomdod", T[0]), ("Quyosh", T[1]), ("Peshin", T[2]), ("Asr", T[3]), ("Shom", T[4]), ("Xufton", T[5])], ["NAMOZ VAQTLARI"])
+tall("u2-kirill-ozbek", "ЖОМЕ МАСЖИДИ", [("Бомдод", T[0]), ("Қуёш", T[1]), ("Пешин", T[2]), ("Аср", T[3]), ("Шом", T[4]), ("Хуфтон", T[5])], ["НАМОЗ ВАҚТЛАРИ"])
+tall("u3-rus", "МЕЧЕТЬ ИМЕНИ НУРА", [("Фаджр", T[0]), ("Восход", T[1]), ("Зухр", T[2]), ("Аср", T[3]), ("Магриб", T[4]), ("Иша", T[5])], ["РАСПИСАНИЕ НАМАЗОВ"])
+tall("u4-ikki-ustun", "JOME MASJIDI", [("Bomdod", "05:40", "05:20"), ("Peshin", "12:45", "12:30"), ("Asr", "16:15", "16:00"), ("Shom", "17:40", "17:35"), ("Xufton", "19:15", "19:00")],
+     ["AZON  ·  JAMOAT"])
+tall("u5-faqat-besh-vaqt", "JOME MASJIDI", [("Bomdod", T[0]), ("Peshin", T[2]), ("Asr", T[3]), ("Shom", T[4]), ("Xufton", T[5])], ["JAMOAT VAQTLARI"])
+tall("u6-qiyshiq-xira", "JOME MASJIDI", [("Bomdod", T[0]), ("Peshin", T[2]), ("Asr", T[3]), ("Shom", T[4]), ("Xufton", T[5])], ["JAMOAT VAQTLARI"], rot=3, blur=1.0, noise=60, dark=0.2)
 print("saved to", OUT)
