@@ -1,0 +1,42 @@
+# Image kontekstiga tushmasligi kerak bo'lgan hamma narsa (kichik kontekst = tezroq build).
+
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# Git va CI
+.git/
+.gitignore
+.github/
+.dockerignore
+Dockerfile
+docker-compose*.yml
+
+# Testlar va dev asboblari
+tests/
+.ruff_cache/
+.pytest_cache/
+.pgdata/
+pyproject.toml
+
+# Sirlar — hech qachon image'ga tushmasin
+.env
+.env.*
+*.pem
+*.key
+
+# Mahalliy ma'lumotlar (OSM dump — ODbL, image'ga kerak emas)
+osm-mosques.json
+*.db
+*.dump
+backups/
+*.log
+
+# Muhit/shaxsiy
+.DS_Store
+.idea/
+.vscode/
+*.md
+docs/
+Makefile

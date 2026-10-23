@@ -1,0 +1,124 @@
+# Kichik server uchun (1 vCPU / 1GB RAM dan boshlab ishlaydi).
+#
+# Bitta fayl o'zi yetarli: serverda `docker compose up -d --build` hamma konteynerni ko'taradi va server
+# qayta yonganda ham (restart: unless-stopped + docker avtomatik ishga tushadi) o'zi qaytib ko'tariladi.
+#   web, postgres         — doim
+#   profil "bot"          — Telegram bot            (TELEGRAM_BOT_TOKEN kerak)
+#   profil "https"        — Caddy: domen + avtomatik HTTPS (80/443)  (DOMAIN kerak)
+#   profil "cloudflare"   — Cloudflare Tunnel       (CLOUDFLARE_TUNNEL_TOKEN kerak)
+# Profillar .env dagi COMPOSE_PROFILES=https,bot orqali tanlanadi.
+# Docker Hub'dan tortish uchun: docker-compose.prod.yml (deploy/DEPLOY-DOCKER.md).
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-masjid}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-masjid}
+      POSTGRES_DB: ${POSTGRES_DB:-masjid}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-masjid}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+    command: >
+      postgres -c max_connections=40 -c shared_buffers=96MB
+               -c effective_cache_size=256MB -c work_mem=4MB
+
+  web:
+    build: .
+    # build + image birga: serverda `up --build` quradi va shu nom bilan saqlaydi; keyin Docker Hub'ga chiqarilsa
+    # (docker-compose.prod.yml) xuddi shu nom bilan tortiladi.
+    image: ${IMAGE:-no0404ir0302/masjid-uz:latest}
+    restart: unless-stopped
+    command: ["web"]             # API + statik klient + /admin.html
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Bazaga ulanish shu yerda yig'iladi (.env dagi DATABASE_URL lokal dev uchun, bu yerga ta'sir qilmasligi shart).
+      DATABASE_URL: postgresql://${POSTGRES_USER:-masjid}:${POSTGRES_PASSWORD:-masjid}@postgres:5432/${POSTGRES_DB:-masjid}
+      HOST: 0.0.0.0
+      PORT: "8080"
+      # Cloudflare Tunnel orqasida haqiqiy mijoz manzili X-Forwarded-For dan olinadi.
+      TRUST_PROXY: "1"
+      # Admin faqat serverning o'zidan (SSH tunnel) ochiladi, ommaviy domen orqali emas. DEPLOY-DOCKER.md ga qarang.
+      ADMIN_LOCAL_ONLY: "1"
+      SHOW_TILE_MOSQUES: "0"
+    # Faqat localhost'ga bog'lanadi — tashqariga Cloudflare Tunnel orqali ochiladi (inbound port shart emas).
+    ports:
+      - "127.0.0.1:${HOST_WEB_PORT:-8080}:8080"
+    depends_on:
+      postgres: {condition: service_healthy}
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  # Telegram bot (long polling). Profil "bot": COMPOSE_PROFILES ga `bot` qo'shing va .env da TELEGRAM_BOT_TOKEN bering.
+  bot:
+    build: .
+    image: ${IMAGE:-no0404ir0302/masjid-uz:latest}
+    profiles: ["bot"]
+    restart: unless-stopped
+    command: ["bot"]
+    env_file:
+      - path: .env
+        required: false
+    healthcheck:
+      disable: true
+    depends_on:
+      - web
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+  # Domen + avtomatik HTTPS (Let's Encrypt). Profil "https": .env da DOMAIN=masjid.example.uz va domenning
+  # A yozuvi server IP'siga qaragan bo'lishi kerak; 80 va 443 portlar ochiq bo'lsin.
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["https"]
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile.docker:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - web
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+
+  # Cloudflare Tunnel (ochiq port shart emas). Profil "cloudflare": .env da CLOUDFLARE_TUNNEL_TOKEN bering.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    profiles: ["cloudflare"]
+    restart: unless-stopped
+    command: tunnel run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    depends_on:
+      - web
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

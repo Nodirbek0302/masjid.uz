@@ -1,0 +1,57 @@
+# ── Production ustama (override) fayli ──────────────────────────────────
+#
+# Yakka o'zi ishlamaydi — asosiy `docker-compose.yml` ustiga qo'llanadi:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml pull
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-build
+#
+# (yoki qisqasi: `make prod-pull prod-up`)
+#
+# Serverda HECH NARSA build qilinmaydi: image GitHub Actions'da qurilib Docker Hub'ga yuboriladi,
+# server faqat tortib oladi. Lokal ishlash uchun oddiy `docker compose up -d --build`.
+
+x-app-common: &app-common
+  # Namespace `ai-smm-agent` va `demo-ci-cd` bilan bir xil. Rollback uchun:
+  #   IMAGE=no0404ir0302/masjid-uz:sha-abc1234 make prod-up
+  image: ${IMAGE:-no0404ir0302/masjid-uz:latest}
+  pull_policy: always
+  restart: always
+  security_opt:
+    - no-new-privileges:true
+  # Log rotatsiyasi: kichik diskda cheksiz o'sish eng ko'p uchraydigan "disk to'lib qoldi" sababi.
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  web:
+    <<: *app-common
+
+  bot:
+    <<: *app-common
+
+  postgres:
+    restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  caddy:
+    restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  cloudflared:
+    restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"

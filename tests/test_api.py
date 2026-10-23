@@ -1,0 +1,173 @@
+import json
+import os
+import sys
+import tempfile
+import threading
+import unittest
+import urllib.request
+import urllib.error
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "server"))
+import psycopg
+import app
+
+TEST_URL = os.environ.get('TEST_DATABASE_URL', 'postgresql://masjid@127.0.0.1:54329/masjid_test')
+
+class Api(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp()
+        with psycopg.connect(TEST_URL, autocommit=True) as c:   # fresh schema for every run
+            c.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public")
+        os.environ.update(DATABASE_URL=TEST_URL, ADMIN_TOKEN="secret", PORT="0",
+                          WRITE_RATE_PER_MIN="1000", REPORT_THRESHOLD="2")
+        cfg = app.Config()
+        cls.srv = app.build_server(cfg)
+        cls.base = "http://127.0.0.1:%d" % cls.srv.server_address[1]
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+
+    def call(self, method, path, body=None, admin=False, client="aaaaaaaa-1"):
+        h = {"Content-Type": "application/json", "X-Client-Id": client}
+        if admin: h["Authorization"] = "Bearer secret"
+        req = urllib.request.Request(self.base + path, method=method, headers=h,
+                                     data=json.dumps(body).encode() if body is not None else None)
+        try:
+            with urllib.request.urlopen(req) as r: return r.status, json.loads(r.read())
+        except urllib.error.HTTPError as e: return e.code, json.loads(e.read())
+
+    def add(self, lat, lon, **kw):
+        return self.call("POST", "/api/mosques", dict(lat=lat, lon=lon, **kw))
+
+    def test_full_flow(self):
+        # add without name/times -> missing info allowed, community origin, unverified
+        s, m = self.add(41.3111, 69.2797)
+        self.assertEqual(s, 201)
+        self.assertEqual((m["origin"], m["status"], m["version"], m["name"]), ("community", "unverified", 1, None))
+        self.assertTrue(m["creator_id"].startswith("client:"))
+        # duplicate detection
+        s, d = self.add(41.31112, 69.27972, name="Dup")
+        self.assertEqual(s, 409); self.assertEqual(d["duplicates"][0]["id"], m["id"])
+        # far away is fine
+        self.assertEqual(self.add(41.35, 69.35)[0], 201)
+        # edit times
+        s, m2 = self.call("PATCH", "/api/mosques/" + m["id"],
+                          {"expected_version": 1, "name": "Test", "prayer_times": {"fajr": "05:10", "jumuah": "13:00"}})
+        self.assertEqual((s, m2["version"], m2["prayer_times"]["fajr"]), (200, 2, "05:10"))
+        # stale version rejected
+        self.assertEqual(self.call("PATCH", "/api/mosques/" + m["id"], {"expected_version": 1, "name": "X"})[0], 409)
+        # validation
+        self.assertEqual(self.call("PATCH", "/api/mosques/" + m["id"],
+                                   {"expected_version": 2, "prayer_times": {"fajr": "25:99"}})[0], 400)
+        self.assertEqual(self.add(100, 0)[0], 400)
+        # history
+        s, h = self.call("GET", "/api/mosques/%s/history" % m["id"])
+        self.assertEqual([x["action"] for x in h["items"]], ["edit", "create"])
+        # reports: grouped, threshold -> reported
+        self.assertEqual(self.call("POST", "/api/mosques/%s/reports" % m["id"], {"kind": "closed", "reason": "yopilgan"}, client="bbbbbbbb-1")[0], 201)
+        self.assertEqual(self.call("POST", "/api/mosques/%s/reports" % m["id"], {"kind": "closed", "reason": "yopilgan"}, client="bbbbbbbb-1")[0], 409)
+        self.assertEqual(self.call("POST", "/api/mosques/%s/reports" % m["id"], {"kind": "closed"}, client="cccccccc-1")[0], 400)
+        self.call("POST", "/api/mosques/%s/reports" % m["id"], {"kind": "closed", "reason": "yo'q"}, client="cccccccc-1")
+        self.assertEqual(self.call("GET", "/api/mosques/" + m["id"])[1]["status"], "reported")
+        # admin only
+        self.assertEqual(self.call("GET", "/api/admin/reports")[0], 401)
+        s, g = self.call("GET", "/api/admin/reports", admin=True)
+        self.assertEqual(g["groups"][0]["count"], 2)
+        # archive keeps history, hides from map, restorable
+        s, a = self.call("POST", "/api/admin/mosques/%s/archive" % m["id"], {"note": "closed"}, admin=True)
+        self.assertEqual(a["status"], "archived")
+        self.assertNotIn(m["id"], [x["id"] for x in self.call("GET", "/api/mosques")[1]["items"]])
+        self.assertEqual(len(self.call("GET", "/api/mosques/%s/history" % m["id"])[1]["items"]), 4)
+        self.assertEqual(self.call("PATCH", "/api/mosques/" + m["id"], {"expected_version": a["version"], "name": "z"})[0], 409)
+        self.assertEqual(self.call("POST", "/api/admin/mosques/%s/restore" % m["id"], {}, admin=True)[1]["status"], "unverified")
+        # verify needs evidence
+        self.assertEqual(self.call("POST", "/api/admin/mosques/%s/verify" % m["id"], {}, admin=True)[0], 400)
+
+    def test_immutability(self):
+        s, m = self.add(40.0, 65.0)
+        with psycopg.connect(TEST_URL, autocommit=True) as db:
+            for sql in ("DELETE FROM mosque_history", "UPDATE mosque_history SET actor='x'",
+                        "TRUNCATE mosque_history", "DELETE FROM mosques"):
+                with self.assertRaises(psycopg.errors.RaiseException): db.execute(sql)
+        self.assertEqual(self.call("DELETE", "/api/mosques/" + m["id"])[0], 404)
+
+    def test_osm_import(self):
+        import import_osm
+        self.add(39.0, 66.0, name="Ours")
+        data = {"elements": [
+            {"type": "node", "id": 1, "lat": 39.5, "lon": 66.5, "tags": {"name": "OSM masjid", "amenity": "place_of_worship"}},
+            {"type": "way", "id": 2, "center": {"lat": 39.6, "lon": 66.6}, "tags": {}},
+            {"type": "node", "id": 3, "lat": 39.00005, "lon": 66.00005, "tags": {"name": "Too close"}}]}
+        import_osm.run(data, app.Config()); import_osm.run(data, app.Config())   # idempotent
+        s, items = self.call("GET", "/api/mosques?bbox=66.4,39.4,66.7,39.7")
+        self.assertEqual(sorted((m["origin"], m["source"]) for m in items["items"]), [("imported", "openstreetmap")] * 2)
+        self.assertEqual(self.call("GET", "/api/mosques?bbox=65.9,38.9,66.1,39.1")[1]["items"][0]["name"], "Ours")
+        s, g = self.call("GET", "/api/export/osm-derived.geojson")
+        self.assertEqual(len(g["features"]), 2); self.assertIn("ODbL", g["license"])
+
+    def test_search_and_admin_views(self):
+        self.add(37.5, 64.5, name="Alisher Navoiy jome masjidi")
+        self.add(37.6, 64.6, name="100%_special")
+        s, r = self.call("GET", "/api/search?q=navoiy")
+        self.assertEqual([m["name"] for m in r["items"]], ["Alisher Navoiy jome masjidi"])
+        self.assertEqual(self.call("GET", "/api/search?q=%25")[1]["items"], [])      # '%' is literal, not a wildcard
+        self.assertEqual(self.call("GET", "/api/search?q=a")[1]["items"], [])        # too short
+        self.assertEqual(self.call("GET", "/api/admin/overview")[0], 401)
+        s, ov = self.call("GET", "/api/admin/overview", admin=True)
+        self.assertEqual(s, 200); self.assertIn("recent", ov); self.assertGreaterEqual(ov["counts"]["community/unverified"], 2)
+        self.assertNotIn("import:osm", [h["actor"] for h in ov["recent"]])
+        s, lst = self.call("GET", "/api/admin/mosques?status=archived", admin=True)
+        self.assertEqual(s, 200); self.assertIn("total", lst)
+        self.assertEqual(self.call("GET", "/api/admin/mosques?status=bogus", admin=True)[0], 400)
+
+    def test_static_and_traversal(self):
+        with urllib.request.urlopen(self.base + "/") as r: self.assertIn(b"maplibre", r.read().lower())
+        try: urllib.request.urlopen(self.base + "/..%2fserver/app.py"); self.fail()
+        except urllib.error.HTTPError as e: self.assertEqual(e.code, 404)
+
+def make_server(**extra):
+    """Fresh server on a free port against the test DB, independent of test order and of the real .env."""
+    env = dict(DATABASE_URL=TEST_URL, ADMIN_TOKEN="secret", PORT="0", WRITE_RATE_PER_MIN="1000", **extra)
+    old = {k: os.environ.get(k) for k in env}
+    os.environ.update(env)
+    try:
+        srv = app.build_server(app.Config())
+    finally:
+        for k, v in old.items():
+            if v is None: os.environ.pop(k, None)
+            else: os.environ[k] = v
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv, "http://127.0.0.1:%d" % srv.server_address[1]
+
+class AdminLocalOnly(unittest.TestCase):
+    def test_tunnelled_requests_cannot_reach_admin(self):
+        srv, base = make_server(ADMIN_LOCAL_ONLY="1")
+        def get(path, **h):
+            req = urllib.request.Request(base + path, headers=dict({"Authorization": "Bearer secret"}, **h))
+            try: return urllib.request.urlopen(req).status
+            except urllib.error.HTTPError as e: return e.code
+        self.assertEqual(get("/api/admin/overview"), 200)                                   # direct, local
+        self.assertEqual(get("/admin.html"), 200)
+        for h in ({"X-Forwarded-For": "1.2.3.4"}, {"Host": "abc.ngrok-free.app"}, {"Forwarded": "for=1.2.3.4"}, {"CF-Connecting-IP": "1.2.3.4"}):
+            self.assertEqual(get("/api/admin/overview", **h), 404, h)                       # via tunnel
+            self.assertEqual(get("/admin.html", **h), 404, h)
+            self.assertEqual(get("/api/config", **h), 200, h)                               # public parts still work
+        srv.shutdown()
+
+class BruteForce(unittest.TestCase):
+    """Own server instance: the failed-login counter is per process and must not leak into other tests."""
+    def test_admin_bruteforce_limit(self):
+        srv, base = make_server()
+        def hit(token):
+            req = urllib.request.Request(base + "/api/admin/overview", headers={"Authorization": "Bearer " + token})
+            try: return urllib.request.urlopen(req).status
+            except urllib.error.HTTPError as e: return e.code
+        codes = [hit("wrong") for _ in range(12)]
+        self.assertEqual(codes[:10], [401] * 10); self.assertEqual(codes[10:], [429, 429])
+        self.assertEqual(hit("secret"), 429)          # locked out for the rest of the minute, even with the right token
+        srv.shutdown()
+
+if __name__ == "__main__":
+    unittest.main()

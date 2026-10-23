@@ -1,0 +1,9 @@
+# Only tool configuration lives here (the app is run as `python server/app.py`, not installed as a package).
+[tool.ruff]
+line-length = 170
+target-version = "py39"
+extend-exclude = [".venv", ".pgdata"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+ignore = ["E701", "E702"]   # one-line `if x: return` in small helpers is intentional

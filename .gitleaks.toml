@@ -1,0 +1,12 @@
+# Gitleaks: standart qoidalar + test/shablon fayllari istisno. Haqiqiy sir topilsa hech narsa uni yashirmaydi.
+title = "masjid-uz"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Test fixture'lari va bo'sh shablonlar"
+paths = [
+  '''^tests/''',
+  '''^\.env\.example$''',
+]

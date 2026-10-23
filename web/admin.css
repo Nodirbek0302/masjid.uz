@@ -1,0 +1,16 @@
+body.admin{height:auto;min-height:100%}
+.admin header{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:12px 16px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg);z-index:2}
+.admin nav{display:flex;gap:6px;flex-wrap:wrap;flex:1}
+.admin nav button{background:transparent;color:var(--fg);border:1px solid var(--line)}
+.admin nav button.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+.admin main{max-width:900px;margin:0 auto;padding:16px}
+#login{display:flex;gap:8px;flex-wrap:wrap}#login p{width:100%;margin:0}#login input{flex:1;min-width:200px}
+.stats{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px}
+.stat{border:1px solid var(--line);border-radius:10px;padding:8px 14px;min-width:120px}
+.stat b{display:block;font-size:20px}
+.card{border:1px solid var(--line);border-radius:12px;padding:12px;margin:10px 0}
+.card h3{margin:0 0 4px;text-transform:none;letter-spacing:0;font-size:16px;color:var(--fg)}
+.card ul{margin:6px 0;padding-left:18px}
+.card .row{margin:8px 0 0}
+.card input{margin-top:6px}
+a.link{color:var(--accent)}

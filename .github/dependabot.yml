@@ -1,0 +1,24 @@
+version: 2
+
+# Haftada bitta guruhlangan PR (dushanba 06:00 Toshkent vaqti).
+updates:
+  - package-ecosystem: pip
+    directory: "/"
+    schedule: {interval: weekly, day: monday, time: "06:00", timezone: Asia/Tashkent}
+    open-pull-requests-limit: 3
+    groups:
+      python-deps:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule: {interval: weekly, day: monday, time: "06:00", timezone: Asia/Tashkent}
+    open-pull-requests-limit: 3
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: docker
+    directory: "/"
+    schedule: {interval: weekly, day: monday, time: "06:00", timezone: Asia/Tashkent}
+    open-pull-requests-limit: 3

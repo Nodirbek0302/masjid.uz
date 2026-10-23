@@ -1,0 +1,6 @@
+# Compose ichidagi Caddy: DOMAIN uchun avtomatik HTTPS, web konteyneriga uzatadi.
+{$DOMAIN:localhost} {
+	encode gzip
+	reverse_proxy web:8080
+	header -Server
+}

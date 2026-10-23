@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="uz">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Masjid xaritasi</title>
+<link rel="preconnect" href="https://tiles.openfreemap.org" crossorigin>
+<link rel="preload" as="fetch" href="https://tiles.openfreemap.org/styles/liberty" crossorigin>
+<link rel="preload" as="fetch" href="https://tiles.openfreemap.org/planet" crossorigin>
+<link rel="preload" as="fetch" href="/api/config" crossorigin>
+<script src="vendor/maplibre-gl.js" defer></script>
+<script src="prayer.js" defer></script>
+<script src="app.js" defer></script>
+<link rel="stylesheet" href="vendor/maplibre-gl.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="prayer" role="region" aria-label="Namoz vaqtlari">
+  <select id="region" aria-label="Hudud"></select>
+  <div id="ptimes"></div>
+  <button id="prefresh" aria-label="Yangilash" title="Yangilash">↻</button>
+</div>
+<div id="map"></div>
+<div id="search"><input id="q" type="search" placeholder="Masjid nomi bo‘yicha qidirish" autocomplete="off" maxlength="60"><ul id="results" hidden></ul></div>
+<div id="crosshair" hidden></div>
+<button id="add-btn" class="fab">+ Masjid qo‘shish</button>
+<div id="add-bar" hidden>
+  <span id="add-hint">Xaritada masjid joyini bosing</span>
+  <button id="add-cancel" class="ghost">Bekor</button>
+</div>
+<aside id="panel" hidden><button id="panel-close" class="close" aria-label="Yopish">×</button><div id="panel-body"></div></aside>
+<div id="maperr" role="alert" hidden><span id="maperr-text"></span> <button id="maperr-retry">Qayta urinish</button></div>
+<div id="toast" hidden></div>
+</body>
+</html>

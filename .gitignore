@@ -1,0 +1,10 @@
+.venv/
+.env
+__pycache__/
+*.pyc
+backups/
+osm-mosques.json
+.pgdata/
+.env.*
+!.env.example
+.idea/

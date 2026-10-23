@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="uz">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Moderator paneli</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="admin.css">
+<script src="admin.js" defer></script>
+</head>
+<body class="admin">
+<header>
+  <b>Moderator paneli</b>
+  <nav id="tabs" hidden>
+    <button data-tab="reports">Xabarlar</button>
+    <button data-tab="reported">Xabar berilgan</button>
+    <button data-tab="archived">Arxiv</button>
+    <button data-tab="activity">Faoliyat</button>
+  </nav>
+  <button id="logout" class="ghost" hidden>Chiqish</button>
+</header>
+<main>
+  <form id="login">
+    <p class="muted">Admin tokenni kiriting. U faqat shu brauzer oynasida (sessiya) saqlanadi.</p>
+    <input id="token" type="password" autocomplete="off" placeholder="ADMIN_TOKEN">
+    <button>Kirish</button>
+  </form>
+  <div id="stats" class="stats" hidden></div>
+  <div id="view"></div>
+</main>
+<div id="toast" hidden></div>
+</body>
+</html>

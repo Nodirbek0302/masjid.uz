@@ -1,0 +1,17 @@
+[Unit]
+Description=masjid-uz API
+After=network.target postgresql.service
+
+[Service]
+User=masjid
+WorkingDirectory=/opt/masjid-uz
+EnvironmentFile=/etc/masjid-uz.env
+ExecStart=/opt/masjid-uz/.venv/bin/python server/app.py
+Restart=on-failure
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,6 @@
+# Automatic HTTPS (Let's Encrypt). Point the domain's A/AAAA record at the server first.
+masjid.example.uz {
+	encode gzip
+	reverse_proxy 127.0.0.1:8080
+	log { output file /var/log/caddy/masjid.log }
+}
