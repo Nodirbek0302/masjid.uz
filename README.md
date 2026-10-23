@@ -28,3 +28,5 @@ Third-party components keep their own licences (MapLibre GL JS: BSD-3-Clause; ma
 ## Docker / CI-CD
 `Dockerfile`, `docker-compose.yml` (+ `docker-compose.prod.yml`), `.github/workflows/{ci,docker}.yml` — ai-smm-agent bilan bir xil sxema.
 Qadamlar: [docs/DEPLOY-DOCKER.md](docs/DEPLOY-DOCKER.md).
+
+Serverga o'rnatish bo'yicha to'liq qo'llanma: [docs/SERVER-SETUP.md](docs/SERVER-SETUP.md) (`deploy/push.sh`, `deploy/verify.sh`).

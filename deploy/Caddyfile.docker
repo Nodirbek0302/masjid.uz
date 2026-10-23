@@ -1,6 +1,12 @@
 # Compose ichidagi Caddy: DOMAIN uchun avtomatik HTTPS, web konteyneriga uzatadi.
+# DOMAIN=http://SERVER_IP bo'lsa faqat oddiy HTTP (sertifikatsiz) beradi.
 {$DOMAIN:localhost} {
 	encode gzip
 	reverse_proxy web:8080
-	header -Server
+	header {
+		-Server
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+	}
 }

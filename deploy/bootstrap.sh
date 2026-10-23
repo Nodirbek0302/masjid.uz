@@ -25,6 +25,7 @@ case ",$prof," in
   *) echo "! COMPOSE_PROFILES da https yoki cloudflare yo'q: sayt faqat serverning 127.0.0.1:8080 manzilida ochiladi." ;;
 esac
 case ",$prof," in *,https,*) [ -n "$(get DOMAIN)" ] || { echo "✗ https profili uchun DOMAIN bering"; exit 1; } ;; esac
+case ",$prof," in *,osm,*) [ -n "$(get OSM_CONTACT)" ] || echo "! OSM_CONTACT bo'sh: Overpass'ga aloqa manzilisiz murojaat qilinadi (email yozish ahloqiy talab)." ;; esac
 case ",$prof," in *,bot,*) [ -n "$(get TELEGRAM_BOT_TOKEN)" ] || { echo "✗ bot profili uchun TELEGRAM_BOT_TOKEN bering"; exit 1; } ;; esac
 
 if ! command -v docker >/dev/null 2>&1; then
@@ -42,6 +43,13 @@ if [ "$mem_mb" -lt 1800 ] && [ "$(swapon --show --noheadings | wc -l)" -eq 0 ]; 
   grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' | $SUDO tee -a /etc/fstab >/dev/null
 fi
 
+# Ixtiyoriy firewall: ENABLE_UFW=1 ./deploy/bootstrap.sh  (avval SSH ruxsat beriladi, keyin yoqiladi)
+if [ "${ENABLE_UFW:-0}" = "1" ] && command -v ufw >/dev/null 2>&1; then
+  say "ufw: 22, 80, 443 ochiladi, qolgani yopiladi"
+  $SUDO ufw allow OpenSSH >/dev/null; $SUDO ufw allow 80/tcp >/dev/null; $SUDO ufw allow 443/tcp >/dev/null
+  $SUDO ufw --force enable >/dev/null
+fi
+
 say "Konteynerlar qurilmoqda va ko'tarilmoqda"
 $DOCKER compose up -d --build --remove-orphans
 
@@ -53,6 +61,13 @@ for _ in $(seq 1 45); do
 done
 if [ "$ok" != "1" ]; then echo "✗ web javob bermadi:"; $DOCKER compose logs --tail=60 web; exit 1; fi
 echo "✓ web sog'lom"
+
+# Kunlik zaxira (03:15), 14 kun saqlanadi. O'chirish: sudo rm /etc/cron.d/masjid-uz-backup
+if [ "${BACKUP_CRON:-1}" = "1" ] && [ -d /etc/cron.d ]; then
+  echo "15 3 * * * root cd $(pwd) && ./deploy/backup-docker.sh >> backups/backup.log 2>&1" | $SUDO tee /etc/cron.d/masjid-uz-backup >/dev/null
+  $SUDO chmod 644 /etc/cron.d/masjid-uz-backup
+  echo "✓ kunlik zaxira o'rnatildi (/etc/cron.d/masjid-uz-backup)"
+fi
 
 $DOCKER image prune -f >/dev/null
 $DOCKER compose ps

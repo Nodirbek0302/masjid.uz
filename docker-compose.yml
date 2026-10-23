@@ -10,10 +10,18 @@
 # Profillar .env dagi COMPOSE_PROFILES=https,bot orqali tanlanadi.
 # Docker Hub'dan tortish uchun: docker-compose.prod.yml (deploy/DEPLOY-DOCKER.md).
 
+# Log rotatsiyasi hamma xizmatda: kichik diskda cheksiz o'sgan log eng ko'p uchraydigan "disk to'ldi" sababi.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
+    logging: *logging
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-masjid}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-masjid}
@@ -39,6 +47,7 @@ services:
     # (docker-compose.prod.yml) xuddi shu nom bilan tortiladi.
     image: ${IMAGE:-no0404ir0302/masjid-uz:latest}
     restart: unless-stopped
+    logging: *logging
     command: ["web"]             # API + statik klient + /admin.html
     env_file:
       - path: .env
@@ -69,6 +78,7 @@ services:
     image: ${IMAGE:-no0404ir0302/masjid-uz:latest}
     profiles: ["bot"]
     restart: unless-stopped
+    logging: *logging
     command: ["bot"]
     env_file:
       - path: .env
@@ -89,6 +99,7 @@ services:
     image: ${IMAGE:-no0404ir0302/masjid-uz:latest}
     profiles: ["osm"]
     restart: unless-stopped
+    logging: *logging
     command: ["osm-sync"]
     env_file:
       - path: .env
@@ -110,6 +121,7 @@ services:
     image: caddy:2-alpine
     profiles: ["https"]
     restart: unless-stopped
+    logging: *logging
     environment:
       DOMAIN: ${DOMAIN:-localhost}
     ports:
@@ -131,6 +143,7 @@ services:
     image: cloudflare/cloudflared:latest
     profiles: ["cloudflare"]
     restart: unless-stopped
+    logging: *logging
     command: tunnel run
     environment:
       TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}

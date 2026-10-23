@@ -145,6 +145,13 @@ class Api(unittest.TestCase):
         self.assertEqual(s, 200); self.assertIn("total", lst)
         self.assertEqual(self.call("GET", "/api/admin/mosques?status=bogus", admin=True)[0], 400)
 
+    def test_head_requests(self):
+        for path in ("/", "/api/health", "/vendor/maplibre-gl.js"):
+            req = urllib.request.Request(self.base + path, method="HEAD", headers={"Accept-Encoding": "gzip"})
+            with urllib.request.urlopen(req) as r:
+                self.assertEqual(r.status, 200); self.assertEqual(r.read(), b"")
+                self.assertGreater(int(r.headers["Content-Length"]), 0)
+
     def test_static_and_traversal(self):
         with urllib.request.urlopen(self.base + "/") as r: self.assertIn(b"maplibre", r.read().lower())
         try: urllib.request.urlopen(self.base + "/..%2fserver/app.py"); self.fail()

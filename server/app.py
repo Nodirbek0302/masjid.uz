@@ -454,7 +454,8 @@ def make_handler(cfg, store):
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
-            self.wfile.write(data)
+            if self.command != "HEAD":
+                self.wfile.write(data)
 
         def security_headers(self):
             self.send_header("X-Content-Type-Options", "nosniff")
@@ -633,9 +634,11 @@ def make_handler(cfg, store):
             self.send_header("Content-Type", mimetypes.guess_type(str(f))[0] or "application/octet-stream")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(body)
+            if self.command != "HEAD":
+                self.wfile.write(body)
 
         def do_GET(self): self.handle_any("GET")
+        def do_HEAD(self): self.handle_any("GET")        # monitors/proxies/curl -I: same headers, no body
         def do_POST(self): self.handle_any("POST")
         def do_PATCH(self): self.handle_any("PATCH")
         def do_DELETE(self): self.handle_any("DELETE")  # always 405/404: nothing is deletable via API
