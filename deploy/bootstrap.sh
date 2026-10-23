@@ -57,4 +57,9 @@ echo "✓ web sog'lom"
 $DOCKER image prune -f >/dev/null
 $DOCKER compose ps
 domain="$(get DOMAIN)"
-echo; echo "Tayyor. $( [ -n "$domain" ] && echo "https://$domain/" || echo "http://127.0.0.1:8080/ (SSH tunnel: ssh -L 8080:127.0.0.1:8080 user@server)" )"
+case "$domain" in
+  http://*|https://*) url="$domain/" ;;
+  "")                 url="http://127.0.0.1:8080/ (SSH tunnel: ssh -L 8080:127.0.0.1:8080 user@server)" ;;
+  *)                  url="https://$domain/" ;;
+esac
+echo; echo "Tayyor. $url"
