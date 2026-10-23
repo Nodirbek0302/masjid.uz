@@ -29,8 +29,9 @@ class Api(unittest.TestCase):
     def tearDownClass(cls):
         cls.srv.shutdown()
 
-    def call(self, method, path, body=None, admin=False, client="aaaaaaaa-1"):
+    def call(self, method, path, body=None, admin=False, client="aaaaaaaa-1", headers=None):
         h = {"Content-Type": "application/json", "X-Client-Id": client}
+        h.update(headers or {})
         if admin: h["Authorization"] = "Bearer secret"
         req = urllib.request.Request(self.base + path, method=method, headers=h,
                                      data=json.dumps(body).encode() if body is not None else None)
@@ -46,7 +47,7 @@ class Api(unittest.TestCase):
         s, m = self.add(41.3111, 69.2797)
         self.assertEqual(s, 201)
         self.assertEqual((m["origin"], m["status"], m["version"], m["name"]), ("community", "unverified", 1, None))
-        self.assertTrue(m["creator_id"].startswith("client:"))
+        self.assertNotIn("creator_id", m)                       # personal ids never appear in public responses
         # duplicate detection
         s, d = self.add(41.31112, 69.27972, name="Dup")
         self.assertEqual(s, 409); self.assertEqual(d["duplicates"][0]["id"], m["id"])
@@ -130,6 +131,47 @@ class Api(unittest.TestCase):
         third = {"elements": [el(901, 38.1, "New A")] + [el(1000 + i, 38.5 + i / 100.0, "X%d" % i) for i in range(3)]}
         self.assertEqual(import_osm.run(third, app.Config())["missing_in_osm"] >= 2, True)                      # vanished: counted only
 
+    def db(self, sql, *args):
+        with psycopg.connect(TEST_URL, autocommit=True) as c:
+            return c.execute(sql, args).fetchall()
+
+    def test_actor_tracking_web_and_mobile(self):
+        # web client: actor row + non-personal snapshot in the audit log
+        s, m = self.add(36.1, 61.1, name="Actor test")
+        row = self.db("SELECT kind, platform, edits_count, ip_hash FROM actors WHERE actor_id='client:aaaaaaaa-1'")[0]
+        self.assertEqual((row[0], row[1]), ("web", "web")); self.assertGreaterEqual(row[2], 1); self.assertEqual(len(row[3]), 24)
+        # mobile app: device id + platform/app/model/os headers
+        mob = {"X-Device-Id": "dev-ABCDEF123456", "X-Client-Platform": "ios", "X-App-Version": "1.4.2",
+               "X-OS-Version": "iOS 19.1", "X-Device-Model": "iPhone16,2"}
+        s, m2 = self.call("PATCH", "/api/mosques/" + m["id"], {"expected_version": 1, "name": "Changed on phone"}, headers=mob)
+        self.assertEqual(s, 200)
+        a = self.db("SELECT kind, platform, app_version, os_version, device_model, device_id, edits_count "
+                    "FROM actors WHERE actor_id='device:dev-ABCDEF123456'")[0]
+        self.assertEqual(a, ("mobile", "ios", "1.4.2", "iOS 19.1", "iPhone16,2", "dev-ABCDEF123456", 1))
+        h = self.db("SELECT actor, client FROM mosque_history WHERE mosque_id=%s AND action='edit'", m["id"])[0]
+        self.assertEqual(h[0], "device:dev-ABCDEF123456")
+        self.assertEqual({k: h[1][k] for k in ("kind", "platform", "app_version", "device_model")},
+                         {"kind": "mobile", "platform": "ios", "app_version": "1.4.2", "device_model": "iPhone16,2"})
+        self.assertNotIn("ip_hash", h[1])
+        # reports keep the snapshot too and bump the counter
+        self.call("POST", "/api/mosques/%s/reports" % m["id"], {"kind": "other", "reason": "test"}, headers=dict(mob, **{"X-Device-Id": "dev-REPORTER9999"}))
+        self.assertEqual(self.db("SELECT reports_count FROM actors WHERE actor_id='device:dev-REPORTER9999'")[0][0], 1)
+        # PUBLIC history exposes roles only: no ids, no device info
+        items = self.call("GET", "/api/mosques/%s/history" % m["id"])[1]["items"]
+        self.assertEqual([i["actor"] for i in items], ["user", "user"])
+        for i in items:
+            self.assertNotIn("client", i)
+        raw = json.dumps(self.call("GET", "/api/mosques?bbox=61,36,61.2,36.2")[1])
+        for needle in ("dev-ABCDEF123456", "aaaaaaaa-1", "creator"):
+            self.assertNotIn(needle, raw)
+        # admin sees the details
+        s, ov = self.call("GET", "/api/admin/overview", admin=True)
+        mine = [r for r in ov["recent"] if r["mosque_id"] == m["id"] and r["action"] == "edit"][0]
+        self.assertEqual((mine["actor_kind"], mine["platform"], mine["app_version"]), ("mobile", "ios", "1.4.2"))
+        s, ac = self.call("GET", "/api/admin/actors?q=ABCDEF123456", admin=True)
+        self.assertEqual([x["actor_id"] for x in ac["items"]], ["device:dev-ABCDEF123456"])
+        self.assertEqual(self.call("GET", "/api/admin/actors")[0], 401)
+
     def test_search_and_admin_views(self):
         self.add(37.5, 64.5, name="Alisher Navoiy jome masjidi")
         self.add(37.6, 64.6, name="100%_special")
@@ -170,6 +212,40 @@ def make_server(**extra):
             else: os.environ[k] = v
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv, "http://127.0.0.1:%d" % srv.server_address[1]
+
+class TelegramIdentity(unittest.TestCase):
+    TOKEN = "123456:TEST-TOKEN"
+
+    def init_data(self, user, tamper=False):
+        import hashlib
+        import hmac
+        import time
+        from urllib.parse import urlencode
+        pairs = {"auth_date": str(int(time.time())), "query_id": "AAH", "user": json.dumps(user)}
+        check = "\n".join("%s=%s" % (k, pairs[k]) for k in sorted(pairs))
+        secret = hmac.new(b"WebAppData", self.TOKEN.encode(), hashlib.sha256).digest()
+        pairs["hash"] = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
+        if tamper:
+            pairs["user"] = json.dumps(dict(user, id=999))        # signature no longer matches
+        return urlencode(pairs)
+
+    def test_verified_telegram_user_is_recorded_and_forgery_is_not(self):
+        srv, base = make_server(TELEGRAM_BOT_TOKEN=self.TOKEN)
+        def post(init, cid):
+            req = urllib.request.Request(base + "/api/mosques", method="POST", data=json.dumps({"lat": 35.0 + len(cid) / 100.0, "lon": 60.0}).encode(),
+                                         headers={"Content-Type": "application/json", "X-Client-Id": cid, "X-Telegram-Init-Data": init})
+            with urllib.request.urlopen(req) as r: return json.loads(r.read())
+        user = {"id": 777001, "username": "nodir_test", "first_name": "Nodir", "last_name": "T", "language_code": "uz"}
+        m = post(self.init_data(user), "cccccccc-1")
+        with psycopg.connect(TEST_URL, autocommit=True) as c:
+            row = c.execute("SELECT kind, telegram_id, tg_username, tg_first_name, tg_language FROM actors WHERE actor_id='tg:777001'").fetchall()
+            self.assertEqual(row, [("telegram", 777001, "nodir_test", "Nodir", "uz")])
+            self.assertEqual(c.execute("SELECT creator_id FROM mosques WHERE id=%s", (m["id"],)).fetchone()[0], "tg:777001")
+            # forged initData: ignored, falls back to the browser id, and NO Telegram profile is stored
+            m2 = post(self.init_data(user, tamper=True), "dddddddd-12")
+            self.assertEqual(c.execute("SELECT creator_id FROM mosques WHERE id=%s", (m2["id"],)).fetchone()[0], "client:dddddddd-12")
+            self.assertEqual(c.execute("SELECT count(*) FROM actors WHERE telegram_id=999").fetchone()[0], 0)
+        srv.shutdown()
 
 class AdminLocalOnly(unittest.TestCase):
     def test_tunnelled_requests_cannot_reach_admin(self):

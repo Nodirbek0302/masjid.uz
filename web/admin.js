@@ -87,12 +87,22 @@
       });
     }).catch(fail);
   }
+  function who(h) {                                   // moderator-only detail: Telegram name / device / app version
+    if (h.actor === "admin") return "moderator";
+    if (!h.actor) return "tizim";
+    var parts = [h.actor_kind === "telegram" ? "Telegram" + (h.tg_username ? " @" + h.tg_username : h.tg_first_name ? " " + h.tg_first_name : "")
+      : h.actor_kind === "mobile" ? "mobil ilova" : "veb"];
+    if (h.platform && h.platform !== "web") parts.push(h.platform);
+    if (h.device_model) parts.push(h.device_model);
+    if (h.app_version) parts.push("v" + h.app_version);
+    return parts.join(" · ");
+  }
   function viewActivity(v, ov) {
     v.textContent = "";
     ov.recent.forEach(function (h) {
       v.appendChild(el("div", { class: "hist" }, [
         el("b", { text: (h.name || "Nomi yo‘q") + " · " + h.action + " v" + h.version }),
-        el("div", { class: "muted", text: when(h.at) + " · " + (h.actor || "anonim") }),
+        el("div", { class: "muted", text: when(h.at) + " · " + who(h) }),
         h.note ? el("div", { text: h.note }) : null
       ]));
     });

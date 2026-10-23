@@ -21,7 +21,7 @@
   }
 
   function api(method, path, body) {
-    var h = { "Content-Type": "application/json", "X-Client-Id": clientId, "ngrok-skip-browser-warning": "1" };   // header lets API calls pass ngrok's free-plan warning page
+    var h = { "Content-Type": "application/json", "X-Client-Id": clientId, "X-Client-Platform": "web", "ngrok-skip-browser-warning": "1" };   // header lets API calls pass ngrok's free-plan warning page
     if (tg && tg.initData) h["X-Telegram-Init-Data"] = tg.initData;
     return fetch(path, { method: method, headers: h, body: body ? JSON.stringify(body) : undefined })
       .then(function (r) { return r.json().then(function (j) { if (!r.ok) { j.status = r.status; throw j; } return j; }); });
@@ -420,7 +420,7 @@
         });
         box.appendChild(el("div", { class: "hist" }, [
           el("b", { text: h.action + " · v" + h.version }),
-          el("div", { class: "muted", text: fmtTime(h.at) + (h.actor ? " · " + (h.actor === "admin" ? "moderator" : "foydalanuvchi") : "") }),
+          el("div", { class: "muted", text: fmtTime(h.at) + (h.actor ? " · " + ({ moderator: "moderator", osm: "OpenStreetMap", user: "foydalanuvchi" }[h.actor] || h.actor) : "") }),
           el("div", { text: lines.join("; ") }), h.note ? el("div", { class: "muted", text: h.note }) : null
         ]));
       });

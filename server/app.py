@@ -61,6 +61,7 @@ class Config:
         self.prayer = {"fajr_angle": float(env("PRAYER_FAJR_ANGLE", "15")), "isha_angle": float(env("PRAYER_ISHA_ANGLE", "15")),
                        "asr_factor": int(env("PRAYER_ASR_FACTOR", "2")),
                        "dhuhr_offset_min": int(env("PRAYER_DHUHR_OFFSET_MIN", "5"))}     # Asr: 1 = Shafi'i, 2 = Hanafi
+        self.actor_salt = env("ACTOR_SALT", "") or env("ADMIN_TOKEN", "") or "masjid-uz"
         self.admin_local_only = env("ADMIN_LOCAL_ONLY", "0") == "1"
         self.trust_proxy = env("TRUST_PROXY", "0") == "1"
         self.rate_limit = int(env("WRITE_RATE_PER_MIN", "30"))
@@ -156,17 +157,41 @@ class Store:
                                    kwargs={"row_factory": dict_row})
 
     @staticmethod
-    def row(r):
+    def row(r, private=False):
         d = dict(r)
         d["id"] = str(d["id"])
+        if not private:
+            d.pop("creator_id", None)        # never expose Telegram/device ids in public responses
         for k in ("created_at", "updated_at"):
             d[k] = iso(d[k])
         return d
 
     @staticmethod
-    def _history(cur, m_id, version, action, actor, changes, note=None):
-        cur.execute("INSERT INTO mosque_history(mosque_id,version,action,actor,changes,note) VALUES (%s,%s,%s,%s,%s,%s)",
-                    (m_id, version, action, actor, Jsonb(changes), note))
+    def _history(cur, m_id, version, action, actor, changes, note=None, client=None):
+        cur.execute("INSERT INTO mosque_history(mosque_id,version,action,actor,changes,note,client) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+                    (m_id, version, action, actor, Jsonb(changes), note, Jsonb(snapshot(client)) if client else None))
+
+    @staticmethod
+    def touch_actor(cur, actor, info, edits=0, reports=0):
+        """Create/refresh the actor record. Newer non-empty values replace older ones."""
+        if not actor or not info:
+            return
+        tg = info.get("telegram") or {}
+        cur.execute(
+            "INSERT INTO actors(actor_id,kind,telegram_id,tg_username,tg_first_name,tg_last_name,tg_language,device_id,platform,"
+            "os_version,app_version,device_model,user_agent,ip_hash,edits_count,reports_count) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+            "ON CONFLICT (actor_id) DO UPDATE SET last_seen=now(), "
+            "telegram_id=COALESCE(EXCLUDED.telegram_id, actors.telegram_id), tg_username=COALESCE(EXCLUDED.tg_username, actors.tg_username), "
+            "tg_first_name=COALESCE(EXCLUDED.tg_first_name, actors.tg_first_name), tg_last_name=COALESCE(EXCLUDED.tg_last_name, actors.tg_last_name), "
+            "tg_language=COALESCE(EXCLUDED.tg_language, actors.tg_language), device_id=COALESCE(EXCLUDED.device_id, actors.device_id), "
+            "platform=COALESCE(EXCLUDED.platform, actors.platform), os_version=COALESCE(EXCLUDED.os_version, actors.os_version), "
+            "app_version=COALESCE(EXCLUDED.app_version, actors.app_version), device_model=COALESCE(EXCLUDED.device_model, actors.device_model), "
+            "user_agent=COALESCE(EXCLUDED.user_agent, actors.user_agent), ip_hash=COALESCE(EXCLUDED.ip_hash, actors.ip_hash), "
+            "edits_count=actors.edits_count + EXCLUDED.edits_count, reports_count=actors.reports_count + EXCLUDED.reports_count",
+            (actor, info["kind"], tg.get("id"), tg.get("username"), tg.get("first_name"), tg.get("last_name"), tg.get("language_code"),
+             info.get("device_id"), info.get("platform"), info.get("os_version"), info.get("app_version"), info.get("device_model"),
+             info.get("user_agent"), info.get("ip_hash"), edits, reports))
 
     def _fetch(self, cur, m_id, lock=False):
         try:
@@ -210,7 +235,7 @@ class Store:
         with self.pool.connection() as c:
             return self._nearby(c.cursor(), lat, lon, radius)
 
-    def create(self, body, actor):
+    def create(self, body, actor, client=None):
         lat, lon = clean_coord(body.get("lat"), body.get("lon"))
         name = clean_text(body.get("name"), "name", 200)
         address = clean_text(body.get("address"), "address", 300)
@@ -227,10 +252,11 @@ class Store:
             m = self.row(cur.fetchone())
             self._history(cur, m["id"], 1, "create", actor, {
                 "lat": [None, lat], "lon": [None, lon], "name": [None, name],
-                "address": [None, address], "prayer_times": [None, times]})
+                "address": [None, address], "prayer_times": [None, times]}, client=client)
+            self.touch_actor(cur, actor, client, edits=1)
             return m
 
-    def edit(self, m_id, body, actor):
+    def edit(self, m_id, body, actor, client=None):
         if not isinstance(body.get("expected_version"), int):
             raise ApiError(400, "version_required", "expected_version (integer) is required")
         with self.pool.connection() as c:
@@ -266,7 +292,8 @@ class Store:
             cur.execute("UPDATE mosques SET " + sets + ", version=%s, updated_at=now() WHERE id=%s RETURNING *",
                         vals + [version, m_id])
             out = self.row(cur.fetchone())
-            self._history(cur, m_id, version, "edit", actor, changes, clean_text(body.get("note"), "note", 300))
+            self._history(cur, m_id, version, "edit", actor, changes, clean_text(body.get("note"), "note", 300), client=client)
+            self.touch_actor(cur, actor, client, edits=1)
             return out
 
     def export_osm(self):
@@ -296,7 +323,7 @@ class Store:
             rows = c.execute("SELECT * FROM mosques WHERE status=%s ORDER BY updated_at DESC LIMIT %s OFFSET %s",
                              (status, min(limit, 200), max(offset, 0))).fetchall()
             total = c.execute("SELECT COUNT(*) AS n FROM mosques WHERE status=%s", (status,)).fetchone()["n"]
-        return {"total": total, "items": [self.row(r) for r in rows]}
+        return {"total": total, "items": [self.row(r, private=True) for r in rows]}
 
     def overview(self):
         with self.pool.connection() as c:
@@ -304,19 +331,37 @@ class Store:
                 "SELECT origin, status, COUNT(*) AS n FROM mosques GROUP BY 1,2")}
             open_reports = c.execute("SELECT COUNT(*) AS n FROM reports WHERE resolution IS NULL").fetchone()["n"]
             recent = [dict(r, mosque_id=str(r["mosque_id"]), at=iso(r["at"])) for r in c.execute(
-                "SELECT h.seq,h.mosque_id,h.version,h.action,h.actor,h.at,h.note,m.name FROM mosque_history h "
-                "JOIN mosques m ON m.id=h.mosque_id WHERE h.actor IS DISTINCT FROM 'import:osm' "
-                "ORDER BY h.seq DESC LIMIT 50")]
+                "SELECT h.seq,h.mosque_id,h.version,h.action,h.actor,h.at,h.note,h.client,m.name,"
+                "a.kind AS actor_kind,a.tg_username,a.tg_first_name,a.platform,a.app_version,a.device_model "
+                "FROM mosque_history h JOIN mosques m ON m.id=h.mosque_id LEFT JOIN actors a ON a.actor_id=h.actor "
+                "WHERE h.actor IS DISTINCT FROM 'import:osm' ORDER BY h.seq DESC LIMIT 50")]
         return {"counts": counts, "open_reports": open_reports, "recent": recent}
 
+    def actors(self, q=None, limit=50):
+        sql = "SELECT * FROM actors"
+        args = []
+        if q:
+            sql += " WHERE actor_id ILIKE %s OR tg_username ILIKE %s OR tg_first_name ILIKE %s OR device_model ILIKE %s"
+            args = ["%" + q.replace("%", "").replace("_", "") + "%"] * 4
+        with self.pool.connection() as c:
+            rows = c.execute(sql + " ORDER BY last_seen DESC LIMIT %s", args + [min(limit, 200)]).fetchall()
+        return [dict(r, first_seen=iso(r["first_seen"]), last_seen=iso(r["last_seen"])) for r in rows]
+
     def history(self, m_id):
+        """Public audit trail: no personal identifiers. `actor` is only a role: user | moderator | osm | system."""
         with self.pool.connection() as c:
             cur = c.cursor()
             self._fetch(cur, m_id)
             cur.execute("SELECT * FROM mosque_history WHERE mosque_id=%s ORDER BY seq DESC", (m_id,))
-            return [dict(r, mosque_id=str(r["mosque_id"]), at=iso(r["at"])) for r in cur.fetchall()]
+            out = []
+            for r in cur.fetchall():
+                a = r["actor"]
+                role = None if a is None else "moderator" if a == "admin" else "osm" if a == "import:osm" else "user"
+                out.append({"seq": r["seq"], "mosque_id": str(r["mosque_id"]), "version": r["version"], "action": r["action"],
+                            "actor": role, "at": iso(r["at"]), "changes": r["changes"], "note": r["note"]})
+            return out
 
-    def report(self, m_id, body, actor):
+    def report(self, m_id, body, actor, client=None):
         kind = body.get("kind", "incorrect")
         if kind not in REPORT_KINDS:
             raise ApiError(400, "invalid_kind", "kind must be one of " + ", ".join(REPORT_KINDS))
@@ -328,10 +373,11 @@ class Store:
             m = self._fetch(cur, m_id, lock=True)
             try:
                 with c.transaction():
-                    cur.execute("INSERT INTO reports(mosque_id,kind,reason,reporter_id) VALUES (%s,%s,%s,%s)",
-                                (m_id, kind, reason, actor))
+                    cur.execute("INSERT INTO reports(mosque_id,kind,reason,reporter_id,client) VALUES (%s,%s,%s,%s,%s)",
+                                (m_id, kind, reason, actor, Jsonb(snapshot(client)) if client else None))
             except psycopg.errors.UniqueViolation:
                 raise ApiError(409, "already_reported", "you already reported this")
+            self.touch_actor(cur, actor, client, reports=1)
             cur.execute("SELECT COUNT(DISTINCT COALESCE(reporter_id, id::text)) AS n FROM reports "
                         "WHERE mosque_id=%s AND resolution IS NULL", (m_id,))
             n = cur.fetchone()["n"]
@@ -390,8 +436,13 @@ class Store:
 
 
 # ---------------------------------------------------------------- identity
+def snapshot(info):
+    """Non-personal client snapshot kept with each audit/report row (no Telegram profile, no IP)."""
+    return {k: info.get(k) for k in ("kind", "platform", "os_version", "app_version", "device_model", "user_agent") if info.get(k)}
+
+
 def verify_telegram(init_data, bot_token):
-    """Validate Telegram WebApp initData (HMAC per Telegram docs). Returns 'tg:<id>' or None."""
+    """Validate Telegram WebApp initData (HMAC per Telegram docs). Returns the signed user dict or None."""
     try:
         pairs = dict(parse_qsl(init_data, keep_blank_values=True))
         got = pairs.pop("hash", "")
@@ -402,7 +453,8 @@ def verify_telegram(init_data, bot_token):
             return None
         if time.time() - int(pairs.get("auth_date", "0")) > 86400:
             return None
-        return "tg:%s" % json.loads(pairs["user"])["id"]
+        user = json.loads(pairs["user"])
+        return user if isinstance(user.get("id"), int) else None
     except Exception:
         return None
 
@@ -481,14 +533,31 @@ def make_handler(cfg, store):
                 raise ApiError(400, "bad_json", "JSON object expected")
             return data
 
-        def actor(self):
-            tg = self.headers.get("X-Telegram-Init-Data")
-            if tg and cfg.bot_token:
-                uid = verify_telegram(tg, cfg.bot_token)
-                if uid:
-                    return uid
-            cid = self.headers.get("X-Client-Id", "")
-            return ("client:" + cid) if re.fullmatch(r"[0-9a-fA-F-]{8,64}", cid) else None
+        def identity(self):
+            """-> (actor_id | None, info). Order of trust: signature-verified Telegram user, mobile app device id,
+            browser uuid. Telegram profile fields are recorded ONLY when the initData signature checks out."""
+            h = self.headers
+
+            def clip(name, n):
+                return re.sub(r"[\x00-\x1f\x7f]", "", h.get(name, "") or "")[:n] or None
+            info = {"platform": clip("X-Client-Platform", 20), "os_version": clip("X-OS-Version", 40),
+                    "app_version": clip("X-App-Version", 40), "device_model": clip("X-Device-Model", 80),
+                    "user_agent": clip("User-Agent", 200),
+                    "ip_hash": hmac.new(cfg.actor_salt.encode(), self.client_ip().encode(), hashlib.sha256).hexdigest()[:24]}
+            tg = h.get("X-Telegram-Init-Data")
+            user = verify_telegram(tg, cfg.bot_token) if tg and cfg.bot_token else None
+            dev = h.get("X-Device-Id", "")
+            cid = h.get("X-Client-Id", "")
+            if user:
+                info.update(kind="telegram", telegram={k: user.get(k) for k in ("id", "username", "first_name", "last_name", "language_code")})
+                return "tg:%d" % user["id"], info
+            if re.fullmatch(r"[0-9a-zA-Z_-]{8,64}", dev):
+                info.update(kind="mobile", device_id=dev, platform=info["platform"] or "mobile")
+                return "device:" + dev, info
+            if re.fullmatch(r"[0-9a-fA-F-]{8,64}", cid):
+                info.update(kind="web", platform=info["platform"] or "web")
+                return "client:" + cid, info
+            return None, info
 
         def client_ip(self):
             """Real client address. X-Forwarded-For is honoured only when TRUST_PROXY=1 (behind our Caddy);
@@ -567,19 +636,19 @@ def make_handler(cfg, store):
                 r = min(float(q.get("radius", cfg.dup_radius_m)), 500)
                 return self.send_json(200, {"items": store.nearby(lat, lon, r)})
             if path == "/api/mosques" and method == "POST":
-                return self.send_json(201, store.create(self.body_json(), self.actor()))
+                return self.send_json(201, store.create(self.body_json(), *self.identity()))
             m = re.fullmatch(r"/api/mosques/" + ID, path)
             if m:
                 if method == "GET":
                     return self.send_json(200, store.get(m.group(1)))
                 if method == "PATCH":
-                    return self.send_json(200, store.edit(m.group(1), self.body_json(), self.actor()))
+                    return self.send_json(200, store.edit(m.group(1), self.body_json(), *self.identity()))
             m = re.fullmatch(r"/api/mosques/" + ID + "/history", path)
             if m and method == "GET":
                 return self.send_json(200, {"items": store.history(m.group(1))})
             m = re.fullmatch(r"/api/mosques/" + ID + "/reports", path)
             if m and method == "POST":
-                return self.send_json(201, store.report(m.group(1), self.body_json(), self.actor()))
+                return self.send_json(201, store.report(m.group(1), self.body_json(), *self.identity()))
             if path.startswith("/api/admin/"):
                 ip = self.client_ip()
                 if not admin_limiter.allow(ip, count=False):
@@ -587,6 +656,8 @@ def make_handler(cfg, store):
                 if not self.is_admin():
                     admin_limiter.allow(ip)             # count failures only
                     raise ApiError(401, "unauthorized", "admin token required")
+                if path == "/api/admin/actors" and method == "GET":
+                    return self.send_json(200, {"items": store.actors(q.get("q"), int(q.get("limit", 50)))})
                 if path == "/api/admin/overview" and method == "GET":
                     return self.send_json(200, store.overview())
                 if path == "/api/admin/mosques" and method == "GET":
