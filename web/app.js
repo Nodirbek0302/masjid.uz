@@ -374,13 +374,15 @@
     return g;
   }
 
-  function openMosque(id) {
+  function openMosque(id, opts) {
+    opts = opts || {};
     showPanel(skeleton());
     api("GET", "/api/mosques/" + id).then(function (m) {
       var lb = label(m);
       var node = el("div", {}, [
         el("h2", m.name ? { text: m.name } : { class: "missing", text: T("m.name_unknown") }),
         el("span", { class: "badge " + lb[1], text: lb[0] }),
+        opts.dist != null ? el("div", { class: "dist", text: "📍 " + T("m.distance", { d: fmtDist(opts.dist) }) }) : null,
         el("p", m.address ? { text: m.address } : { class: "missing", text: T("m.addr_unknown") }),
         el("div", { class: "muted stack" }, [
           el("div", { text: m.lat.toFixed(6) + ", " + m.lon.toFixed(6) + " · " + T("m.version", { v: m.version }) }),
@@ -397,7 +399,10 @@
         ])
       ]);
       showPanel(node);
-      revealPoint(m.lon, m.lat);
+      if (opts.fit) {                                   // show both "me" and the mosque, clear of the panel
+        var pad = mapPadding();
+        map.fitBounds(opts.fit, { maxZoom: 17, duration: 600, padding: { top: 110, right: 50, bottom: pad.bottom + 50, left: pad.left + 50 } });
+      } else revealPoint(m.lon, m.lat);
     }).catch(function (e) { hidePanel(); toast(errText(e)); });
     revealPoint(map.getCenter().lng, map.getCenter().lat);
   }
@@ -509,6 +514,34 @@
     ]));
   }
 
+  // ---- nearest mosque to the user (device location; falls back to the map centre) ----------------
+  var meMarker = null;
+  function fmtDist(m) { return m < 1000 ? T("unit.m", { n: Math.round(m) }) : T("unit.km", { n: (m / 1000).toFixed(m < 10000 ? 1 : 0) }); }
+  function findNearest() {
+    var b = $("nearest");
+    b.disabled = true; toast(T("nearest.locating"));
+    function done() { b.disabled = false; }
+    function go(lat, lon, fromMap) {
+      api("GET", "/api/mosques/nearest?lat=" + lat + "&lon=" + lon + "&limit=1").then(function (r) {
+        done();
+        if (!r.items.length) { toast(T("nearest.none")); return; }
+        var m = r.items[0];
+        if (meMarker) meMarker.remove();
+        meMarker = new maplibregl.Marker({ element: el("div", { class: "me-dot" }) }).setLngLat([lon, lat]).addTo(map);
+        toast(fromMap ? T("nearest.from_map") : T("nearest.btn") + ": " + (m.name || T("m.name_unknown")));
+        openMosque(m.id, { dist: m.distance_m, fit: [[Math.min(lon, m.lon), Math.min(lat, m.lat)], [Math.max(lon, m.lon), Math.max(lat, m.lat)]] });
+      }).catch(function (e) { done(); toast(errText(e)); });
+    }
+    function fromMap() { var c = map.getCenter(); go(+c.lat.toFixed(6), +c.lng.toFixed(6), true); }
+    if (!navigator.geolocation) { fromMap(); return; }
+    navigator.geolocation.getCurrentPosition(function (p) {
+      var lat = +p.coords.latitude.toFixed(6), lon = +p.coords.longitude.toFixed(6);
+      if (inRegion(lon, lat)) try { localStorage.setItem("lastpos", JSON.stringify({ lat: lat, lon: lon })); } catch (e) {}
+      go(lat, lon, false);
+    }, fromMap, { timeout: 8000, maximumAge: 60000, enableHighAccuracy: true });
+  }
+  $("nearest").onclick = findNearest;
+
   // ---- search by name (our own database only; the server matches any script/apostrophe form)
   var searchTimer = null, searchSeq = 0;
   function hideResults() { $("results").hidden = true; }
@@ -549,11 +582,11 @@
   }
   function startAdd() {
     mode = "pick"; picked = null; pickDone = null; clearPick(); closePopup();
-    $("add-btn").hidden = true; $("search").hidden = true; $("add-bar").hidden = false; $("add-hint").textContent = T("add.pick"); hidePanel();
+    $("add-btn").hidden = true; $("search").hidden = true; $("nearest").hidden = true; $("add-bar").hidden = false; $("add-hint").textContent = T("add.pick"); hidePanel();
   }
   function endAdd() {
     mode = "browse"; pickDone = null; picked = null; clearPick();
-    $("add-btn").hidden = false; $("search").hidden = false; $("add-bar").hidden = true; hidePanel();
+    $("add-btn").hidden = false; $("search").hidden = false; $("nearest").hidden = false; $("add-bar").hidden = true; hidePanel();
   }
   $("add-btn").onclick = startAdd;
   $("add-cancel").onclick = endAdd;

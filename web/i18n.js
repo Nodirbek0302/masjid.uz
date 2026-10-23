@@ -106,6 +106,7 @@
   "link.route": "Directions",
   "link.yandex": "Open in Yandex Maps",
   "m.addr_unknown": "Address unknown",
+  "m.distance": "{d} away",
   "m.name_unknown": "Name unknown",
   "m.osm_credit": "Location and name: © OpenStreetMap contributors (ODbL). Prayer times are added by the community.",
   "m.times": "Congregation prayer times",
@@ -121,6 +122,10 @@
   "map.locate": "Find my location",
   "map.zoom_in": "Zoom in",
   "map.zoom_out": "Zoom out",
+  "nearest.btn": "Nearest mosque",
+  "nearest.from_map": "Location is unavailable or not allowed: searched from the map centre.",
+  "nearest.locating": "Finding your location…",
+  "nearest.none": "No mosque found nearby",
   "pn.asr": "Asr",
   "pn.dhuhr": "Dhuhr",
   "pn.fajr": "Fajr",
@@ -179,7 +184,9 @@
   "sv.verified": "Verified",
   "toast.added": "Added",
   "toast.reported": "Your report was received",
-  "toast.saved": "Saved"
+  "toast.saved": "Saved",
+  "unit.km": "{n} km",
+  "unit.m": "{n} m"
  },
  "ru": {
   "act.archive": "Отправлено в архив",
@@ -285,6 +292,7 @@
   "link.route": "Маршрут",
   "link.yandex": "Открыть в Яндекс Картах",
   "m.addr_unknown": "Адрес неизвестен",
+  "m.distance": "в {d} от вас",
   "m.name_unknown": "Название неизвестно",
   "m.osm_credit": "Расположение и название: © OpenStreetMap contributors (ODbL). Время намазов добавляет сообщество.",
   "m.times": "Время джамаат-намазов",
@@ -300,6 +308,10 @@
   "map.locate": "Найти меня",
   "map.zoom_in": "Приблизить",
   "map.zoom_out": "Отдалить",
+  "nearest.btn": "Ближайшая мечеть",
+  "nearest.from_map": "Нет доступа к геолокации или она не определена: поиск от центра карты.",
+  "nearest.locating": "Определяем местоположение…",
+  "nearest.none": "Поблизости мечетей не найдено",
   "pn.asr": "Аср",
   "pn.dhuhr": "Зухр",
   "pn.fajr": "Фаджр",
@@ -358,7 +370,9 @@
   "sv.verified": "Подтверждено",
   "toast.added": "Добавлено",
   "toast.reported": "Ваше сообщение принято",
-  "toast.saved": "Сохранено"
+  "toast.saved": "Сохранено",
+  "unit.km": "{n} км",
+  "unit.m": "{n} м"
  },
  "uz": {
   "act.archive": "Arxivlandi",
@@ -464,6 +478,7 @@
   "link.route": "Yoʻnalish",
   "link.yandex": "Yandex Maps orqali ochish",
   "m.addr_unknown": "Manzil maʼlum emas",
+  "m.distance": "{d} uzoqlikda",
   "m.name_unknown": "Nomi maʼlum emas",
   "m.osm_credit": "Joylashuv va nom: © OpenStreetMap contributors (ODbL). Namoz vaqtlari jamoa tomonidan kiritiladi.",
   "m.times": "Jamoat namozi vaqtlari",
@@ -479,6 +494,10 @@
   "map.locate": "Mening joyimni topish",
   "map.zoom_in": "Yaqinlashtirish",
   "map.zoom_out": "Uzoqlashtirish",
+  "nearest.btn": "Eng yaqin masjid",
+  "nearest.from_map": "Joylashuvga ruxsat yoʻq yoki aniqlanmadi: xarita markazidan qidirildi.",
+  "nearest.locating": "Joylashuv aniqlanmoqda…",
+  "nearest.none": "Yaqin atrofda masjid topilmadi",
   "pn.asr": "Asr",
   "pn.dhuhr": "Peshin",
   "pn.fajr": "Bomdod",
@@ -537,7 +556,9 @@
   "sv.verified": "Tasdiqlangan",
   "toast.added": "Qoʻshildi",
   "toast.reported": "Xabaringiz qabul qilindi",
-  "toast.saved": "Saqlandi"
+  "toast.saved": "Saqlandi",
+  "unit.km": "{n} km",
+  "unit.m": "{n} m"
  },
  "uz-cyrl": {
   "act.archive": "Архивланди",
@@ -643,6 +664,7 @@
   "link.route": "Йўналиш",
   "link.yandex": "Yandex Maps орқали очиш",
   "m.addr_unknown": "Манзил маълум эмас",
+  "m.distance": "{d} узоқликда",
   "m.name_unknown": "Номи маълум эмас",
   "m.osm_credit": "Жойлашув ва ном: © OpenStreetMap contributors (ODbL). Намоз вақтлари жамоа томонидан киритилади.",
   "m.times": "Жамоат намози вақтлари",
@@ -658,6 +680,10 @@
   "map.locate": "Менинг жойимни топиш",
   "map.zoom_in": "Яқинлаштириш",
   "map.zoom_out": "Узоқлаштириш",
+  "nearest.btn": "Энг яқин масжид",
+  "nearest.from_map": "Жойлашувга рухсат йўқ ёки аниқланмади: харита марказидан қидирилди.",
+  "nearest.locating": "Жойлашув аниқланмоқда…",
+  "nearest.none": "Яқин атрофда масжид топилмади",
   "pn.asr": "Аср",
   "pn.dhuhr": "Пешин",
   "pn.fajr": "Бомдод",
@@ -716,7 +742,9 @@
   "sv.verified": "Тасдиқланган",
   "toast.added": "Қўшилди",
   "toast.reported": "Хабарингиз қабул қилинди",
-  "toast.saved": "Сақланди"
+  "toast.saved": "Сақланди",
+  "unit.km": "{n} км",
+  "unit.m": "{n} м"
  }
 };
   var LANGS = [["uz", "UZ", "Oʻzbekcha"], ["uz-cyrl", "ЎЗ", "Ўзбекча"], ["ru", "РУ", "Русский"], ["en", "EN", "English"]];

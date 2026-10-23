@@ -30,3 +30,9 @@ Third-party components keep their own licences (MapLibre GL JS: BSD-3-Clause; ma
 Qadamlar: [docs/DEPLOY-DOCKER.md](docs/DEPLOY-DOCKER.md).
 
 Serverga o'rnatish bo'yicha to'liq qo'llanma: [docs/SERVER-SETUP.md](docs/SERVER-SETUP.md) (`deploy/push.sh`, `deploy/verify.sh`).
+
+## Nearest mosque
+`GET /api/mosques/nearest?lat=..&lon=..&limit=5` returns the nearest non-archived mosques with `distance_m` (search circle grows
+500 m → 2 km → 8 km → 30 km → 100 km → whole country, so the result is exact, not approximate). The web button "Eng yaqin masjid"
+uses the device location (HTTPS needed by browsers) and falls back to the map centre. Checked against a brute-force search
+over the whole database on 49 points: identical top-3 and distances.

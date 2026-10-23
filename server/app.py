@@ -254,6 +254,19 @@ class Store:
                 out.append(item)
         return sorted(out, key=lambda x: x["distance_m"])
 
+    def nearest(self, lat, lon, limit=5, max_m=3000000.0):
+        """The `limit` nearest non-archived mosques. The search circle grows until it holds enough results; every mosque
+        inside a circle is considered, so what is returned really are the nearest ones (not an approximation)."""
+        limit = max(1, min(int(limit), 20))
+        found = []
+        with self.pool.connection() as c:
+            cur = c.cursor()
+            for r in (500.0, 2000.0, 8000.0, 30000.0, 100000.0, max_m):
+                found = self._nearby(cur, lat, lon, min(r, max_m))
+                if len(found) >= limit:
+                    break
+        return found[:limit]
+
     def nearby(self, lat, lon, radius):
         with self.pool.connection() as c:
             return self._nearby(c.cursor(), lat, lon, radius)
@@ -668,6 +681,13 @@ def make_handler(cfg, store):
                 return self.send_json(200, store.export_osm())
             if path == "/api/search" and method == "GET":
                 return self.send_json(200, {"items": store.search(q.get("q"))})
+            if path == "/api/mosques/nearest" and method == "GET":
+                lat, lon = clean_coord(q.get("lat"), q.get("lon"))
+                try:
+                    limit = int(q.get("limit", 5))
+                except ValueError:
+                    raise ApiError(400, "invalid_limit", "limit must be a number")
+                return self.send_json(200, {"items": store.nearest(lat, lon, limit)})
             if path == "/api/mosques/nearby" and method == "GET":
                 lat, lon = clean_coord(q.get("lat"), q.get("lon"))
                 r = min(float(q.get("radius", cfg.dup_radius_m)), 500)

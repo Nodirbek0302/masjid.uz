@@ -221,6 +221,29 @@ class Api(unittest.TestCase):
         self.assertEqual(r2["updated"], 0)
         self.assertEqual(self.call("GET", "/api/mosques/" + ids["Near number"])[1]["address"], "Muqimiy ko'chasi 166, Toshkent")
 
+    def test_nearest_mosques_are_really_the_nearest(self):
+        import math
+        pts = [(34.0000, 72.0000), (34.0030, 72.0000), (34.0100, 72.0100), (34.1000, 72.1000), (34.5000, 72.5000)]
+        for i, (la, lo) in enumerate(pts):
+            self.add(la, lo, name="N%d" % i, force=True)
+        me = (34.0005, 72.0001)
+        s, r = self.call("GET", "/api/mosques/nearest?lat=%s&lon=%s&limit=3" % me)
+        self.assertEqual(s, 200)
+        names = [m["name"] for m in r["items"]]
+        self.assertEqual(names, ["N0", "N1", "N2"])                                  # ordered by distance
+        d = [m["distance_m"] for m in r["items"]]
+        self.assertEqual(d, sorted(d))
+        def hav(a, b):
+            R = 6371000.0; p1, p2 = math.radians(a[0]), math.radians(b[0]); dl = math.radians(b[1] - a[1])
+            x = math.sin((p2 - p1) / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+            return 2 * R * math.asin(math.sqrt(x))
+        self.assertAlmostEqual(d[0], hav(me, pts[0]), delta=1.0)                   # distance in metres is right
+        self.assertNotIn("creator_id", r["items"][0])
+        far = self.call("GET", "/api/mosques/nearest?lat=34.4&lon=72.4&limit=1")[1]["items"]      # only the far ones qualify
+        self.assertEqual(far[0]["name"], "N4" if hav((34.4, 72.4), pts[4]) < hav((34.4, 72.4), pts[3]) else "N3")
+        self.assertEqual(self.call("GET", "/api/mosques/nearest?lat=95&lon=0")[0], 400)
+        self.assertEqual(self.call("GET", "/api/mosques/nearest?lat=34&lon=72&limit=x")[0], 400)
+
     def test_osm_address_building(self):
         import import_osm as io_
         a = io_.osm_address

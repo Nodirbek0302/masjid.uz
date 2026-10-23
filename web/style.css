@@ -127,3 +127,10 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--g500);bo
 #maperr{position:absolute;z-index:30;left:12px;right:12px;top:calc(var(--strip) + 64px + env(safe-area-inset-top));display:flex;gap:10px;align-items:center;justify-content:space-between;
   padding:10px 12px;border-radius:var(--r);background:#fff7ed;border:1px solid #fdba74;color:#7c2d12;box-shadow:var(--sh)}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important}}
+
+/* nearest-mosque button and "you are here" dot */
+.chip-btn{position:absolute;z-index:15;left:12px;top:calc(var(--strip) + 60px + env(safe-area-inset-top));display:inline-flex;align-items:center;gap:7px;height:36px;padding:0 14px 0 11px;
+  border-radius:99px;border:1px solid var(--g200);background:#fff;color:var(--g700);font-weight:600;font-size:14px;box-shadow:var(--sh-sm);transition:background .15s,transform .12s;animation:pop .3s var(--ease)}
+.chip-btn:hover{background:var(--g50)}.chip-btn:active{transform:scale(.96)}.chip-btn[disabled]{opacity:.6;pointer-events:none}
+.me-dot{width:18px;height:18px;border-radius:50%;background:#2563eb;border:3px solid #fff;box-shadow:0 0 0 6px rgba(37,99,235,.22),0 1px 5px rgba(0,0,0,.35)}
+.dist{display:inline-flex;align-items:center;gap:6px;margin:8px 0 2px;padding:5px 11px;border-radius:99px;background:var(--g50);border:1px solid var(--g200);color:var(--g800);font-weight:700;font-size:13px}
