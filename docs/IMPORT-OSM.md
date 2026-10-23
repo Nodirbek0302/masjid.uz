@@ -41,3 +41,19 @@ If `overpass-api.de` is busy, retry later or use another public Overpass mirror 
 Records within 25 m of an existing community record are skipped. Re-running adds only new OSM objects.
 Imported rows show "OpenStreetMap ma'lumoti · tasdiqlanmagan"; the OSM-derived subset is published at
 `/api/export/osm-derived.geojson` (ODbL share-alike requirement for public use).
+
+## Addresses (street + house number)
+`import_osm.py` takes the address from `addr:full`, or builds it from `addr:street`, `addr:housenumber`, place, city, district, region.
+For mosques that still have none, `server/enrich_address.py` fills the gap from Geofabrik's regular Uzbekistan extract
+(bulk data, so the public Overpass service is not hit): the nearest OSM object with street + house number within 25 m
+("Street 166"), else the nearest named road within 60 m ("Street"). These are neighbours' data, hence approximate; each change
+is logged in the history with that note. Mosques a person has edited are never touched, and the daily sync never erases
+an address because OSM lacks one.
+```bash
+.venv/bin/pip install osmium                    # tool-only dependency, not needed by the app or the Docker image
+.venv/bin/python server/enrich_address.py --download           # ~125 MB, once
+.venv/bin/python server/enrich_address.py --apply --dry-run    # preview; options: --addr-radius 25 --road-radius 60
+.venv/bin/python server/enrich_address.py --apply
+```
+Measured on 2026-10-23 (899 mosques without an address): 25 m / 60 m gave 16 with number, 257 street only; 40 m / 100 m gave 39 / 309;
+about 550 remain without an address because OSM has no address data nearby. They can be completed by users.

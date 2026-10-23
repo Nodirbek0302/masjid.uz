@@ -81,7 +81,9 @@ def run(data, cfg, store=None):
                 if cur.fetchone() or row["status"] == "archived":      # a human edited / moderated it: leave it alone
                     protected += 1
                     continue
-                changes = {k: [row[k], v] for k, v in (("lat", lat), ("lon", lon), ("name", name), ("address", addr)) if row[k] != v}
+                # an address (also one filled in by enrich_address.py) is never erased just because OSM has no address tags
+                changes = {k: [row[k], v] for k, v in (("lat", lat), ("lon", lon), ("name", name), ("address", addr))
+                           if row[k] != v and not (k == "address" and v is None)}
                 if not changes:
                     unchanged += 1
                     continue

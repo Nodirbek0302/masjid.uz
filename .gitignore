@@ -9,3 +9,4 @@ osm-mosques.json
 !.env.example
 .idea/
 docs/screens/
+osm-cache/

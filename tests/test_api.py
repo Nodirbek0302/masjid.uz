@@ -123,7 +123,8 @@ class Api(unittest.TestCase):
         self.assertEqual(sorted((m["origin"], m["source"]) for m in items["items"]), [("imported", "openstreetmap")] * 2)
         self.assertEqual(self.call("GET", "/api/mosques?bbox=65.9,38.9,66.1,39.1")[1]["items"][0]["name"], "Ours")
         s, g = self.call("GET", "/api/export/osm-derived.geojson")
-        self.assertEqual(len(g["features"]), 2); self.assertIn("ODbL", g["license"])
+        refs = {f["properties"]["osm_ref"] for f in g["features"]}
+        self.assertLessEqual({"node/1", "way/2"}, refs); self.assertIn("ODbL", g["license"])      # other tests also import: do not rely on the total
 
     def test_osm_resync_updates_untouched_and_protects_edited(self):
         import import_osm
@@ -188,6 +189,37 @@ class Api(unittest.TestCase):
         s, ac = self.call("GET", "/api/admin/actors?q=ABCDEF123456", admin=True)
         self.assertEqual([x["actor_id"] for x in ac["items"]], ["device:dev-ABCDEF123456"])
         self.assertEqual(self.call("GET", "/api/admin/actors")[0], 401)
+
+    def test_address_enrichment_from_nearest_osm_objects(self):
+        import enrich_address as en
+        import import_osm
+        def el(i, lat, lon, name): return {"type": "node", "id": i, "lat": lat, "lon": lon, "tags": {"name": name}}
+        data = {"elements": [el(7001, 33.0000, 71.0000, "Near number"), el(7002, 33.1000, 71.1000, "Near road"), el(7003, 33.2000, 71.2000, "Nothing near"),
+                             el(7004, 33.3000, 71.3000, "Edited by human")]}
+        import_osm.run(data, app.Config())
+        s, lst = self.call("GET", "/api/mosques?bbox=70.9,32.9,71.4,33.4")
+        ids = {m["name"]: m["id"] for m in lst["items"]}
+        self.call("PATCH", "/api/mosques/" + ids["Edited by human"], {"expected_version": 1, "name": "Edited by human"})   # no-op edit
+        self.call("PATCH", "/api/mosques/" + ids["Edited by human"], {"expected_version": 1, "name": "Edited by human 2"})
+        addr_idx = {en.cell(33.00005, 71.0): [(33.00005, 71.0, "Muqimiy ko'chasi", "166", "Toshkent")],        # ~5.5 m from the first mosque
+                    en.cell(33.3, 71.3): [(33.3, 71.3, "Should not apply", "1", "")]}                         # next to the human-edited one
+        road_idx = {}
+        pts = [(33.1003, 71.0990), (33.1003, 71.1010)]                                                        # a road ~33 m north of the second
+        for c in {en.cell(a, b) for a, b in pts} | {en.cell(33.1003, 71.1000)}:
+            road_idx.setdefault(c, []).append(("Alisher Navoiy ko'chasi", pts))
+        r = en.run(addr_idx, road_idx, app.Config())
+        self.assertEqual((r["street_and_number"], r["street_only"], r["still_without"]), (1, 1, 1))
+        got = {n: self.call("GET", "/api/mosques/" + i)[1]["address"] for n, i in ids.items()}
+        self.assertEqual(got["Near number"], "Muqimiy ko'chasi 166, Toshkent")
+        self.assertEqual(got["Near road"], "Alisher Navoiy ko'chasi")
+        self.assertIsNone(got["Nothing near"])
+        self.assertIsNone(got["Edited by human"])                                                             # human-touched: never enriched
+        notes = self.db("SELECT note FROM mosque_history WHERE mosque_id=%s AND action='osm_sync'", ids["Near number"])
+        self.assertIn("approximate", notes[0][0])
+        # a later OSM sync must not erase the enriched address just because OSM has no address tags
+        r2 = import_osm.run(data, app.Config())
+        self.assertEqual(r2["updated"], 0)
+        self.assertEqual(self.call("GET", "/api/mosques/" + ids["Near number"])[1]["address"], "Muqimiy ko'chasi 166, Toshkent")
 
     def test_osm_address_building(self):
         import import_osm as io_
