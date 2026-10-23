@@ -36,7 +36,7 @@ class Api(unittest.TestCase):
         with psycopg.connect(TEST_URL, autocommit=True) as c:   # fresh schema for every run
             c.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public")
         os.environ.update(DATABASE_URL=TEST_URL, ADMIN_TOKEN="secret", PORT="0", TELEGRAM_BOT_TOKEN=BOT_TOKEN,
-                          ADMIN_TG_IDS=str(ADMIN_ID), WRITE_RATE_PER_MIN="1000", REPORT_THRESHOLD="2")
+                          ADMIN_TG_IDS=str(ADMIN_ID), ADMIN_ALLOW_TOKEN="0", WRITE_RATE_PER_MIN="1000", REPORT_THRESHOLD="2")
         cfg = app.Config()
         cls.srv = app.build_server(cfg)
         cls.base = "http://127.0.0.1:%d" % cls.srv.server_address[1]
@@ -261,7 +261,7 @@ class Api(unittest.TestCase):
 def make_server(**extra):
     """Fresh server on a free port against the test DB, independent of test order and of the real .env."""
     env = dict(DATABASE_URL=TEST_URL, ADMIN_TOKEN="secret", PORT="0", WRITE_RATE_PER_MIN="1000", TELEGRAM_BOT_TOKEN=BOT_TOKEN,
-               ADMIN_TG_IDS=str(ADMIN_ID))
+               ADMIN_TG_IDS=str(ADMIN_ID), ADMIN_ALLOW_TOKEN="0", ADMIN_LOCAL_ONLY="0")   # explicit: the developer's .env must not leak into tests
     env.update(extra)
     old = {k: os.environ.get(k) for k in env}
     os.environ.update(env)
