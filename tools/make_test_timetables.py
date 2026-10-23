@@ -52,4 +52,48 @@ board("04-ikki-ustun-azon-jamoat", "NAMOZ VAQTLARI · AZON / JAMOAT",
 board("05-qiyshiq-xira", "NAMOZ VAQTLARI", [("Bomdod", T[0]), ("Peshin", T[2]), ("Asr", T[3]), ("Shom", T[4]), ("Xufton", T[5])], rot=4, blur=1.1, noise=40, dark=0.25)
 board("06-qorongi", "NAMOZ VAQTLARI", [("Bomdod", T[0]), ("Peshin", T[2]), ("Asr", T[3]), ("Shom", T[4]), ("Xufton", T[5])], rot=-7, blur=2.0, noise=25, dark=0.45, bg=(200, 200, 190))
 board("07-yangi-vaqtlar", "VAQTLAR O'ZGARDI", [("Bomdod", "05:25"), ("Peshin", "12:32"), ("Asr", "16:05"), ("Shom", "17:38"), ("Xufton", "19:05")])
+
+
+def wide(name, title, labels, rows, bg=(12, 12, 14), head=(230, 230, 230), digit=(255, 150, 20), size=(1800, 460), rot=0, blur=0.0, noise=0, quality=72):
+    """A long horizontal board: prayer names in a header row, one or more rows of times underneath (like LED boards in mosques)."""
+    im = Image.new("RGB", size, bg)
+    d = ImageDraw.Draw(im)
+    d.rectangle([12, 12, size[0] - 12, size[1] - 12], outline=head, width=4)
+    d.text((size[0] // 2, 52), title, font=ImageFont.truetype(BOLD, 40), fill=head, anchor="mm")
+    n = len(labels)
+    x0, x1 = 230 if len(rows[0]) > n else 60, size[0] - 60
+    cw = (x1 - x0) / n
+    for i, lab in enumerate(labels):
+        d.text((x0 + cw * (i + 0.5), 130), lab, font=ImageFont.truetype(BOLD, 44), fill=head, anchor="mm")
+    rh = (size[1] - 190) // len(rows)
+    for r, row in enumerate(rows):
+        y = 190 + rh * r + rh // 2
+        tag = None
+        vals = row
+        if len(row) > n:
+            tag, vals = row[0], row[1:]
+        if tag:
+            d.text((40, y), tag, font=ImageFont.truetype(BOLD, 40), fill=head, anchor="lm")
+        for i, v in enumerate(vals):
+            d.text((x0 + cw * (i + 0.5), y), v, font=ImageFont.truetype(BOLD, 96), fill=digit, anchor="mm")
+    if rot:
+        im = im.rotate(rot, expand=True, fillcolor=(60, 60, 60), resample=Image.BICUBIC)
+    if blur:
+        im = im.filter(ImageFilter.GaussianBlur(blur))
+    if noise:
+        px = im.load()
+        for _ in range(im.width * im.height // noise):
+            x, yy, v = random.randrange(im.width), random.randrange(im.height), random.randrange(40, 160)
+            px[x, yy] = (v, v, v)
+    OUT.mkdir(parents=True, exist_ok=True)
+    im.save(OUT / (name + ".jpg"), "JPEG", quality=quality)
+
+
+wide("08-uzun-led-6-ustun", "NAMOZ VAQTLARI", ["Bomdod", "Quyosh", "Peshin", "Asr", "Shom", "Xufton"], [list(T)])
+wide("09-uzun-oq-5-ustun", "НАМОЗ ВАҚТЛАРИ", ["Бомдод", "Пешин", "Аср", "Шом", "Хуфтон"], [[T[0], T[2], T[3], T[4], T[5]]],
+     bg=(245, 245, 240), head=(20, 70, 50), digit=(0, 110, 70))
+wide("10-uzun-azon-jamoat-ikki-qator", "AZON VA JAMOAT VAQTLARI", ["Bomdod", "Peshin", "Asr", "Shom", "Xufton"],
+     [["Azon", "05:40", "12:45", "16:15", "17:40", "19:15"], ["Jamoat", "05:20", "12:30", "16:00", "17:35", "19:00"]],
+     bg=(18, 40, 30), head=(220, 240, 225), digit=(250, 220, 90), size=(1800, 560))
+wide("11-uzun-qiyshiq-xira", "NAMOZ VAQTLARI", ["Bomdod", "Peshin", "Asr", "Shom", "Xufton"], [[T[0], T[2], T[3], T[4], T[5]]], rot=-3, blur=1.2, noise=45)
 print("saved to", OUT)

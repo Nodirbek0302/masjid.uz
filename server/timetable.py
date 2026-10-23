@@ -67,6 +67,15 @@ def _repair(found):
     return out
 
 
+def _row5(ts):
+    """One row of times -> the five prayers (drops the sunrise column when six values are given), or None."""
+    if len(ts) == 5:
+        return dict(zip(ORDER, ts))
+    if len(ts) == 6 and _minutes(ts[0]) < _minutes(ts[1]) < _minutes(ts[2]):
+        return dict(zip(ORDER, ts[:1] + ts[2:]))
+    return None
+
+
 def parse(text):
     """-> {"times": {prayer: "HH:MM"}, "alt": {...}|None, "complete": bool, "warnings": [...]}
     `alt` is the second column when the board has two (azon + jamoat): the caller lets the user choose."""
@@ -78,6 +87,11 @@ def parse(text):
         if lab and ts and lab != "sunrise":
             per.setdefault(lab, ts)
     found = {k: v[0] for k, v in per.items()}
+    rows = [_row5(r) for r in (_times_in(ln) for ln in lines) if len(r) >= 5]            # a long board: whole rows of times
+    rows = [r for r in rows if r]
+    if len(rows) >= 2 and not per:
+        found, alt = rows[0], rows[1]                                                   # e.g. an "azon" row and a "jamoat" row: the user chooses
+        warnings.append("two_columns")
     if len(per) >= 4 and all(len(v) >= 2 for v in per.values()):          # two time columns on a labelled board
         alt = {k: v[1] for k, v in per.items()}
         warnings.append("two_columns")

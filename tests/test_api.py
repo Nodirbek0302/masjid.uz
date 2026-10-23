@@ -393,6 +393,17 @@ class TimetableParser(unittest.TestCase):
         for text, want in cases.items():
             r = T.parse(text)
             self.assertTrue(r["complete"], text); self.assertEqual(r["times"], want, text)
+        five_ = {"fajr": "05:20", "dhuhr": "12:30", "asr": "16:00", "maghrib": "17:35", "isha": "19:00"}
+        wide_ = {                                                                       # long boards: names in one line, times below
+            "Bomdod Quyosh Peshin Asr Shom Xufton\n05:20 06:40 12:30 16:00 17:35 19:00": five_,
+            "Бомдод Пешин Аср Шом Хуфтон\n05:20 12:30 16:00 17:35 19:00": five_,
+            "NAMOZ VAQTLARI\nBomdod  Peshin  Asr  Shom  Xufton\n05:20   12:30   16:00   17:35   19:00": five_,
+        }
+        for text, want in wide_.items():
+            r = T.parse(text); self.assertTrue(r["complete"], text); self.assertEqual(r["times"], want, text)
+        rows = T.parse("Bomdod Peshin Asr Shom Xufton\nAzon 05:40 12:45 16:15 17:40 19:15\nJamoat 05:20 12:30 16:00 17:35 19:00")
+        self.assertFalse(rows["complete"]); self.assertIn("two_columns", rows["warnings"])          # two rows -> the user picks
+        self.assertEqual({rows["times"]["fajr"], rows["alt"]["fajr"]}, {"05:40", "05:20"})
         two = T.parse("Bomdod 05:20 05:40\nPeshin 12:30 12:45\nAsr 16:00 16:15\nShom 17:35 17:40\nXufton 19:00 19:15")
         self.assertFalse(two["complete"]); self.assertEqual(two["alt"]["fajr"], "05:40"); self.assertIn("two_columns", two["warnings"])
         rep = T.parse("Bomdod 05:20\nPeshin 12:30\nAsr 6:00\nShom 17:35\nXufton 19:00")           # OCR lost the "1" of 16:00
