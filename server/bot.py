@@ -84,6 +84,8 @@ TEXTS = {
         "error": "Xatolik yuz berdi. Keyinroq urinib koʻring.", "limit": "Juda koʻp urinish. Biroz kuting.",
         "bad_times": "Vaqtlar tushunarsiz. 5 ta vaqtni shu tartibda yozing: 05:20 12:30 16:00 17:35 19:00",
         "names": ["Bomdod", "Peshin", "Asr", "Shom", "Xufton"],
+        "loc_btn": "📍 Joylashuv orqali vaqtlarni yangilash",
+        "loc_hint": "Masjidda boʻlsangiz, pastdagi tugma bilan joylashuvingizni yuboring, keyin jadval rasmini yuboring 👇",
         "admin_btn": "🛠 Moderator paneli", "admin_text": "Moderator paneli:", "id": "Sizning Telegram ID: {id}",
     },
     "ru": {
@@ -107,6 +109,8 @@ TEXTS = {
         "error": "Произошла ошибка. Попробуйте позже.", "limit": "Слишком много попыток. Подождите немного.",
         "bad_times": "Время не распознано. Напишите 5 времён в таком порядке: 05:20 12:30 16:00 17:35 19:00",
         "names": ["Фаджр", "Зухр", "Аср", "Магриб", "Иша"],
+        "loc_btn": "📍 Обновить время по геопозиции",
+        "loc_hint": "Если вы в мечети, отправьте геопозицию кнопкой ниже, затем фото расписания 👇",
         "admin_btn": "🛠 Панель модератора", "admin_text": "Панель модератора:", "id": "Ваш Telegram ID: {id}",
     },
     "en": {
@@ -130,6 +134,8 @@ TEXTS = {
         "error": "Something went wrong. Please try again later.", "limit": "Too many attempts. Please wait a moment.",
         "bad_times": "I could not understand the times. Type 5 times in this order: 05:20 12:30 16:00 17:35 19:00",
         "names": ["Fajr", "Dhuhr", "Asr", "Maghrib", "Isha"],
+        "loc_btn": "📍 Update times by location",
+        "loc_hint": "If you are at the mosque, send your location with the button below, then a photo of the timetable 👇",
         "admin_btn": "🛠 Moderator panel", "admin_text": "Moderator panel:", "id": "Your Telegram ID: {id}",
     },
 }
@@ -148,8 +154,12 @@ class Bot:
         self.state, self.photo_log = {}, {}
 
     # ---- helpers
-    def say(self, chat_id, text, buttons=None):
-        kw = {"reply_markup": {"inline_keyboard": buttons}} if buttons else {}
+    def say(self, chat_id, text, buttons=None, reply_keyboard=None):
+        kw = {}
+        if buttons:
+            kw["reply_markup"] = {"inline_keyboard": buttons}
+        elif reply_keyboard:
+            kw["reply_markup"] = {"keyboard": reply_keyboard, "resize_keyboard": True, "is_persistent": True}
         self.api("sendMessage", chat_id=chat_id, text=text, **kw)
 
     def identity(self, user):
@@ -213,6 +223,8 @@ class Bot:
                 self.say(chat, tx["hello"], [[{"text": tx["open"], "web_app": {"url": self.webapp_url}}]])
             else:
                 self.say(chat, tx["hello"] + "\n\n" + tx["pending"])
+            # persistent button under the input box: one tap sends the user's current location (they are standing at the mosque)
+            self.say(chat, tx["loc_hint"], reply_keyboard=[[{"text": tx["loc_btn"], "request_location": True}]])
         elif cmd == "/id":
             self.say(chat, tx["id"].format(id=uid))
         elif cmd == "/admin":

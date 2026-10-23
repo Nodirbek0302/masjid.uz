@@ -453,6 +453,18 @@ class BotFlow(unittest.TestCase):
             self.assertEqual(c.execute("SELECT tg_username, platform FROM actors WHERE actor_id='tg:555'").fetchone(), ("ali_u", "telegram-bot"))
             self.assertEqual(c.execute("SELECT actor FROM mosque_history WHERE mosque_id=%s AND action='edit'", (self.m["id"],)).fetchone()[0], "tg:555")
 
+    def test_start_offers_the_update_by_location_button(self):
+        for code, word in (("uz", "Joylashuv"), ("ru", "геопозиции"), ("en", "location")):
+            self.user = {"id": 700, "first_name": "A", "language_code": code}; self.sent.clear()
+            self.send(text="/start")
+            kb = [kw["reply_markup"] for m, kw in self.sent if m == "sendMessage" and "keyboard" in kw.get("reply_markup", {})]
+            self.assertEqual(len(kb), 1, code)
+            btn = kb[0]["keyboard"][0][0]
+            self.assertTrue(btn["request_location"]); self.assertIn(word, btn["text"]); self.assertTrue(kb[0]["is_persistent"])
+        # pressing it sends a location message -> the normal flow starts
+        self.send(location={"latitude": 40.0004, "longitude": 66.0})
+        self.assertTrue(any(b["callback_data"].startswith("pick:") for b in self.buttons()))
+
     def test_unreadable_photo_and_typed_times(self):
         self.send(location={"latitude": 40.0, "longitude": 66.0}); self.click("pick:" + self.m["id"])
         self.ocr_text = ["Bomdod 05:20\nAsr 16:00", "garbage"]
