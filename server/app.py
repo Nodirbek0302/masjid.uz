@@ -25,7 +25,7 @@ import translit
 import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
-from psycopg_pool import ConnectionPool
+from psycopg_pool import ConnectionPool, PoolTimeout
 
 ROOT = Path(__file__).resolve().parent.parent
 WEB_DIR = ROOT / "web"
@@ -69,6 +69,7 @@ class Config:
                        "dhuhr_offset_min": int(env("PRAYER_DHUHR_OFFSET_MIN", "5"))}     # Asr: 1 = Shafi'i, 2 = Hanafi
         self.actor_salt = env("ACTOR_SALT", "") or env("TELEGRAM_BOT_TOKEN", "") or env("ADMIN_TOKEN", "") or "masjid-uz"
         self.bot_username = env("BOT_USERNAME", "").lstrip("@")
+        self.db_pool_max = int(env("DB_POOL_MAX", "16"))
         self.admin_local_only = env("ADMIN_LOCAL_ONLY", "0") == "1"
         self.trust_proxy = env("TRUST_PROXY", "0") == "1"
         self.rate_limit = int(env("WRITE_RATE_PER_MIN", "30"))
@@ -171,7 +172,7 @@ class Store:
     def __init__(self, cfg):
         self.cfg = cfg
         migrate(cfg.database_url)
-        self.pool = ConnectionPool(cfg.database_url, min_size=1, max_size=10, open=True,
+        self.pool = ConnectionPool(cfg.database_url, min_size=1, max_size=cfg.db_pool_max, timeout=15, open=True,
                                    kwargs={"row_factory": dict_row})
         self._backfill_search()
 
@@ -295,15 +296,14 @@ class Store:
             return m
 
     def edit(self, m_id, body, actor, client=None):
-        if not isinstance(body.get("expected_version"), int):
-            raise ApiError(400, "version_required", "expected_version (integer) is required")
+        # Concurrent edits never fail: the row is locked, the sent fields are applied on top of the LATEST state (field by field,
+        # prayer times key by key; for the very same field the last write wins) and the history records what really changed.
+        # Clients send only the fields the user changed, so an old form cannot undo somebody else's edit.
         with self.pool.connection() as c:
             cur = c.cursor()
             old = self._fetch(cur, m_id, lock=True)
             if old["status"] == "archived":
                 raise ApiError(409, "archived", "record is archived")
-            if body["expected_version"] != old["version"]:
-                raise ApiError(409, "version_conflict", "record changed; reload and retry", current=old)
             new = {}
             if "lat" in body or "lon" in body:
                 new["lat"], new["lon"] = clean_coord(body.get("lat", old["lat"]), body.get("lon", old["lon"]))
@@ -657,6 +657,8 @@ def make_handler(cfg, store):
                 return self.static(path)
             except ApiError as e:
                 self.send_json(e.status, {"error": e.code, "message": e.message, **e.extra})
+            except PoolTimeout:                           # every database connection is busy: ask the client to retry, never a bare 500
+                self.send_json(503, {"error": "busy", "message": "server busy, retry in a moment"})
             except Exception as e:  # noqa
                 sys.stderr.write("ERROR %r\n" % (e,))
                 self.send_json(500, {"error": "internal", "message": "internal error"})
@@ -784,9 +786,14 @@ def make_handler(cfg, store):
     return H
 
 
+class Server(ThreadingHTTPServer):
+    request_queue_size = 256         # the stdlib default is 5: a burst of simultaneous visitors would get connection resets
+    daemon_threads = True
+
+
 def build_server(cfg):
     store = Store(cfg)
-    srv = ThreadingHTTPServer((cfg.host, cfg.port), make_handler(cfg, store))
+    srv = Server((cfg.host, cfg.port), make_handler(cfg, store))
     srv.store = store
     return srv
 

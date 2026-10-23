@@ -48,6 +48,10 @@ def _label_of(line):
     return best[1] if best else None
 
 
+# Wide windows (minutes after midnight) that hold for Uzbekistan all year; anything outside is an OCR slip or a typo, never saved silently.
+PLAUSIBLE = {"fajr": (150, 480), "dhuhr": (660, 900), "asr": (840, 1110), "maghrib": (960, 1320), "isha": (1050, 1439)}
+
+
 def _minutes(t):
     return int(t[:2]) * 60 + int(t[3:])
 
@@ -120,7 +124,9 @@ def parse(text):
                 warnings.append("repaired")
             else:
                 warnings.append("not_in_order")
-    bad = {"not_in_order", "too_many_times", "two_columns"} & set(warnings)
+    if complete and "not_in_order" not in warnings and any(not PLAUSIBLE[k][0] <= _minutes(found[k]) <= PLAUSIBLE[k][1] for k in ORDER):
+        warnings.append("implausible")
+    bad = {"not_in_order", "too_many_times", "two_columns", "implausible"} & set(warnings)
     return {"times": {k: found[k] for k in ORDER if k in found}, "alt": alt, "complete": complete and not bad, "warnings": warnings}
 
 

@@ -9,8 +9,11 @@ The token is read from the environment/.env and never logged.
 import json
 import os
 import sys
+import threading
 import time
 import urllib.request
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -27,6 +30,7 @@ NEAR_M = 200.0
 MAX_PHOTO_BYTES = 8 * 1024 * 1024
 PHOTOS_PER_HOUR = 30
 SESSION_S = 1800
+MSGS_PER_MIN = 40
 
 
 def call(method, **params):
@@ -44,7 +48,10 @@ def download(file_id):
     if info.get("file_size", 0) > MAX_PHOTO_BYTES:
         raise ValueError("too large")
     with urllib.request.urlopen("https://api.telegram.org/file/bot%s/%s" % (TOKEN, info["file_path"]), timeout=60) as r:
-        return r.read(MAX_PHOTO_BYTES + 1)
+        data = r.read(MAX_PHOTO_BYTES + 1)
+    if len(data) > MAX_PHOTO_BYTES:
+        raise ValueError("too large")
+    return data
 
 
 def log(msg):
@@ -82,7 +89,8 @@ TEXTS = {
         "manual_ask": "Vaqtlarni yozing: Bomdod Peshin Asr Shom Xufton, masalan 05:20 12:30 16:00 17:35 19:00",
         "saved": "✅ Saqlandi. «{name}» masjidi uchun jamoat vaqtlari oʻzgardi, tekshirib koʻrishingiz mumkin. Rahmat, boshqalarga ham foydali boʻladi!",
         "see": "🕌 Masjidni koʻrish", "cancelled": "Bekor qilindi.", "expired": "Sessiya tugadi. Masjid lokatsiyasini qayta yuboring.",
-        "error": "Xatolik yuz berdi. Keyinroq urinib koʻring.", "limit": "Juda koʻp urinish. Biroz kuting.",
+        "error": "Xatolik yuz berdi. Keyinroq urinib koʻring.",
+        "archived": "Bu masjid arxivlangan, vaqtlarni yangilab boʻlmaydi.", "limit": "Juda koʻp urinish. Biroz kuting.",
         "bad_times": "Vaqtlar tushunarsiz. 5 ta vaqtni shu tartibda yozing: 05:20 12:30 16:00 17:35 19:00",
         "names": ["Bomdod", "Peshin", "Asr", "Shom", "Xufton"],
         "loc_btn": "📍 Joylashuv orqali vaqtlarni yangilash",
@@ -108,7 +116,8 @@ TEXTS = {
         "manual_ask": "Напишите время: Фаджр Зухр Аср Магриб Иша, например 05:20 12:30 16:00 17:35 19:00",
         "saved": "✅ Сохранено. Время джамаата мечети «{name}» изменено, можете проверить. Спасибо, это поможет и другим!",
         "see": "🕌 Посмотреть мечеть", "cancelled": "Отменено.", "expired": "Сессия истекла. Отправьте геопозицию мечети ещё раз.",
-        "error": "Произошла ошибка. Попробуйте позже.", "limit": "Слишком много попыток. Подождите немного.",
+        "error": "Произошла ошибка. Попробуйте позже.",
+        "archived": "Эта мечеть в архиве, обновить время нельзя.", "limit": "Слишком много попыток. Подождите немного.",
         "bad_times": "Время не распознано. Напишите 5 времён в таком порядке: 05:20 12:30 16:00 17:35 19:00",
         "names": ["Фаджр", "Зухр", "Аср", "Магриб", "Иша"],
         "loc_btn": "📍 Обновить время по геопозиции",
@@ -134,7 +143,8 @@ TEXTS = {
         "manual_ask": "Type the times: Fajr Dhuhr Asr Maghrib Isha, e.g. 05:20 12:30 16:00 17:35 19:00",
         "saved": "✅ Saved. The congregation times for “{name}” have changed, you can check them. Thank you, it helps others too!",
         "see": "🕌 View the mosque", "cancelled": "Cancelled.", "expired": "The session expired. Please share the mosque's location again.",
-        "error": "Something went wrong. Please try again later.", "limit": "Too many attempts. Please wait a moment.",
+        "error": "Something went wrong. Please try again later.",
+        "archived": "This mosque is archived, its times cannot be updated.", "limit": "Too many attempts. Please wait a moment.",
         "bad_times": "I could not understand the times. Type 5 times in this order: 05:20 12:30 16:00 17:35 19:00",
         "names": ["Fajr", "Dhuhr", "Asr", "Maghrib", "Isha"],
         "loc_btn": "📍 Update times by location",
@@ -154,7 +164,8 @@ class Bot:
     def __init__(self, api, store, ocr_read=None, fetch_photo=None, webapp_url="", admin_ids=()):
         self.api, self.store, self.ocr_read, self.fetch_photo = api, store, ocr_read, fetch_photo
         self.webapp_url, self.admin_ids = webapp_url, set(admin_ids)
-        self.state, self.photo_log = {}, {}
+        self.state, self.photo_log, self.msg_log = {}, {}, {}
+        self._locks, self._locks_guard = {}, threading.Lock()
 
     # ---- helpers
     def say(self, chat_id, text, buttons=None, reply_keyboard=None):
@@ -178,6 +189,30 @@ class Bot:
             return None
         return st
 
+    def lock_for(self, uid):
+        """One conversation is handled by one thread at a time (a slow photo must not let a second tap race the first)."""
+        with self._locks_guard:
+            return self._locks.setdefault(uid, threading.Lock())
+
+    def allow_msg(self, uid):
+        now = time.time()
+        q = self.msg_log.setdefault(uid, deque())
+        while q and now - q[0] > 60:
+            q.popleft()
+        if len(q) >= MSGS_PER_MIN:
+            return False
+        q.append(now)
+        return True
+
+    def purge(self):
+        """Forget finished sessions and old counters so a long-running bot does not grow without bound."""
+        now = time.time()
+        for uid in [u for u, st in self.state.items() if now - st["ts"] > SESSION_S]:
+            self.state.pop(uid, None)
+        for log_ in (self.photo_log, self.msg_log):
+            for uid in [u for u, q in log_.items() if not q or now - max(q) > 3600]:
+                log_.pop(uid, None)
+
     def allow_photo(self, uid):
         now = time.time()
         q = [t for t in self.photo_log.get(uid, []) if now - t < 3600]
@@ -194,6 +229,13 @@ class Bot:
 
     # ---- entry point
     def handle(self, update):
+        who = (update.get("callback_query") or update.get("message") or {}).get("from") or {}
+        if not who.get("id"):
+            return
+        with self.lock_for(who["id"]):
+            self._handle(update)
+
+    def _handle(self, update):
         if "callback_query" in update:
             return self.on_callback(update["callback_query"])
         msg = update.get("message") or {}
@@ -201,11 +243,16 @@ class Bot:
             return
         user, chat = msg["from"], msg["chat"]["id"]
         tx = TEXTS[pick_lang(user.get("language_code"))]
+        if not self.allow_msg(user["id"]):                     # flood protection: silently drop the excess
+            return
         try:
             if msg.get("location"):
                 return self.on_location(chat, user, tx, msg["location"])
             if msg.get("photo"):
                 return self.on_photo(chat, user, tx, msg["photo"])
+            doc = msg.get("document")
+            if doc and str(doc.get("mime_type", "")).startswith("image/"):       # a picture sent "as a file" (common on desktop)
+                return self.on_photo(chat, user, tx, [{"file_id": doc["file_id"], "file_size": doc.get("file_size", 0)}])
             text = (msg.get("text") or "").strip()
             if text.startswith("/"):
                 return self.on_command(chat, user, tx, text)
@@ -240,8 +287,11 @@ class Bot:
         elif cmd == "/id":
             self.say(chat, tx["id"].format(id=uid))
         elif cmd == "/admin":
-            if uid in self.admin_ids and self.webapp_url.startswith("https://"):
-                self.say(chat, tx["admin_text"], [[{"text": tx["admin_btn"], "web_app": {"url": self.webapp_url.rstrip("/") + "/admin.html"}}]])
+            if uid in self.admin_ids:
+                if self.webapp_url.startswith("https://"):
+                    self.say(chat, tx["admin_text"], [[{"text": tx["admin_btn"], "web_app": {"url": self.webapp_url.rstrip("/") + "/admin.html"}}]])
+                else:
+                    self.say(chat, tx["pending"])
         elif cmd == "/cancel":
             self.state.pop(uid, None)
             self.say(chat, tx["cancelled"])
@@ -260,6 +310,8 @@ class Bot:
 
     def on_callback(self, cb):
         user, data = cb["from"], cb.get("data", "")
+        if not cb.get("message"):
+            return
         chat = cb["message"]["chat"]["id"]
         tx = TEXTS[pick_lang(user.get("language_code"))]
         uid = user["id"]
@@ -291,8 +343,8 @@ class Bot:
             elif kind == "cancel":
                 self.state.pop(uid, None)
                 self.say(chat, tx["cancelled"])
-        except app.ApiError:
-            self.say(chat, tx["error"])
+        except app.ApiError as e:
+            self.say(chat, tx["archived"] if e.code == "archived" else tx["error"])
         except Exception as e:
             log("callback error: %s" % type(e).__name__)
             self.say(chat, tx["error"])
@@ -353,17 +405,8 @@ class Bot:
     # ---- save
     def save(self, chat, user, tx, st):
         actor, info = self.identity(user)
-        for _ in range(2):                                        # one retry if somebody edited the mosque meanwhile
-            cur = self.store.get(st["mosque_id"])
-            try:
-                self.store.edit(st["mosque_id"], {"expected_version": cur["version"], "prayer_times": st["times"],
-                                                  "note": "Telegram bot (photo/text)"}, actor, info)
-                break
-            except app.ApiError as e:
-                if e.code != "version_conflict":
-                    raise
-        else:
-            return self.say(chat, tx["error"])
+        # no version check: concurrent edits are merged by the store (the five times are applied on top of the latest state)
+        self.store.edit(st["mosque_id"], {"prayer_times": st["times"], "note": "Telegram bot (photo/text)"}, actor, info)
         self.state.pop(user["id"], None)
         self.say(chat, tx["saved"].format(name=st["name"]), self.open_button(st["mosque_id"], tx))
 
@@ -393,11 +436,13 @@ def main():
     cfg = app.Config()
     bot = Bot(call, app.Store(cfg), real_ocr if ocr.available() else None, download, WEBAPP_URL, ADMIN_IDS)
     offset, backoff = None, 1
+    pool = ThreadPoolExecutor(max_workers=4)             # a slow photo (OCR) must not block everybody else
     while True:
         try:
             for u in call("getUpdates", offset=offset, timeout=30, allowed_updates=["message", "callback_query"]):
                 offset = u["update_id"] + 1
-                bot.handle(u)
+                pool.submit(bot.handle, u)
+            bot.purge()
             backoff = 1
         except Exception as e:                             # network blips, rate limits: retry with backoff
             log("poll error: %s" % type(e).__name__)

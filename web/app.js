@@ -448,14 +448,20 @@
       el("div", { class: "row" }, [
         btn("", T("btn.save"), function (ev) {
           var b = ev.currentTarget; b.disabled = true;
-          var body = timesOnly ? { expected_version: m.version, prayer_times: readTimes(grid), note: note.value }
-            : { expected_version: m.version, name: name.value, address: addr.value, prayer_times: readTimes(grid), note: note.value };
-          if (newPos) { body.lat = newPos.lat; body.lon = newPos.lng; }
+          // Send only what this user changed: a form opened a minute ago must never overwrite what others saved since.
+          var body = { note: note.value }, now = readTimes(grid), pt = {};
+          PRAYERS.forEach(function (p) { if ((now[p] || null) !== (m.prayer_times[p] || null)) pt[p] = now[p]; });
+          if (Object.keys(pt).length) body.prayer_times = pt;
+          if (!timesOnly) {
+            if (name.value.trim() !== (m.name || "")) body.name = name.value;
+            if (addr.value.trim() !== (m.address || "")) body.address = addr.value;
+            if (newPos) { body.lat = newPos.lat; body.lon = newPos.lng; }
+          }
+          if (!body.prayer_times && body.name === undefined && body.address === undefined && !newPos) { b.disabled = false; openMosque(m.id); return; }
           api("PATCH", "/api/mosques/" + m.id, body).then(function (u) { toast(T("toast.saved")); loadMosques(); openMosque(u.id); })
             .catch(function (e) {
               b.disabled = false;
               toast(errText(e));
-              if (e.error === "version_conflict") openMosque(m.id);
             });
         }),
         btn("ghost", T("btn.cancel"), function () { openMosque(m.id); })

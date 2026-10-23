@@ -74,15 +74,16 @@ class Api(unittest.TestCase):
         s, m2 = self.call("PATCH", "/api/mosques/" + m["id"],
                           {"expected_version": 1, "name": "Test", "prayer_times": {"fajr": "05:10", "jumuah": "13:00"}})
         self.assertEqual((s, m2["version"], m2["prayer_times"]["fajr"]), (200, 2, "05:10"))
-        # stale version rejected
-        self.assertEqual(self.call("PATCH", "/api/mosques/" + m["id"], {"expected_version": 1, "name": "X"})[0], 409)
+        # an old form (stale version) is NOT an error: its fields are applied on top of the latest state
+        s, m_x = self.call("PATCH", "/api/mosques/" + m["id"], {"expected_version": 1, "name": "X"})
+        self.assertEqual((s, m_x["name"], m_x["prayer_times"]["fajr"]), (200, "X", "05:10"))          # the times saved meanwhile survive
         # validation
         self.assertEqual(self.call("PATCH", "/api/mosques/" + m["id"],
                                    {"expected_version": 2, "prayer_times": {"fajr": "25:99"}})[0], 400)
         self.assertEqual(self.add(100, 0)[0], 400)
         # history
         s, h = self.call("GET", "/api/mosques/%s/history" % m["id"])
-        self.assertEqual([x["action"] for x in h["items"]], ["edit", "create"])
+        self.assertEqual([x["action"] for x in h["items"]], ["edit", "edit", "create"])
         # reports: grouped, threshold -> reported
         self.assertEqual(self.call("POST", "/api/mosques/%s/reports" % m["id"], {"kind": "closed", "reason": "yopilgan"}, client="bbbbbbbb-1")[0], 201)
         self.assertEqual(self.call("POST", "/api/mosques/%s/reports" % m["id"], {"kind": "closed", "reason": "yopilgan"}, client="bbbbbbbb-1")[0], 409)
@@ -97,8 +98,8 @@ class Api(unittest.TestCase):
         s, a = self.call("POST", "/api/admin/mosques/%s/archive" % m["id"], {"note": "closed"}, admin=True)
         self.assertEqual(a["status"], "archived")
         self.assertNotIn(m["id"], [x["id"] for x in self.call("GET", "/api/mosques")[1]["items"]])
-        self.assertEqual(len(self.call("GET", "/api/mosques/%s/history" % m["id"])[1]["items"]), 4)
-        self.assertEqual(self.call("PATCH", "/api/mosques/" + m["id"], {"expected_version": a["version"], "name": "z"})[0], 409)
+        self.assertEqual(len(self.call("GET", "/api/mosques/%s/history" % m["id"])[1]["items"]), 5)
+        self.assertEqual(self.call("PATCH", "/api/mosques/" + m["id"], {"name": "z"})[0], 409)                  # archived: not editable
         self.assertEqual(self.call("POST", "/api/admin/mosques/%s/restore" % m["id"], {}, admin=True)[1]["status"], "unverified")
         # verify needs evidence
         self.assertEqual(self.call("POST", "/api/admin/mosques/%s/verify" % m["id"], {}, admin=True)[0], 400)
@@ -235,6 +236,40 @@ class Api(unittest.TestCase):
         self.assertIsNone(m4["times_updated_at"])                             # all times cleared -> "not entered"
         s, c = self.add(31.5, 73.5, name="Born with times", prayer_times={"isha": "20:00"})
         self.assertTrue(c["times_updated_at"])                                # entered at creation
+
+    def test_many_users_at_once_never_get_errors_and_nothing_is_lost(self):
+        from concurrent.futures import ThreadPoolExecutor
+        s, m = self.add(30.0, 74.0, name="Busy mosque")
+        mid = m["id"]
+        keys = ["fajr", "dhuhr", "asr", "maghrib", "isha"]
+        jobs = [("name", "Name %02d" % i) for i in range(20)] + [("time", k) for k in keys] + [("report", i) for i in range(6)] * 1
+        def work(job):
+            kind, v = job
+            if kind == "name":                                                      # every writer holds the same stale version 1
+                return self.call("PATCH", "/api/mosques/" + mid, {"expected_version": 1, "name": v}, client="e%07d-1" % hash(v) if False else "eeeeeeee-1")[0]
+            if kind == "time":
+                times = {"fajr": "05:10", "dhuhr": "12:20", "asr": "16:00", "maghrib": "17:30", "isha": "19:00"}
+                return self.call("PATCH", "/api/mosques/" + mid, {"expected_version": 1, "prayer_times": {v: times[v]}}, client="ffffffff-1")[0]
+            return self.call("POST", "/api/mosques/%s/reports" % mid, {"kind": "other", "reason": "r%d" % v}, client="%08d-aa" % (100 + v))[0]
+        with ThreadPoolExecutor(12) as ex:
+            codes = list(ex.map(work, jobs))
+        self.assertEqual(sorted(set(codes)), [200, 201])                            # no 409/429/500 for anybody
+        final = self.call("GET", "/api/mosques/" + mid)[1]
+        self.assertEqual(final["prayer_times"], {"fajr": "05:10", "dhuhr": "12:20", "asr": "16:00", "maghrib": "17:30", "isha": "19:00"})   # all five writers' times kept
+        self.assertTrue(final["name"].startswith("Name "))
+        edits = [x for x in self.call("GET", "/api/mosques/%s/history" % mid)[1]["items"] if x["action"] == "edit"]
+        self.assertEqual(final["version"], 1 + len(edits) + 1)                      # +1: the status change by the reports; versions are gapless
+        self.assertEqual(len({x["version"] for x in edits}), len(edits))            # no two edits share a version
+        self.assertEqual(final["status"], "reported")
+        thr = [x for x in self.call("GET", "/api/mosques/%s/history" % mid)[1]["items"] if x["action"] == "report_threshold"]
+        self.assertEqual(len(thr), 1)                                               # the status flipped exactly once
+        # many people adding the same missing mosque at the same moment: exactly one record, the rest are told about the duplicate
+        def add_same(i):
+            return self.add(30.5, 74.5, name="Same spot", force=False)[0]
+        with ThreadPoolExecutor(8) as ex:
+            res = list(ex.map(add_same, range(8)))
+        self.assertEqual(sorted(res), [201] + [409] * 7)
+        self.assertEqual(len(self.call("GET", "/api/mosques?bbox=74.4,30.4,74.6,30.6")[1]["items"]), 1)
 
     def test_nearest_mosques_are_really_the_nearest(self):
         import math
@@ -412,6 +447,8 @@ class TimetableParser(unittest.TestCase):
         rep = T.parse("Bomdod 05:20\nPeshin 12:30\nAsr 6:00\nShom 17:35\nXufton 19:00")           # OCR lost the "1" of 16:00
         self.assertTrue(rep["complete"]); self.assertEqual(rep["times"]["asr"], "16:00"); self.assertIn("repaired", rep["warnings"])
         self.assertFalse(T.parse("05:20 12:30 11:00 03:00 19:00")["complete"])                  # not repairable -> never complete
+        weird = T.parse("Bomdod 09:20\nPeshin 12:30\nAsr 16:00\nShom 17:35\nXufton 19:00")      # fajr at 09:20 cannot be right
+        self.assertFalse(weird["complete"]); self.assertIn("implausible", weird["warnings"])
         for bad in ("Bomdod 05:20\nAsr 16:00", "Assalomu alaykum 2026", "05:20 12:30 11:00 17:35 19:00", "99:99 88:88", ""):
             self.assertFalse(T.parse(bad)["complete"], bad)                # never "complete" on doubtful input
 
@@ -478,6 +515,33 @@ class BotFlow(unittest.TestCase):
         # pressing it sends a location message -> the normal flow starts
         self.send(location={"latitude": 40.0004, "longitude": 66.0})
         self.assertTrue(any(b["callback_data"].startswith("pick:") for b in self.buttons()))
+
+    def test_image_sent_as_file_is_read_like_a_photo(self):
+        self.send(location={"latitude": 40.0, "longitude": 66.0}); self.click("pick:" + self.m["id"])
+        self.send(document={"file_id": "f1", "mime_type": "image/jpeg", "file_size": 1234})
+        self.assertIn("05:20", self.msgs()[-1])                                                 # read, preview shown
+        self.sent.clear(); self.send(document={"file_id": "f2", "mime_type": "application/pdf"})   # other files are ignored
+        self.assertEqual(self.msgs(), [])
+
+    def test_flood_limit_and_cleanup(self):
+        for _ in range(self.botmod.MSGS_PER_MIN + 15):
+            self.send(text="/id")
+        self.assertEqual(len(self.msgs()), self.botmod.MSGS_PER_MIN)                            # the rest is dropped
+        self.bot.state[1] = {"step": "await_times", "ts": 0}; self.bot.msg_log[2] = __import__("collections").deque([0])
+        self.bot.purge()
+        self.assertNotIn(1, self.bot.state); self.assertNotIn(2, self.bot.msg_log)             # old sessions/counters are forgotten
+
+    def test_admin_without_mini_app_url_gets_an_answer_and_archived_is_explained(self):
+        bot = self.botmod.Bot(lambda m, **kw: self.sent.append((m, kw)), self.store, None, None, "", admin_ids=[7])
+        self.user = {"id": 7, "first_name": "Owner", "language_code": "uz"}; self.sent.clear()
+        bot.handle({"update_id": 9, "message": {"chat": {"id": 7, "type": "private"}, "from": self.user, "text": "/admin"}})
+        self.assertIn("Mini App", self.msgs()[-1])
+        self.store.moderate(self.m["id"], "archive", "admin:7", "t")
+        self.user = {"id": 8, "first_name": "A", "language_code": "uz"}
+        five = {"fajr": "05:20", "dhuhr": "12:30", "asr": "16:00", "maghrib": "17:35", "isha": "19:00"}
+        bot.state[8] = {"step": "confirm", "mosque_id": self.m["id"], "name": "x", "times": five, "ts": __import__("time").time()}
+        bot.handle({"update_id": 10, "callback_query": {"id": "q", "from": self.user, "data": "save", "message": {"chat": {"id": 8}}}})
+        self.assertIn("arxivlangan", self.msgs()[-1])
 
     def test_desktop_paths_name_search_and_deep_link(self):
         # no location button on desktop: typing a name finds the mosque
