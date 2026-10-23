@@ -50,7 +50,6 @@
     if (m.status === "verified") return [T("status.verified"), "verified"];
     if (m.status === "reported") return [T("status.reported"), "reported"];
     if (m.origin === "community") return [T("status.community"), ""];
-    if (m.source === "openstreetmap") return [T("status.osm"), "neutral"];
     return [T("status.unverified"), "neutral"];
   }
 
@@ -387,7 +386,6 @@
         el("div", { class: "muted stack" }, [
           el("div", { text: m.lat.toFixed(6) + ", " + m.lon.toFixed(6) + " · " + T("m.version", { v: m.version }) }),
           el("div", { text: T("m.updated", { t: I18N.fmtDate(m.updated_at) }) }),
-          m.source === "openstreetmap" ? el("div", { text: T("m.osm_credit") }) : null,
           m.verification_note ? el("div", { text: T("m.verif", { note: m.verification_note }) }) : null
         ]),
         el("h3", { text: T("m.times") }), timesGrid(m),
