@@ -68,6 +68,7 @@ class Config:
                        "asr_factor": int(env("PRAYER_ASR_FACTOR", "2")),
                        "dhuhr_offset_min": int(env("PRAYER_DHUHR_OFFSET_MIN", "5"))}     # Asr: 1 = Shafi'i, 2 = Hanafi
         self.actor_salt = env("ACTOR_SALT", "") or env("TELEGRAM_BOT_TOKEN", "") or env("ADMIN_TOKEN", "") or "masjid-uz"
+        self.bot_username = env("BOT_USERNAME", "").lstrip("@")
         self.admin_local_only = env("ADMIN_LOCAL_ONLY", "0") == "1"
         self.trust_proxy = env("TRUST_PROXY", "0") == "1"
         self.rate_limit = int(env("WRITE_RATE_PER_MIN", "30"))
@@ -668,7 +669,8 @@ def make_handler(cfg, store):
                                             "duplicate_radius_m": cfg.dup_radius_m,
                                             "show_tile_mosques": cfg.show_tile_mosques,
                                             "prayer": cfg.prayer,
-                                            "admin_token_login": cfg.allow_admin_token})
+                                            "admin_token_login": cfg.allow_admin_token,
+                                            "bot_username": cfg.bot_username})
             if path == "/api/health":
                 return self.send_json(200, {"ok": True})
             if path == "/api/mosques" and method == "GET":

@@ -390,7 +390,9 @@
         el("div", { class: "times-meta muted", text: m.times_updated_at ? T("times.updated", { t: I18N.fmtDate(m.times_updated_at) }) : T("times.never") }),
         el("div", { class: "cta" }, [
           el("p", { text: T(m.times_updated_at ? "cta.have" : "cta.empty") }),
-          btn(m.times_updated_at ? "ghost small" : "small", T("cta.btn"), function () { editForm(m, { timesOnly: true }); })
+          btn(m.times_updated_at ? "ghost small" : "small", T("cta.btn"), function () { editForm(m, { timesOnly: true }); }),
+          cfg.bot_username ? el("a", { class: "btn ghost small", target: "_blank", rel: "noopener noreferrer",
+            href: "https://t.me/" + cfg.bot_username + "?start=m_" + m.id, text: T("cta.photo") }) : null
         ]),
         el("div", { class: "row" }, yandexLinks(m)),
         el("div", { class: "row" }, [

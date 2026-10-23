@@ -465,6 +465,22 @@ class BotFlow(unittest.TestCase):
         self.send(location={"latitude": 40.0004, "longitude": 66.0})
         self.assertTrue(any(b["callback_data"].startswith("pick:") for b in self.buttons()))
 
+    def test_desktop_paths_name_search_and_deep_link(self):
+        # no location button on desktop: typing a name finds the mosque
+        self.send(text="Bot mos")
+        picks = [b for b in self.buttons() if b["callback_data"].startswith("pick:")]
+        self.assertEqual([b["text"] for b in picks], ["Bot mosque"])
+        self.click(picks[0]["callback_data"]); self.send(text="05:20 12:30 16:00 17:35 19:00"); self.click("save")
+        self.assertEqual(self.store.get(self.m["id"])["prayer_times"]["fajr"], "05:20")
+        self.send(text="zzzz-nothing"); self.assertIn("topilmadi", self.msgs()[-1])
+        # deep link from the mosque page: /start m_<id> selects that mosque directly
+        self.bot.state.clear(); self.send(text="/start m_" + self.m["id"])
+        self.assertIn("Bot mosque", self.msgs()[-1])
+        self.send(text="06:00 12:30 16:00 17:35 19:00"); self.click("save")
+        self.assertEqual(self.store.get(self.m["id"])["prayer_times"]["fajr"], "06:00")
+        self.send(text="/start m_not-a-real-id-xxxxxxxxxxxxxxxxxxxxxxxx")                    # junk payload must not crash
+        self.assertTrue(self.msgs())
+
     def test_unreadable_photo_and_typed_times(self):
         self.send(location={"latitude": 40.0, "longitude": 66.0}); self.click("pick:" + self.m["id"])
         self.ocr_text = ["Bomdod 05:20\nAsr 16:00", "garbage"]

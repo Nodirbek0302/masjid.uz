@@ -7,3 +7,6 @@ extend-exclude = [".venv", ".pgdata"]
 [tool.ruff.lint]
 select = ["E", "F", "W"]
 ignore = ["E701", "E702"]   # one-line `if x: return` in small helpers is intentional
+
+[tool.ruff.lint.per-file-ignores]
+"server/bot.py" = ["E501"]   # long user-facing text tables

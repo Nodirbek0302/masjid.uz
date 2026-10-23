@@ -72,7 +72,8 @@ TEXTS = {
         "new": "➕ Yangi masjid qoʻshish", "noname": "Nomsiz masjid",
         "ask_name": "Masjid nomini yozing (yoki /skip: nomsiz qoʻshish):", "created": "✅ Masjid qoʻshildi.",
         "send_photo": "📷 «{name}» uchun namoz vaqtlari jadvalining rasmini yuboring.\nYoki 5 ta vaqtni matn bilan yozing: 05:20 12:30 16:00 17:35 19:00",
-        "need_loc": "Avval masjid lokatsiyasini yuboring (📎 → Joylashuv).", "reading": "🔎 Rasm oʻqilmoqda…",
+        "need_loc": "Avval masjidni tanlang: lokatsiyasini yuboring (📎 → Joylashuv) yoki masjid nomini yozing.",
+        "search_pick": "Topilgan masjidlar. Qaysi biri?", "search_none": "Masjid topilmadi. Boshqa nom yozing yoki lokatsiya yuboring.", "reading": "🔎 Rasm oʻqilmoqda…",
         "no_ocr": "Rasmni oʻqish hozircha ishlamayapti. Vaqtlarni matn bilan yozing: 05:20 12:30 16:00 17:35 19:00",
         "unreadable": "Rasmdan vaqtlarni ishonchli oʻqiy olmadim.{found}\nVaqtlarni matn bilan yozing: 05:20 12:30 16:00 17:35 19:00",
         "found": " Topilganlari: {t}.", "confirm": "«{name}» uchun jamoat vaqtlari:\n{t}\n\nToʻgʻrimi?",
@@ -85,7 +86,7 @@ TEXTS = {
         "bad_times": "Vaqtlar tushunarsiz. 5 ta vaqtni shu tartibda yozing: 05:20 12:30 16:00 17:35 19:00",
         "names": ["Bomdod", "Peshin", "Asr", "Shom", "Xufton"],
         "loc_btn": "📍 Joylashuv orqali vaqtlarni yangilash",
-        "loc_hint": "Masjidda boʻlsangiz, pastdagi tugma bilan joylashuvingizni yuboring, keyin jadval rasmini yuboring 👇",
+        "loc_hint": "Masjidda boʻlsangiz, pastdagi tugma bilan joylashuvingizni yuboring, keyin jadval rasmini yuboring 👇\nKompyuterda tugma ishlamasa, masjid nomini yozing.",
         "admin_btn": "🛠 Moderator paneli", "admin_text": "Moderator paneli:", "id": "Sizning Telegram ID: {id}",
     },
     "ru": {
@@ -97,7 +98,8 @@ TEXTS = {
         "new": "➕ Добавить новую мечеть", "noname": "Мечеть без названия",
         "ask_name": "Напишите название мечети (или /skip: добавить без названия):", "created": "✅ Мечеть добавлена.",
         "send_photo": "📷 Отправьте фото расписания намазов для «{name}».\nИли напишите 5 времён текстом: 05:20 12:30 16:00 17:35 19:00",
-        "need_loc": "Сначала отправьте геопозицию мечети (📎 → Геопозиция).", "reading": "🔎 Читаю фото…",
+        "need_loc": "Сначала выберите мечеть: отправьте её геопозицию (📎 → Геопозиция) или напишите название.",
+        "search_pick": "Найденные мечети. Какая из них?", "search_none": "Мечеть не найдена. Напишите другое название или отправьте геопозицию.", "reading": "🔎 Читаю фото…",
         "no_ocr": "Чтение фото сейчас недоступно. Напишите время текстом: 05:20 12:30 16:00 17:35 19:00",
         "unreadable": "Не удалось надёжно прочитать время на фото.{found}\nНапишите время текстом: 05:20 12:30 16:00 17:35 19:00",
         "found": " Найдено: {t}.", "confirm": "Время джамаата для «{name}»:\n{t}\n\nВерно?",
@@ -110,7 +112,7 @@ TEXTS = {
         "bad_times": "Время не распознано. Напишите 5 времён в таком порядке: 05:20 12:30 16:00 17:35 19:00",
         "names": ["Фаджр", "Зухр", "Аср", "Магриб", "Иша"],
         "loc_btn": "📍 Обновить время по геопозиции",
-        "loc_hint": "Если вы в мечети, отправьте геопозицию кнопкой ниже, затем фото расписания 👇",
+        "loc_hint": "Если вы в мечети, отправьте геопозицию кнопкой ниже, затем фото расписания 👇\nЕсли на компьютере кнопка не работает, напишите название мечети.",
         "admin_btn": "🛠 Панель модератора", "admin_text": "Панель модератора:", "id": "Ваш Telegram ID: {id}",
     },
     "en": {
@@ -122,7 +124,8 @@ TEXTS = {
         "new": "➕ Add a new mosque", "noname": "Unnamed mosque",
         "ask_name": "Type the mosque's name (or /skip to add it without a name):", "created": "✅ Mosque added.",
         "send_photo": "📷 Send a photo of the prayer timetable for “{name}”.\nOr type the 5 times: 05:20 12:30 16:00 17:35 19:00",
-        "need_loc": "Please share the mosque's location first (📎 → Location).", "reading": "🔎 Reading the photo…",
+        "need_loc": "First choose the mosque: share its location (📎 → Location) or type its name.",
+        "search_pick": "Mosques found. Which one?", "search_none": "No mosque found. Type another name or share a location.", "reading": "🔎 Reading the photo…",
         "no_ocr": "Photo reading is not available right now. Type the times: 05:20 12:30 16:00 17:35 19:00",
         "unreadable": "I could not read the times from the photo reliably.{found}\nType the times: 05:20 12:30 16:00 17:35 19:00",
         "found": " Found: {t}.", "confirm": "Congregation times for “{name}”:\n{t}\n\nIs this right?",
@@ -135,7 +138,7 @@ TEXTS = {
         "bad_times": "I could not understand the times. Type 5 times in this order: 05:20 12:30 16:00 17:35 19:00",
         "names": ["Fajr", "Dhuhr", "Asr", "Maghrib", "Isha"],
         "loc_btn": "📍 Update times by location",
-        "loc_hint": "If you are at the mosque, send your location with the button below, then a photo of the timetable 👇",
+        "loc_hint": "If you are at the mosque, send your location with the button below, then a photo of the timetable 👇\nIf the button does nothing on desktop, type the mosque's name.",
         "admin_btn": "🛠 Moderator panel", "admin_text": "Moderator panel:", "id": "Your Telegram ID: {id}",
     },
 }
@@ -216,8 +219,17 @@ class Bot:
                 pass
 
     def on_command(self, chat, user, tx, text):
-        cmd = text.split("@")[0].split(" ")[0].lower()
+        parts = text.split()
+        cmd = parts[0].split("@")[0].lower()
+        arg = parts[1] if len(parts) > 1 else ""
         uid = user["id"]
+        if cmd == "/start" and arg.startswith("m_") and len(arg) == 38:       # deep link from the mosque page: /start m_<mosque id>
+            try:
+                m = self.store.get(arg[2:])
+            except app.ApiError:
+                return self.say(chat, tx["error"])
+            self.state[uid] = {"step": "await_times", "mosque_id": m["id"], "name": m["name"] or tx["noname"], "ts": time.time()}
+            return self.say(chat, tx["send_photo"].format(name=self.state[uid]["name"]))
         if cmd in ("/start", "/help"):
             if self.webapp_url.startswith("https://"):
                 self.say(chat, tx["hello"], [[{"text": tx["open"], "web_app": {"url": self.webapp_url}}]])
@@ -295,8 +307,11 @@ class Bot:
     # ---- text: a name for a new mosque, or typed times
     def on_text(self, chat, user, tx, text):
         st = self.session(user["id"])
-        if not st:
-            return self.say(chat, tx["need_loc"])
+        if not st:                                       # no mosque chosen yet: treat the text as a name search (works on desktop too)
+            found = self.store.search(text, 5) if len(text) >= 2 else []
+            if found:
+                return self.say(chat, tx["search_pick"], [[{"text": m["name"], "callback_data": "pick:" + m["id"]}] for m in found])
+            return self.say(chat, tx["need_loc"] if len(text) < 2 else tx["search_none"])
         if st["step"] == "await_name":
             return self.create_mosque(chat, user, tx, st, text[:200])
         r = timetable.parse(text)
