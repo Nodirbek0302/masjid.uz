@@ -200,7 +200,8 @@ class Api(unittest.TestCase):
         self.assertEqual(a({"addr:full": "A\u202eB\x00C"}), "ABC")                # control/bidi characters are stripped
 
     def test_admin_only_for_allow_listed_verified_telegram_id(self):
-        url = self.base + "/api/admin/overview"
+        srv, base = make_server()                      # own server: its failed-login counter must not interact with other tests
+        url = base + "/api/admin/overview"
         def get(headers):
             req = urllib.request.Request(url, headers=headers)
             try: return urllib.request.urlopen(req).status
@@ -214,6 +215,7 @@ class Api(unittest.TestCase):
         self.assertEqual(get({"X-Telegram-Init-Data": forged}), 401)                                      # claiming the owner's id breaks the signature
         self.assertEqual(get({"Authorization": "Bearer secret"}), 401)                                    # token login is off by default
         self.assertEqual(get({"X-Client-Id": "aaaaaaaa-1"}), 401)
+        srv.shutdown()
         # moderator actions are attributed to the Telegram id, shown publicly only as the role
         s, m = self.add(36.5, 62.5, name="Role test")
         self.call("POST", "/api/admin/mosques/%s/archive" % m["id"], {"note": "t"}, admin=True)
