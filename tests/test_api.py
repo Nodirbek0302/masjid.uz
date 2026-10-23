@@ -378,6 +378,114 @@ class TelegramIdentity(unittest.TestCase):
             self.assertEqual(c.execute("SELECT count(*) FROM actors WHERE telegram_id=999").fetchone()[0], 0)
         srv.shutdown()
 
+class TimetableParser(unittest.TestCase):
+    def test_parser_cases(self):
+        import timetable as T
+        five = {"fajr": "05:20", "dhuhr": "12:30", "asr": "16:00", "maghrib": "17:35", "isha": "19:00"}
+        cases = {
+            "Bomdod 05:20\nQuyosh 06:40\nPeshin 12:30\nAsr 16:00\nShom 17:35\nXufton 19:00": five,
+            "Бомдод 5.20\nПешин 12-30\nАср 16:00\nШом 17:35\nХуфтон 19:00": five,
+            "Фаджр 05:20\nВосход 06:40\nЗухр 12:30\nАср 16:00\nМагриб 17:35\nИша 19:00": five,
+            "05:20 12:30 16:00 17:35 19:00": five,
+            "05:20 06:40 12:30 16:00 17:35 19:00": five,
+            "Bomdod O5:2O\nPeshin l2:30\nAsr l6:OO\nShom l7:35\nXufton l9:OO": five,       # OCR confuses O/0 and l/1
+        }
+        for text, want in cases.items():
+            r = T.parse(text)
+            self.assertTrue(r["complete"], text); self.assertEqual(r["times"], want, text)
+        two = T.parse("Bomdod 05:20 05:40\nPeshin 12:30 12:45\nAsr 16:00 16:15\nShom 17:35 17:40\nXufton 19:00 19:15")
+        self.assertFalse(two["complete"]); self.assertEqual(two["alt"]["fajr"], "05:40"); self.assertIn("two_columns", two["warnings"])
+        for bad in ("Bomdod 05:20\nAsr 16:00", "Assalomu alaykum 2026", "05:20 12:30 11:00 17:35 19:00", "99:99 88:88", ""):
+            self.assertFalse(T.parse(bad)["complete"], bad)                # never "complete" on doubtful input
+
+
+class BotFlow(unittest.TestCase):
+    """The conversation logic with fake Telegram/OCR: location -> pick -> photo -> confirm -> saved, and the safety rules."""
+
+    def setUp(self):
+        import bot as botmod
+        self.botmod = botmod
+        with psycopg.connect(TEST_URL, autocommit=True) as c:
+            c.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public")
+        os.environ.update(DATABASE_URL=TEST_URL)
+        self.store = app.Store(app.Config())
+        self.sent = []
+        self.ocr_text = ["Bomdod 05:20\nPeshin 12:30\nAsr 16:00\nShom 17:35\nXufton 19:00"]
+        self.bot = botmod.Bot(lambda m, **kw: self.sent.append((m, kw)), self.store, lambda data: self.ocr_text, lambda fid: b"img",
+                              "https://example.org", admin_ids=[7])
+        self.user = {"id": 555, "first_name": "Ali", "username": "ali_u", "language_code": "uz"}
+        self.m = self.store.create({"lat": 40.0, "lon": 66.0, "name": "Bot mosque"}, "client:test0000", {"kind": "web", "platform": "web"})
+
+    def msgs(self):
+        return [kw["text"] for m, kw in self.sent if m == "sendMessage"]
+
+    def buttons(self):
+        for m, kw in reversed(self.sent):
+            if m == "sendMessage" and "reply_markup" in kw:
+                return [b for row in kw["reply_markup"]["inline_keyboard"] for b in row]
+        return []
+
+    def send(self, **kw):
+        base = {"chat": {"id": 555, "type": "private"}, "from": self.user}
+        self.bot.handle({"update_id": 1, "message": dict(base, **kw)})
+
+    def click(self, data):
+        self.bot.handle({"update_id": 2, "callback_query": {"id": "q", "from": self.user, "data": data, "message": {"chat": {"id": 555}}}})
+
+    def test_location_photo_confirm_save_and_link(self):
+        self.send(location={"latitude": 40.0004, "longitude": 66.0})
+        picks = [b for b in self.buttons() if b["callback_data"].startswith("pick:")]
+        self.assertEqual(len(picks), 1); self.assertIn("Bot mosque", picks[0]["text"])
+        self.click(picks[0]["callback_data"])
+        self.send(photo=[{"file_id": "a", "file_size": 10}, {"file_id": "b", "file_size": 99}])
+        self.assertIn("05:20", self.msgs()[-1]); self.assertIn("19:00", self.msgs()[-1])
+        self.assertEqual(self.store.get(self.m["id"])["prayer_times"], {})                      # NOT saved before confirmation
+        self.click("save")
+        cur = self.store.get(self.m["id"])
+        self.assertEqual(cur["prayer_times"]["asr"], "16:00"); self.assertTrue(cur["times_updated_at"])
+        self.assertIn("oʻzgardi", self.msgs()[-1])                                              # "the times changed, you can check"
+        link = self.buttons()[0]["web_app"]["url"]
+        self.assertEqual(link, "https://example.org/?m=" + self.m["id"])
+        with psycopg.connect(TEST_URL, autocommit=True) as c:                                  # who/what recorded
+            self.assertEqual(c.execute("SELECT tg_username, platform FROM actors WHERE actor_id='tg:555'").fetchone(), ("ali_u", "telegram-bot"))
+            self.assertEqual(c.execute("SELECT actor FROM mosque_history WHERE mosque_id=%s AND action='edit'", (self.m["id"],)).fetchone()[0], "tg:555")
+
+    def test_unreadable_photo_and_typed_times(self):
+        self.send(location={"latitude": 40.0, "longitude": 66.0}); self.click("pick:" + self.m["id"])
+        self.ocr_text = ["Bomdod 05:20\nAsr 16:00", "garbage"]
+        self.send(photo=[{"file_id": "a", "file_size": 10}])
+        self.assertIn("ishonchli", self.msgs()[-1]); self.assertEqual(self.store.get(self.m["id"])["prayer_times"], {})
+        self.send(text="05:20 12:30 16:00 17:35 19:00"); self.click("save")
+        self.assertEqual(self.store.get(self.m["id"])["prayer_times"]["isha"], "19:00")
+        self.send(text="hello")                                                                 # session is over
+        self.assertIn("lokatsiya", self.msgs()[-1])
+
+    def test_two_columns_asks_which_one(self):
+        self.send(location={"latitude": 40.0, "longitude": 66.0}); self.click("pick:" + self.m["id"])
+        self.ocr_text = ["Bomdod 05:20 05:40\nPeshin 12:30 12:45\nAsr 16:00 16:15\nShom 17:35 17:40\nXufton 19:00 19:15"]
+        self.send(photo=[{"file_id": "a", "file_size": 10}])
+        self.assertEqual([b["callback_data"] for b in self.buttons()][:2], ["col1", "col2"])
+        self.click("col2"); self.click("save")
+        self.assertEqual(self.store.get(self.m["id"])["prayer_times"]["fajr"], "05:40")
+
+    def test_new_mosque_from_location_and_safety(self):
+        self.send(location={"latitude": 41.5, "longitude": 67.5})                               # nothing within 200 m
+        self.assertEqual([b["callback_data"][:4] for b in self.buttons()], ["new:"])
+        self.click(self.buttons()[0]["callback_data"]); self.send(text="Yangi jome")
+        new = [m for m in self.store.list((67.4, 41.4, 67.6, 41.6))]
+        self.assertEqual([m["name"] for m in new], ["Yangi jome"])
+        self.send(photo=[{"file_id": "a"}]); self.click("save")
+        self.assertTrue(self.store.get(new[0]["id"])["prayer_times"])
+        # a photo with no session is refused; groups are ignored; admin button only for admins
+        self.sent.clear(); self.user = {"id": 556, "first_name": "Eve", "language_code": "en"}
+        self.send(photo=[{"file_id": "a"}]); self.assertIn("location", self.msgs()[-1])
+        self.send(text="/admin"); self.assertEqual(len(self.msgs()), 1)                         # no reply to a non-admin
+        self.bot.handle({"update_id": 3, "message": {"chat": {"id": -1, "type": "group"}, "from": self.user, "text": "/id"}})
+        self.assertEqual(len(self.msgs()), 1)
+        self.user = {"id": 7, "first_name": "Owner", "language_code": "ru"}; self.send(text="/admin")
+        self.assertTrue(self.buttons()[0]["web_app"]["url"].endswith("/admin.html"))
+
+
 class AdminLocalOnly(unittest.TestCase):
     def test_tunnelled_requests_cannot_reach_admin(self):
         srv, base = make_server(ADMIN_LOCAL_ONLY="1", ADMIN_ALLOW_TOKEN="1")

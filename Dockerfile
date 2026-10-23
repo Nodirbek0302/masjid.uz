@@ -27,9 +27,11 @@ ENV PYTHONUNBUFFERED=1 \
 
 # tini — PID 1 sifatida SIGTERM'ni to'g'ri uzatadi (`docker compose stop` 10 soniya kutmaydi).
 # curl — deploy paytidagi health tekshiruvi uchun.
+# tesseract-ocr — Telegram bot namoz jadvali rasmidan vaqtlarni o'qishi uchun (rasm uchinchi tomonga yuborilmaydi va saqlanmaydi).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         tini \
         curl \
+        tesseract-ocr tesseract-ocr-eng tesseract-ocr-rus tesseract-ocr-uzb tesseract-ocr-uzb-cyrl \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 

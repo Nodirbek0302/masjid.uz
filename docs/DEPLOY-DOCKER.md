@@ -80,3 +80,11 @@ Token bilan kirish faqat dasturlash uchun (`ADMIN_ALLOW_TOKEN=1`), serverda yoqi
 - `docker-compose.yml` dagi `ADMIN_LOCAL_ONLY`, `TRUST_PROXY`, `DATABASE_URL` compose ichida belgilanadi va `.env` dagi qiymatlardan ustun turadi.
 - Image va compose **bu kompyuterda (Docker yo'q) ishga tushirib ko'rilmagan**: birinchi tekshiruv CI (`docker` job) bo'ladi.
 - Telegram Mini App `WEBAPP_URL` HTTPS bo'lishini talab qiladi: Cloudflare Tunnel buni beradi.
+
+## Telegram: lokatsiya + jadval rasmi orqali vaqtlarni yangilash
+Foydalanuvchi botga masjid **lokatsiyasini** (📎 → Joylashuv) yuboradi → 200 m ichidagi masjidlardan birini tanlaydi (yo'q bo'lsa yangi
+qo'shadi) → **namoz jadvali rasmini** yuboradi (yoki 5 ta vaqtni matn bilan yozadi) → bot topgan vaqtlarni ko'rsatadi → "Ha, saqlash" →
+vaqtlar saqlanadi va bot "shu masjid uchun vaqtlar o'zgardi, tekshirib ko'rishingiz mumkin" deb Mini App'da masjidni ochuvchi tugma beradi
+(`/?m=<id>`). Rasm o'qish serverning o'zida **Tesseract** bilan bajariladi (Docker image'da o'rnatilgan, `rus`, `eng`, `uzb`, `uzb_cyrl`):
+rasm uchinchi tomonga yuborilmaydi va saqlanmaydi. Ishonchsiz o'qilgan vaqt hech qachon tasdiqsiz saqlanmaydi; ikki ustunli jadvalda
+foydalanuvchi jamoat ustunini tanlaydi; soatiga 30 ta rasm chegarasi bor. `bot` profili `DATABASE_URL` ni oladi (compose'da sozlangan).

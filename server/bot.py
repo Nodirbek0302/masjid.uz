@@ -1,25 +1,32 @@
 """Telegram bot (long polling, standard library only).
 
-/start and /help reply in Uzbek; when WEBAPP_URL (public HTTPS) is set, they carry a button that opens the Mini App
-and the chat menu button is set to it. Telegram requires HTTPS for Mini Apps, so without WEBAPP_URL the bot only
-explains that the app is not connected yet. The token is read from the environment/.env and never logged.
+Commands: /start /help /id /admin /cancel.
+Update flow: the user shares a mosque's location -> picks the mosque (or adds a new one) -> sends a photo of the timetable (read with
+Tesseract) or types the five times -> checks the preview -> the times are saved, and the bot says they changed and offers a button to
+open that mosque in the Mini App. A photo is never stored and a wrong reading is never saved without the user's confirmation.
+The token is read from the environment/.env and never logged.
 """
 import json
 import os
 import sys
 import time
-import urllib.parse
 import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import app  # noqa: E402  (load_dotenv)
+import app  # noqa: E402  (load_dotenv, Store)
+import ocr  # noqa: E402
+import timetable  # noqa: E402
 
 app.load_dotenv()
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 WEBAPP_URL = os.environ.get("WEBAPP_URL", "").strip()
 ADMIN_IDS = {int(x) for x in os.environ.get("ADMIN_TG_IDS", "").replace(",", " ").split() if x.lstrip("-").isdigit()}
 API = "https://api.telegram.org/bot%s/" % TOKEN
+NEAR_M = 200.0
+MAX_PHOTO_BYTES = 8 * 1024 * 1024
+PHOTOS_PER_HOUR = 30
+SESSION_S = 1800
 
 
 def call(method, **params):
@@ -32,29 +39,17 @@ def call(method, **params):
     return out["result"]
 
 
+def download(file_id):
+    info = call("getFile", file_id=file_id)
+    if info.get("file_size", 0) > MAX_PHOTO_BYTES:
+        raise ValueError("too large")
+    with urllib.request.urlopen("https://api.telegram.org/file/bot%s/%s" % (TOKEN, info["file_path"]), timeout=60) as r:
+        return r.read(MAX_PHOTO_BYTES + 1)
+
+
 def log(msg):
     sys.stderr.write("%s %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), msg))
     sys.stderr.flush()
-
-
-TEXTS = {
-    "uz": {"hello": "Assalomu alaykum! Bu bepul masjid xaritasi: masjidlarni toping, jamoat namozi vaqtlarini koʻring, "
-                    "yangi masjid qoʻshing yoki notoʻgʻri maʼlumot haqida xabar bering.",
-           "pending": "(Mini App hali ulanmagan: HTTPS manzil kutilmoqda.)", "open": "🕌 Xaritani ochish"},
-    "ru": {"hello": "Ассаламу алайкум! Это бесплатная карта мечетей: находите мечети, смотрите время джамаат-намазов, "
-                    "добавляйте новые мечети и сообщайте о неверных данных.",
-           "pending": "(Mini App ещё не подключено: ожидается HTTPS-адрес.)", "open": "🕌 Открыть карту"},
-    "en": {"hello": "Assalamu alaykum! This is a free mosque map: find mosques, see congregation prayer times, "
-                    "add new mosques and report incorrect information.",
-           "pending": "(The Mini App is not connected yet: waiting for an HTTPS address.)", "open": "🕌 Open the map"},
-}
-
-
-ADMIN_TEXTS = {
-    "uz": {"btn": "🛠 Moderator paneli", "text": "Moderator paneli:", "id": "Sizning Telegram ID: {id}"},
-    "ru": {"btn": "🛠 Панель модератора", "text": "Панель модератора:", "id": "Ваш Telegram ID: {id}"},
-    "en": {"btn": "🛠 Moderator panel", "text": "Moderator panel:", "id": "Your Telegram ID: {id}"},
-}
 
 
 def pick_lang(code):
@@ -67,33 +62,294 @@ def pick_lang(code):
     return "uz"
 
 
-def reply_start(chat_id, language_code=None):
-    tx = TEXTS[pick_lang(language_code)]
-    if WEBAPP_URL.startswith("https://"):
-        markup = {"inline_keyboard": [[{"text": tx["open"], "web_app": {"url": WEBAPP_URL}}]]}
-        call("sendMessage", chat_id=chat_id, text=tx["hello"], reply_markup=markup)
-    else:
-        call("sendMessage", chat_id=chat_id, text=tx["hello"] + "\n\n" + tx["pending"])
+TEXTS = {
+    "uz": {
+        "hello": "Assalomu alaykum! Bu bepul masjid xaritasi: masjidlarni toping, jamoat namozi vaqtlarini koʻring, yangi masjid qoʻshing yoki "
+                 "notoʻgʻri maʼlumot haqida xabar bering.\n\n📍 Vaqtlarni yangilash: masjid lokatsiyasini yuboring (📎 → Joylashuv), keyin "
+                 "namoz vaqtlari jadvalining rasmini yuboring. Vaqtlarni oʻzim oʻqib yangilayman.",
+        "pending": "(Mini App hali ulanmagan: HTTPS manzil kutilmoqda.)", "open": "🕌 Xaritani ochish",
+        "pick": "200 m ichida quyidagi masjidlar bor. Qaysi biri?", "none": "200 m ichida masjid topilmadi. Yangi masjid sifatida qoʻshamizmi?",
+        "new": "➕ Yangi masjid qoʻshish", "noname": "Nomsiz masjid",
+        "ask_name": "Masjid nomini yozing (yoki /skip: nomsiz qoʻshish):", "created": "✅ Masjid qoʻshildi.",
+        "send_photo": "📷 «{name}» uchun namoz vaqtlari jadvalining rasmini yuboring.\nYoki 5 ta vaqtni matn bilan yozing: 05:20 12:30 16:00 17:35 19:00",
+        "need_loc": "Avval masjid lokatsiyasini yuboring (📎 → Joylashuv).", "reading": "🔎 Rasm oʻqilmoqda…",
+        "no_ocr": "Rasmni oʻqish hozircha ishlamayapti. Vaqtlarni matn bilan yozing: 05:20 12:30 16:00 17:35 19:00",
+        "unreadable": "Rasmdan vaqtlarni ishonchli oʻqiy olmadim.{found}\nVaqtlarni matn bilan yozing: 05:20 12:30 16:00 17:35 19:00",
+        "found": " Topilganlari: {t}.", "confirm": "«{name}» uchun jamoat vaqtlari:\n{t}\n\nToʻgʻrimi?",
+        "two_cols": "Jadvalda ikki ustun bor. Jamoat vaqti qaysi?\n\n1) {a}\n2) {b}",
+        "v1": "1-ustun", "v2": "2-ustun", "yes": "✅ Ha, saqlash", "manual": "✏️ Qoʻlda yozaman", "cancel": "❌ Bekor",
+        "manual_ask": "Vaqtlarni yozing: Bomdod Peshin Asr Shom Xufton, masalan 05:20 12:30 16:00 17:35 19:00",
+        "saved": "✅ Saqlandi. «{name}» masjidi uchun jamoat vaqtlari oʻzgardi, tekshirib koʻrishingiz mumkin. Rahmat, boshqalarga ham foydali boʻladi!",
+        "see": "🕌 Masjidni koʻrish", "cancelled": "Bekor qilindi.", "expired": "Sessiya tugadi. Masjid lokatsiyasini qayta yuboring.",
+        "error": "Xatolik yuz berdi. Keyinroq urinib koʻring.", "limit": "Juda koʻp urinish. Biroz kuting.",
+        "bad_times": "Vaqtlar tushunarsiz. 5 ta vaqtni shu tartibda yozing: 05:20 12:30 16:00 17:35 19:00",
+        "names": ["Bomdod", "Peshin", "Asr", "Shom", "Xufton"],
+        "admin_btn": "🛠 Moderator paneli", "admin_text": "Moderator paneli:", "id": "Sizning Telegram ID: {id}",
+    },
+    "ru": {
+        "hello": "Ассаламу алайкум! Это бесплатная карта мечетей: находите мечети, смотрите время джамаат-намазов, добавляйте новые мечети "
+                 "и сообщайте о неверных данных.\n\n📍 Обновить время: отправьте геопозицию мечети (📎 → Геопозиция), затем фото расписания "
+                 "намазов. Я прочитаю время сам и обновлю.",
+        "pending": "(Mini App ещё не подключено: ожидается HTTPS-адрес.)", "open": "🕌 Открыть карту",
+        "pick": "В радиусе 200 м есть такие мечети. Какая из них?", "none": "В радиусе 200 м мечетей нет. Добавить как новую?",
+        "new": "➕ Добавить новую мечеть", "noname": "Мечеть без названия",
+        "ask_name": "Напишите название мечети (или /skip: добавить без названия):", "created": "✅ Мечеть добавлена.",
+        "send_photo": "📷 Отправьте фото расписания намазов для «{name}».\nИли напишите 5 времён текстом: 05:20 12:30 16:00 17:35 19:00",
+        "need_loc": "Сначала отправьте геопозицию мечети (📎 → Геопозиция).", "reading": "🔎 Читаю фото…",
+        "no_ocr": "Чтение фото сейчас недоступно. Напишите время текстом: 05:20 12:30 16:00 17:35 19:00",
+        "unreadable": "Не удалось надёжно прочитать время на фото.{found}\nНапишите время текстом: 05:20 12:30 16:00 17:35 19:00",
+        "found": " Найдено: {t}.", "confirm": "Время джамаата для «{name}»:\n{t}\n\nВерно?",
+        "two_cols": "В расписании два столбца. Какой из них время джамаата?\n\n1) {a}\n2) {b}",
+        "v1": "1-й столбец", "v2": "2-й столбец", "yes": "✅ Да, сохранить", "manual": "✏️ Введу вручную", "cancel": "❌ Отмена",
+        "manual_ask": "Напишите время: Фаджр Зухр Аср Магриб Иша, например 05:20 12:30 16:00 17:35 19:00",
+        "saved": "✅ Сохранено. Время джамаата мечети «{name}» изменено, можете проверить. Спасибо, это поможет и другим!",
+        "see": "🕌 Посмотреть мечеть", "cancelled": "Отменено.", "expired": "Сессия истекла. Отправьте геопозицию мечети ещё раз.",
+        "error": "Произошла ошибка. Попробуйте позже.", "limit": "Слишком много попыток. Подождите немного.",
+        "bad_times": "Время не распознано. Напишите 5 времён в таком порядке: 05:20 12:30 16:00 17:35 19:00",
+        "names": ["Фаджр", "Зухр", "Аср", "Магриб", "Иша"],
+        "admin_btn": "🛠 Панель модератора", "admin_text": "Панель модератора:", "id": "Ваш Telegram ID: {id}",
+    },
+    "en": {
+        "hello": "Assalamu alaykum! This is a free mosque map: find mosques, see congregation prayer times, add new mosques and report "
+                 "incorrect information.\n\n📍 To update times: share the mosque's location (📎 → Location), then send a photo of its "
+                 "prayer timetable. I will read the times and update them.",
+        "pending": "(The Mini App is not connected yet: waiting for an HTTPS address.)", "open": "🕌 Open the map",
+        "pick": "These mosques are within 200 m. Which one?", "none": "No mosque within 200 m. Add it as a new mosque?",
+        "new": "➕ Add a new mosque", "noname": "Unnamed mosque",
+        "ask_name": "Type the mosque's name (or /skip to add it without a name):", "created": "✅ Mosque added.",
+        "send_photo": "📷 Send a photo of the prayer timetable for “{name}”.\nOr type the 5 times: 05:20 12:30 16:00 17:35 19:00",
+        "need_loc": "Please share the mosque's location first (📎 → Location).", "reading": "🔎 Reading the photo…",
+        "no_ocr": "Photo reading is not available right now. Type the times: 05:20 12:30 16:00 17:35 19:00",
+        "unreadable": "I could not read the times from the photo reliably.{found}\nType the times: 05:20 12:30 16:00 17:35 19:00",
+        "found": " Found: {t}.", "confirm": "Congregation times for “{name}”:\n{t}\n\nIs this right?",
+        "two_cols": "The timetable has two columns. Which one is the congregation time?\n\n1) {a}\n2) {b}",
+        "v1": "Column 1", "v2": "Column 2", "yes": "✅ Yes, save", "manual": "✏️ I'll type them", "cancel": "❌ Cancel",
+        "manual_ask": "Type the times: Fajr Dhuhr Asr Maghrib Isha, e.g. 05:20 12:30 16:00 17:35 19:00",
+        "saved": "✅ Saved. The congregation times for “{name}” have changed, you can check them. Thank you, it helps others too!",
+        "see": "🕌 View the mosque", "cancelled": "Cancelled.", "expired": "The session expired. Please share the mosque's location again.",
+        "error": "Something went wrong. Please try again later.", "limit": "Too many attempts. Please wait a moment.",
+        "bad_times": "I could not understand the times. Type 5 times in this order: 05:20 12:30 16:00 17:35 19:00",
+        "names": ["Fajr", "Dhuhr", "Asr", "Maghrib", "Isha"],
+        "admin_btn": "🛠 Moderator panel", "admin_text": "Moderator panel:", "id": "Your Telegram ID: {id}",
+    },
+}
 
 
-def reply_admin(chat_id, user_id, language_code=None):
-    """/admin: the moderator panel button, only for allow-listed Telegram ids. Everyone else gets no reply."""
-    if user_id not in ADMIN_IDS or not WEBAPP_URL.startswith("https://"):
-        return
-    tx = ADMIN_TEXTS[pick_lang(language_code)]
-    markup = {"inline_keyboard": [[{"text": tx["btn"], "web_app": {"url": WEBAPP_URL.rstrip("/") + "/admin.html"}}]]}
-    call("sendMessage", chat_id=chat_id, text=tx["text"], reply_markup=markup)
+def fmt_times(tx, times):
+    return "\n".join("%s  %s" % (n, times.get(k, "—")) for n, k in zip(tx["names"], timetable.ORDER))
 
 
-def reply_id(chat_id, user_id, language_code=None):
-    call("sendMessage", chat_id=chat_id, text=ADMIN_TEXTS[pick_lang(language_code)]["id"].format(id=user_id))
+class Bot:
+    """All conversation logic; the Telegram API, the database and the OCR are injected so it can be tested without a network."""
+
+    def __init__(self, api, store, ocr_read=None, fetch_photo=None, webapp_url="", admin_ids=()):
+        self.api, self.store, self.ocr_read, self.fetch_photo = api, store, ocr_read, fetch_photo
+        self.webapp_url, self.admin_ids = webapp_url, set(admin_ids)
+        self.state, self.photo_log = {}, {}
+
+    # ---- helpers
+    def say(self, chat_id, text, buttons=None):
+        kw = {"reply_markup": {"inline_keyboard": buttons}} if buttons else {}
+        self.api("sendMessage", chat_id=chat_id, text=text, **kw)
+
+    def identity(self, user):
+        actor = "tg:%d" % user["id"]
+        info = {"kind": "telegram", "platform": "telegram-bot", "user_agent": "telegram-bot",
+                "telegram": {k: user.get(k) for k in ("id", "username", "first_name", "last_name", "language_code")}}
+        return actor, info
+
+    def session(self, uid):
+        st = self.state.get(uid)
+        if st and time.time() - st["ts"] > SESSION_S:
+            self.state.pop(uid, None)
+            return None
+        return st
+
+    def allow_photo(self, uid):
+        now = time.time()
+        q = [t for t in self.photo_log.get(uid, []) if now - t < 3600]
+        ok = len(q) < PHOTOS_PER_HOUR
+        if ok:
+            q.append(now)
+        self.photo_log[uid] = q
+        return ok
+
+    def open_button(self, mosque_id, tx):
+        if not self.webapp_url.startswith("https://"):
+            return None
+        return [[{"text": tx["see"], "web_app": {"url": self.webapp_url.rstrip("/") + "/?m=" + mosque_id}}]]
+
+    # ---- entry point
+    def handle(self, update):
+        if "callback_query" in update:
+            return self.on_callback(update["callback_query"])
+        msg = update.get("message") or {}
+        if msg.get("chat", {}).get("type") != "private" or not msg.get("from"):
+            return
+        user, chat = msg["from"], msg["chat"]["id"]
+        tx = TEXTS[pick_lang(user.get("language_code"))]
+        try:
+            if msg.get("location"):
+                return self.on_location(chat, user, tx, msg["location"])
+            if msg.get("photo"):
+                return self.on_photo(chat, user, tx, msg["photo"])
+            text = (msg.get("text") or "").strip()
+            if text.startswith("/"):
+                return self.on_command(chat, user, tx, text)
+            if text:
+                return self.on_text(chat, user, tx, text)
+        except Exception as e:                                 # never let one conversation crash the bot
+            log("handler error: %s" % type(e).__name__)
+            try:
+                self.say(chat, tx["error"])
+            except Exception:
+                pass
+
+    def on_command(self, chat, user, tx, text):
+        cmd = text.split("@")[0].split(" ")[0].lower()
+        uid = user["id"]
+        if cmd in ("/start", "/help"):
+            if self.webapp_url.startswith("https://"):
+                self.say(chat, tx["hello"], [[{"text": tx["open"], "web_app": {"url": self.webapp_url}}]])
+            else:
+                self.say(chat, tx["hello"] + "\n\n" + tx["pending"])
+        elif cmd == "/id":
+            self.say(chat, tx["id"].format(id=uid))
+        elif cmd == "/admin":
+            if uid in self.admin_ids and self.webapp_url.startswith("https://"):
+                self.say(chat, tx["admin_text"], [[{"text": tx["admin_btn"], "web_app": {"url": self.webapp_url.rstrip("/") + "/admin.html"}}]])
+        elif cmd == "/cancel":
+            self.state.pop(uid, None)
+            self.say(chat, tx["cancelled"])
+        elif cmd == "/skip":
+            st = self.session(uid)
+            if st and st["step"] == "await_name":
+                self.create_mosque(chat, user, tx, st, None)
+
+    # ---- location -> choose mosque
+    def on_location(self, chat, user, tx, loc):
+        lat, lon = app.clean_coord(loc.get("latitude"), loc.get("longitude"))
+        near = [m for m in self.store.nearest(lat, lon, 3) if m["distance_m"] <= NEAR_M]
+        rows = [[{"text": "%s · %d m" % (m["name"] or tx["noname"], round(m["distance_m"])), "callback_data": "pick:" + m["id"]}] for m in near]
+        rows.append([{"text": tx["new"], "callback_data": "new:%.6f,%.6f" % (lat, lon)}])
+        self.say(chat, tx["pick"] if near else tx["none"], rows)
+
+    def on_callback(self, cb):
+        user, data = cb["from"], cb.get("data", "")
+        chat = cb["message"]["chat"]["id"]
+        tx = TEXTS[pick_lang(user.get("language_code"))]
+        uid = user["id"]
+        try:
+            self.api("answerCallbackQuery", callback_query_id=cb["id"])
+        except Exception:
+            pass
+        try:
+            kind, _, arg = data.partition(":")
+            if kind == "pick":
+                m = self.store.get(arg)
+                self.state[uid] = {"step": "await_times", "mosque_id": m["id"], "name": m["name"] or tx["noname"], "ts": time.time()}
+                self.say(chat, tx["send_photo"].format(name=self.state[uid]["name"]))
+            elif kind == "new":
+                lat, lon = (float(x) for x in arg.split(","))
+                self.state[uid] = {"step": "await_name", "lat": lat, "lon": lon, "ts": time.time()}
+                self.say(chat, tx["ask_name"])
+            elif kind in ("save", "col1", "col2"):
+                st = self.session(uid)
+                if not st or "times" not in st:
+                    return self.say(chat, tx["expired"])
+                times = st["alt"] if kind == "col2" and st.get("alt") else st["times"]
+                if kind in ("col1", "col2"):
+                    st["times"] = times
+                    return self.preview(chat, tx, st)
+                self.save(chat, user, tx, st)
+            elif kind == "manual":
+                self.say(chat, tx["manual_ask"])
+            elif kind == "cancel":
+                self.state.pop(uid, None)
+                self.say(chat, tx["cancelled"])
+        except app.ApiError:
+            self.say(chat, tx["error"])
+        except Exception as e:
+            log("callback error: %s" % type(e).__name__)
+            self.say(chat, tx["error"])
+
+    def create_mosque(self, chat, user, tx, st, name):
+        actor, info = self.identity(user)
+        m = self.store.create({"lat": st["lat"], "lon": st["lon"], "name": name, "force": True}, actor, info)   # the user chose "new" explicitly
+        self.state[user["id"]] = {"step": "await_times", "mosque_id": m["id"], "name": m["name"] or tx["noname"], "ts": time.time()}
+        self.say(chat, tx["created"])
+        self.say(chat, tx["send_photo"].format(name=self.state[user["id"]]["name"]))
+
+    # ---- text: a name for a new mosque, or typed times
+    def on_text(self, chat, user, tx, text):
+        st = self.session(user["id"])
+        if not st:
+            return self.say(chat, tx["need_loc"])
+        if st["step"] == "await_name":
+            return self.create_mosque(chat, user, tx, st, text[:200])
+        r = timetable.parse(text)
+        if not r["complete"] or r["alt"]:
+            return self.say(chat, tx["bad_times"])
+        st.update(step="confirm", times=r["times"], alt=None, ts=time.time())
+        self.preview(chat, tx, st)
+
+    # ---- photo -> OCR -> preview
+    def on_photo(self, chat, user, tx, photos):
+        st = self.session(user["id"])
+        if not st or st["step"] not in ("await_times", "confirm"):
+            return self.say(chat, tx["need_loc"])
+        if not self.allow_photo(user["id"]):
+            return self.say(chat, tx["limit"])
+        if not self.ocr_read or not self.fetch_photo:
+            return self.say(chat, tx["no_ocr"])
+        self.say(chat, tx["reading"])
+        best = max(photos, key=lambda p: p.get("file_size", 0) or p.get("width", 0))
+        texts = self.ocr_read(self.fetch_photo(best["file_id"]))
+        parsed = [timetable.parse(t) for t in texts]
+        parsed.sort(key=lambda r: (r["complete"], len(r["times"]), bool(r["alt"])), reverse=True)
+        r = parsed[0] if parsed else {"complete": False, "times": {}, "alt": None}
+        if r.get("alt"):
+            st.update(step="confirm", times=r["times"], alt=r["alt"], ts=time.time())
+            return self.say(chat, tx["two_cols"].format(a=fmt_times(tx, r["times"]), b=fmt_times(tx, r["alt"])),
+                            [[{"text": tx["v1"], "callback_data": "col1"}, {"text": tx["v2"], "callback_data": "col2"}],
+                             [{"text": tx["manual"], "callback_data": "manual"}, {"text": tx["cancel"], "callback_data": "cancel"}]])
+        if not r["complete"]:
+            found = tx["found"].format(t=", ".join("%s %s" % (n, r["times"][k]) for n, k in zip(tx["names"], timetable.ORDER) if k in r["times"])) if r["times"] else ""
+            return self.say(chat, tx["unreadable"].format(found=found))
+        st.update(step="confirm", times=r["times"], alt=None, ts=time.time())
+        self.preview(chat, tx, st)
+
+    def preview(self, chat, tx, st):
+        self.say(chat, tx["confirm"].format(name=st["name"], t=fmt_times(tx, st["times"])),
+                 [[{"text": tx["yes"], "callback_data": "save"}], [{"text": tx["manual"], "callback_data": "manual"}, {"text": tx["cancel"], "callback_data": "cancel"}]])
+
+    # ---- save
+    def save(self, chat, user, tx, st):
+        actor, info = self.identity(user)
+        for _ in range(2):                                        # one retry if somebody edited the mosque meanwhile
+            cur = self.store.get(st["mosque_id"])
+            try:
+                self.store.edit(st["mosque_id"], {"expected_version": cur["version"], "prayer_times": st["times"],
+                                                  "note": "Telegram bot (photo/text)"}, actor, info)
+                break
+            except app.ApiError as e:
+                if e.code != "version_conflict":
+                    raise
+        else:
+            return self.say(chat, tx["error"])
+        self.state.pop(user["id"], None)
+        self.say(chat, tx["saved"].format(name=st["name"]), self.open_button(st["mosque_id"], tx))
+
+
+def real_ocr(data):
+    return ocr.read_texts(data) if ocr.available() else None
 
 
 def main():
     if not TOKEN:
         sys.exit("TELEGRAM_BOT_TOKEN is not set")
     me = call("getMe")
-    log("bot @%s started; mini app url: %s" % (me["username"], WEBAPP_URL or "(not set)"))
+    log("bot @%s started; mini app url: %s; photo reading: %s" % (me["username"], WEBAPP_URL or "(not set)", "on" if ocr.available() else "off (no tesseract)"))
     call("deleteWebhook", drop_pending_updates=False)    # long polling and webhooks are mutually exclusive
     cmds = {"uz": ("Boshlash", "Yordam"), "ru": ("Начать", "Помощь"), "en": ("Start", "Help")}
     for lc, (d1, d2) in cmds.items():             # command menu in the user's own language; Uzbek is the default
@@ -107,26 +363,14 @@ def main():
             log("could not set admin commands for %s: %s" % (aid, type(e).__name__))
     if WEBAPP_URL.startswith("https://"):
         call("setChatMenuButton", menu_button={"type": "web_app", "text": "Xarita", "web_app": {"url": WEBAPP_URL}})
+    cfg = app.Config()
+    bot = Bot(call, app.Store(cfg), real_ocr if ocr.available() else None, download, WEBAPP_URL, ADMIN_IDS)
     offset, backoff = None, 1
     while True:
         try:
-            for u in call("getUpdates", offset=offset, timeout=30, allowed_updates=["message"]):
+            for u in call("getUpdates", offset=offset, timeout=30, allowed_updates=["message", "callback_query"]):
                 offset = u["update_id"] + 1
-                msg = u.get("message") or {}
-                text = (msg.get("text") or "").strip()
-                if msg.get("chat", {}).get("type") != "private":
-                    continue
-                cmd = text.split("@")[0].split(" ")[0]
-                uid, lc = (msg.get("from") or {}).get("id"), (msg.get("from") or {}).get("language_code")
-                if cmd in ("/start", "/help"):
-                    reply_start(msg["chat"]["id"], lc)
-                elif cmd == "/id":
-                    reply_id(msg["chat"]["id"], uid, lc)
-                elif cmd == "/admin":
-                    reply_admin(msg["chat"]["id"], uid, lc)
-                else:
-                    continue
-                log("handled %s" % cmd)
+                bot.handle(u)
             backoff = 1
         except Exception as e:                             # network blips, rate limits: retry with backoff
             log("poll error: %s" % type(e).__name__)

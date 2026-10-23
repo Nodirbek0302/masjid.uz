@@ -278,7 +278,9 @@
       map.on("mouseenter", "mosques", function () { map.getCanvas().style.cursor = "pointer"; });
       map.on("mouseleave", "mosques", function () { map.getCanvas().style.cursor = ""; });
       map.on("click", onMapClick);
-      if (!q) locate(start);
+      var deep = new URLSearchParams(location.search).get("m");          // ?m=<mosque id>: open that mosque (bot links, shares)
+      if (deep && /^[0-9a-f-]{36}$/.test(deep)) openMosque(deep);
+      if (!q && !deep) locate(start);
       var errs = 0;
       map.on("error", function () {                   // tile/style/sprite request failures: say so instead of a silent blank map
         if (++errs >= 3 && !map.loaded()) mapProblem(T("map.err_tiles"));

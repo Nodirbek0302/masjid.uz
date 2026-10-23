@@ -82,14 +82,16 @@ services:
     env_file:
       - path: .env
         required: false
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-masjid}:${POSTGRES_PASSWORD:-masjid}@postgres:5432/${POSTGRES_DB:-masjid}
     healthcheck:
       disable: true
     depends_on:
-      - web
+      web: {condition: service_healthy}
     deploy:
       resources:
         limits:
-          memory: 128M
+          memory: 384M
 
   # OpenStreetMap'dan masjidlar: ishga tushganda bir marta, keyin har OSM_SYNC_HOURS (standart 24) soatda.
   # Tahrirlangan yozuvlarga tegmaydi. Overpass ochiq xizmat: kuniga 1 marta — ahloqli chastota.
