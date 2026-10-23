@@ -29,7 +29,8 @@
   </div>
 </header>
 <main>
-  <form id="login" class="login card">
+  <div id="gate" class="login card" hidden><p id="gate-text"></p></div>
+  <form id="login" class="login card" hidden>
     <p class="muted" data-i18n="adm.login_hint">Admin tokenni kiriting.</p>
     <div class="login-row">
       <input id="token" type="password" autocomplete="off" data-i18n-ph="adm.token_ph" spellcheck="false">

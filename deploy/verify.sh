@@ -18,8 +18,9 @@ if [ "$n" -gt 0 ]; then ok "masjidlar bazada: $n ta"; else bad "bazada masjid yo
 chk "qidiruv ishlaydi (/api/search)"             '[ "$(code "$base/api/search?q=ma")" = 200 ]'
 chk "gzip siqish yoqilgan"                       'curl -sI -m 15 -H "Accept-Encoding: gzip" "$base/vendor/maplibre-gl.js" | grep -qi "content-encoding: gzip"'
 chk "xavfsizlik sarlavhalari (CSP)"              'curl -sI -m 15 "$base/" | grep -qi content-security-policy'
-chk "admin ommaviy manzildan YOPIQ (404 kutiladi)" '[ "$(code -H "X-Forwarded-For: 1.2.3.4" "$base/admin.html")" = 404 ] || [ "$base" != "${base#http://127}" ]'
-chk "admin API ommaviy manzildan YOPIQ"          '[ "$(code -H "X-Forwarded-For: 1.2.3.4" "$base/api/admin/overview")" = 404 ] || [ "$base" != "${base#http://127}" ]'
+chk "admin API Telegram imzosiz YOPIQ (401 kutiladi)" '[ "$(code "$base/api/admin/overview")" = 401 ]'
+chk "admin API soxta Telegram ma'lumoti bilan YOPIQ" '[ "$(code -H "X-Telegram-Init-Data: user=%7B%22id%22%3A1%7D&hash=00" "$base/api/admin/overview")" = 401 ]'
+chk "admin API eski token bilan YOPIQ" '[ "$(code -H "Authorization: Bearer test" "$base/api/admin/overview")" = 401 ]'
 chk "o'chirib bo'lmaydi: DELETE 404/405"         'c=$(code -X DELETE "$base/api/mosques/00000000-0000-0000-0000-000000000000"); [ "$c" = 404 ] || [ "$c" = 405 ]'
 case "$base" in
   https://*) chk "HTTPS sertifikati yaroqli"     'curl -fsS -m 15 -o /dev/null "$base/"'

@@ -125,7 +125,7 @@ jobs:
           done
           test "${ok:-0}" = "1" || { docker compose logs web; exit 1; }
           curl -fsS http://127.0.0.1:18080/ | grep -qi maplibre
-          # Ommaviy so'rovda (proxy sarlavhasi bilan) admin yopiq bo'lishi shart.
-          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'X-Forwarded-For: 1.2.3.4' http://127.0.0.1:18080/admin.html)
-          test "$code" = "404"
+          # Telegram imzosisiz admin API yopiq bo'lishi shart.
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/api/admin/overview)
+          test "$code" = "401"
           docker compose down -v

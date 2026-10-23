@@ -56,6 +56,10 @@ class Config:
         load_dotenv()
         self.database_url = env("DATABASE_URL", "postgresql://masjid@127.0.0.1:5432/masjid")
         self.admin_token = env("ADMIN_TOKEN", "")
+        # Moderator access is by Telegram user id only (signature-verified Mini App launch data).
+        self.admin_tg_ids = {int(x) for x in re.split(r"[,\s]+", env("ADMIN_TG_IDS", "").strip()) if x.strip().lstrip("-").isdigit()}
+        self.allow_admin_token = env("ADMIN_ALLOW_TOKEN", "0") == "1"      # development only; off by default
+        self.admin_session_s = int(env("ADMIN_SESSION_SECONDS", "7200"))   # max age of the signed launch data for admin calls
         self.bot_token = env("TELEGRAM_BOT_TOKEN", "")
         self.dup_radius_m = float(env("DUPLICATE_RADIUS_M", "50"))
         self.report_threshold = int(env("REPORT_THRESHOLD", "3"))
@@ -63,7 +67,7 @@ class Config:
         self.prayer = {"fajr_angle": float(env("PRAYER_FAJR_ANGLE", "15")), "isha_angle": float(env("PRAYER_ISHA_ANGLE", "15")),
                        "asr_factor": int(env("PRAYER_ASR_FACTOR", "2")),
                        "dhuhr_offset_min": int(env("PRAYER_DHUHR_OFFSET_MIN", "5"))}     # Asr: 1 = Shafi'i, 2 = Hanafi
-        self.actor_salt = env("ACTOR_SALT", "") or env("ADMIN_TOKEN", "") or "masjid-uz"
+        self.actor_salt = env("ACTOR_SALT", "") or env("TELEGRAM_BOT_TOKEN", "") or env("ADMIN_TOKEN", "") or "masjid-uz"
         self.admin_local_only = env("ADMIN_LOCAL_ONLY", "0") == "1"
         self.trust_proxy = env("TRUST_PROXY", "0") == "1"
         self.rate_limit = int(env("WRITE_RATE_PER_MIN", "30"))
@@ -379,7 +383,7 @@ class Store:
             out = []
             for r in cur.fetchall():
                 a = r["actor"]
-                role = None if a is None else "moderator" if a == "admin" else "osm" if a == "import:osm" else "user"
+                role = None if a is None else "moderator" if a == "admin" or a.startswith("admin:") else "osm" if a == "import:osm" else "user"
                 out.append({"seq": r["seq"], "mosque_id": str(r["mosque_id"]), "version": r["version"], "action": r["action"],
                             "actor": role, "at": iso(r["at"]), "changes": r["changes"], "note": r["note"]})
             return out
@@ -464,7 +468,7 @@ def snapshot(info):
     return {k: info.get(k) for k in ("kind", "platform", "os_version", "app_version", "device_model", "user_agent") if info.get(k)}
 
 
-def verify_telegram(init_data, bot_token):
+def verify_telegram(init_data, bot_token, max_age=86400):
     """Validate Telegram WebApp initData (HMAC per Telegram docs). Returns the signed user dict or None."""
     try:
         pairs = dict(parse_qsl(init_data, keep_blank_values=True))
@@ -474,7 +478,7 @@ def verify_telegram(init_data, bot_token):
         calc = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
         if not hmac.compare_digest(calc, got):
             return None
-        if time.time() - int(pairs.get("auth_date", "0")) > 86400:
+        if time.time() - int(pairs.get("auth_date", "0")) > max_age:
             return None
         user = json.loads(pairs["user"])
         return user if isinstance(user.get("id"), int) else None
@@ -608,10 +612,19 @@ def make_handler(cfg, store):
         def admin_blocked(self, path):
             return cfg.admin_local_only and (path.startswith("/api/admin/") or path.startswith("/admin")) and not self.local_request()
 
-        def is_admin(self):
-            tok = self.headers.get("Authorization", "")
-            return bool(cfg.admin_token) and hmac.compare_digest(
-                tok.encode(), ("Bearer " + cfg.admin_token).encode())
+        def admin_actor(self):
+            """-> 'admin:<telegram id>' for a signature-verified Telegram user on the allow-list, else None.
+            The only other way in is the development token, and only when ADMIN_ALLOW_TOKEN=1."""
+            tg = self.headers.get("X-Telegram-Init-Data")
+            if tg and cfg.bot_token and cfg.admin_tg_ids:
+                user = verify_telegram(tg, cfg.bot_token, cfg.admin_session_s)
+                if user and user["id"] in cfg.admin_tg_ids:
+                    return "admin:%d" % user["id"]
+            if cfg.allow_admin_token and cfg.admin_token:
+                tok = self.headers.get("Authorization", "")
+                if hmac.compare_digest(tok.encode(), ("Bearer " + cfg.admin_token).encode()):
+                    return "admin:token"
+            return None
 
         # -- routing
         def handle_any(self, method):
@@ -638,7 +651,8 @@ def make_handler(cfg, store):
                 return self.send_json(200, {"style_url": cfg.tile_style_url,
                                             "duplicate_radius_m": cfg.dup_radius_m,
                                             "show_tile_mosques": cfg.show_tile_mosques,
-                                            "prayer": cfg.prayer})
+                                            "prayer": cfg.prayer,
+                                            "admin_token_login": cfg.allow_admin_token})
             if path == "/api/health":
                 return self.send_json(200, {"ok": True})
             if path == "/api/mosques" and method == "GET":
@@ -676,9 +690,10 @@ def make_handler(cfg, store):
                 ip = self.client_ip()
                 if not admin_limiter.allow(ip, count=False):
                     raise ApiError(429, "rate_limited", "too many failed admin attempts")
-                if not self.is_admin():
+                admin = self.admin_actor()
+                if not admin:
                     admin_limiter.allow(ip)             # count failures only
-                    raise ApiError(401, "unauthorized", "admin token required")
+                    raise ApiError(401, "unauthorized", "moderator access requires an allow-listed Telegram account")
                 if path == "/api/admin/actors" and method == "GET":
                     return self.send_json(200, {"items": store.actors(q.get("q"), int(q.get("limit", 50)))})
                 if path == "/api/admin/overview" and method == "GET":
@@ -690,7 +705,7 @@ def make_handler(cfg, store):
                 m = re.fullmatch(r"/api/admin/mosques/" + ID + "/(archive|restore|verify|dismiss)", path)
                 if m and method == "POST":
                     body = self.body_json()
-                    return self.send_json(200, store.moderate(m.group(1), m.group(2), "admin", body.get("note")))
+                    return self.send_json(200, store.moderate(m.group(1), m.group(2), admin, body.get("note")))
             raise ApiError(404, "not_found", "no such endpoint")
 
         def static(self, path):
@@ -753,8 +768,10 @@ def build_server(cfg):
 
 if __name__ == "__main__":
     cfg = Config()
-    if not cfg.admin_token:
-        sys.stderr.write("WARNING: ADMIN_TOKEN not set; moderation endpoints disabled\n")
+    if not cfg.admin_tg_ids:
+        sys.stderr.write("WARNING: ADMIN_TG_IDS not set; moderation is disabled for everyone\n")
+    elif not cfg.bot_token:
+        sys.stderr.write("WARNING: TELEGRAM_BOT_TOKEN not set; Telegram moderator login cannot be verified\n")
     srv = build_server(cfg)
     sys.stderr.write("listening on http://%s:%d\n" % (cfg.host, cfg.port))
     srv.serve_forever()

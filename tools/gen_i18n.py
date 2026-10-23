@@ -133,6 +133,8 @@ UZ = {
     "adm.who_system": "tizim", "adm.who_telegram": "Telegram", "adm.who_mobile": "mobil ilova", "adm.who_web": "veb", "adm.who_moderator": "moderator",
     "adm.token_ph": "ADMIN_TOKEN",
     "adm.open_map": "Xarita",
+    "adm.tg_only": "Moderator paneli faqat Telegram bot orqali, ruxsat berilgan hisob uchun ochiladi.",
+    "adm.denied": "Ruxsat yoʻq yoki sessiya tugagan. Panelni botdan qayta oching.",
     "map.zoom_in": "Yaqinlashtirish", "map.zoom_out": "Uzoqlashtirish", "map.locate": "Mening joyimni topish", "map.attrib": "Maʼlumot manbalari",
 }
 
@@ -254,6 +256,8 @@ RU = {
     "adm.who_system": "система", "adm.who_telegram": "Telegram", "adm.who_mobile": "мобильное приложение", "adm.who_web": "веб", "adm.who_moderator": "модератор",
     "adm.token_ph": "ADMIN_TOKEN",
     "adm.open_map": "Карта",
+    "adm.tg_only": "Панель модератора открывается только через Telegram-бота и только для разрешённого аккаунта.",
+    "adm.denied": "Нет доступа или сессия истекла. Откройте панель из бота заново.",
     "map.zoom_in": "Приблизить", "map.zoom_out": "Отдалить", "map.locate": "Найти меня", "map.attrib": "Источники данных",
 }
 
@@ -375,6 +379,8 @@ EN = {
     "adm.who_system": "system", "adm.who_telegram": "Telegram", "adm.who_mobile": "mobile app", "adm.who_web": "web", "adm.who_moderator": "moderator",
     "adm.token_ph": "ADMIN_TOKEN",
     "adm.open_map": "Map",
+    "adm.tg_only": "The moderator panel opens only through the Telegram bot, for an allow-listed account.",
+    "adm.denied": "Access denied or the session expired. Reopen the panel from the bot.",
     "map.zoom_in": "Zoom in", "map.zoom_out": "Zoom out", "map.locate": "Find my location", "map.attrib": "Data sources",
 }
 

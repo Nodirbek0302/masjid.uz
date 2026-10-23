@@ -16,7 +16,8 @@ Sertifikat (HTTPS) domen server IP'siga qaragandan keyingina olinadi.
 ## C. Sirlar (kompyuterda, `.env.server`)
 - `OSM_CONTACT=` — email (Overpass'ga yoziladi).
 - Bot: @BotFather → `/revoke` → yangi token → `TELEGRAM_BOT_TOKEN=...` va `COMPOSE_PROFILES=osm,https,bot`.
-- `POSTGRES_PASSWORD`, `ADMIN_TOKEN` tayyor (tasodifiy). Ularni saqlab qo'ying (parol menejeri): `.env.server` faqat shu kompyuterda.
+- `ADMIN_TG_IDS=` — **o'zingizning Telegram ID**ingiz: botga `/id` yozing, javobdagi raqamni qo'ying (bir nechta bo'lsa vergul bilan).
+- `POSTGRES_PASSWORD`, `ACTOR_SALT` tayyor (tasodifiy). Ularni saqlab qo'ying (parol menejeri): `.env.server` faqat shu kompyuterda.
 
 ## D. O'rnatish
 ```bash
@@ -31,13 +32,13 @@ sog'lomlik kutish → kunlik zaxira cron'i (03:15, 14 kun).
 ```bash
 ./deploy/verify.sh https://nodir0302.duckdns.org
 ```
-Tekshiradi: health, bosh sahifa, masjidlar soni (osm-sync to'ldirgach ~2200), qidiruv, gzip, sarlavhalar, admin YOPIQligi,
-DELETE yo'qligi, HTTPS sertifikati, HSTS. Birinchi daqiqalarda "masjid yo'q" bo'lishi mumkin: `osm-sync` birinchi yuklashni
+Tekshiradi: health, bosh sahifa, masjidlar soni (osm-sync to'ldirgach ~2200), qidiruv, gzip, sarlavhalar, admin API yopiqligi,
+DELETE yo'qligi, admin API'ning Telegram imzosiz yopiqligi, HTTPS sertifikati, HSTS. Birinchi daqiqalarda "masjid yo'q" bo'lishi mumkin: `osm-sync` birinchi yuklashni
 bajarmoqda (`docker compose logs -f osm-sync`).
 
-## F. Admin sahifa
-Ommaviy domendan ochilmaydi (404). Kompyuteringizdan: `ssh -L 8080:127.0.0.1:8080 user@SERVER_IP` →
-brauzerda `http://localhost:8080/admin.html`, token = serverdagi `.env` dagi `ADMIN_TOKEN`.
+## F. Moderator paneli
+Faqat Telegram ichida va faqat `ADMIN_TG_IDS` dagi ID uchun. Botga `/admin` yozing → "Moderator paneli" tugmasi → Mini App.
+Brauzerda ochilsa "faqat Telegram orqali" xabari chiqadi. Ruxsatsiz (yoki imzo/muddati yaroqsiz) so'rovlar 401 oladi.
 
 ## G. Telegram Mini App
 @BotFather → `/mybots` → bot → Bot Settings → Menu Button yoki Web App URL = `https://nodir0302.duckdns.org/`

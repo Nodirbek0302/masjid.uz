@@ -12,14 +12,31 @@ import app
 
 TEST_URL = os.environ.get('TEST_DATABASE_URL', 'postgresql://masjid@127.0.0.1:54329/masjid_test')
 
+BOT_TOKEN = "123456:TEST-TOKEN"
+ADMIN_ID = 424242
+
+
+def sign_init_data(user, token=BOT_TOKEN, age=0):
+    """Telegram WebApp initData exactly as Telegram signs it (HMAC-SHA256 with key HMAC('WebAppData', bot token))."""
+    import hashlib
+    import hmac
+    import time
+    from urllib.parse import urlencode
+    pairs = {"auth_date": str(int(time.time()) - age), "query_id": "AAH", "user": json.dumps(user)}
+    check = "\n".join("%s=%s" % (k, pairs[k]) for k in sorted(pairs))
+    secret = hmac.new(b"WebAppData", token.encode(), hashlib.sha256).digest()
+    pairs["hash"] = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
+    return urlencode(pairs)
+
+
 class Api(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.mkdtemp()
         with psycopg.connect(TEST_URL, autocommit=True) as c:   # fresh schema for every run
             c.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public")
-        os.environ.update(DATABASE_URL=TEST_URL, ADMIN_TOKEN="secret", PORT="0",
-                          WRITE_RATE_PER_MIN="1000", REPORT_THRESHOLD="2")
+        os.environ.update(DATABASE_URL=TEST_URL, ADMIN_TOKEN="secret", PORT="0", TELEGRAM_BOT_TOKEN=BOT_TOKEN,
+                          ADMIN_TG_IDS=str(ADMIN_ID), WRITE_RATE_PER_MIN="1000", REPORT_THRESHOLD="2")
         cfg = app.Config()
         cls.srv = app.build_server(cfg)
         cls.base = "http://127.0.0.1:%d" % cls.srv.server_address[1]
@@ -32,7 +49,7 @@ class Api(unittest.TestCase):
     def call(self, method, path, body=None, admin=False, client="aaaaaaaa-1", headers=None):
         h = {"Content-Type": "application/json", "X-Client-Id": client}
         h.update(headers or {})
-        if admin: h["Authorization"] = "Bearer secret"
+        if admin: h["X-Telegram-Init-Data"] = sign_init_data({"id": ADMIN_ID, "first_name": "Owner"})
         req = urllib.request.Request(self.base + path, method=method, headers=h,
                                      data=json.dumps(body).encode() if body is not None else None)
         try:
@@ -182,6 +199,36 @@ class Api(unittest.TestCase):
         self.assertIsNone(a({"name": "x"}))
         self.assertEqual(a({"addr:full": "A\u202eB\x00C"}), "ABC")                # control/bidi characters are stripped
 
+    def test_admin_only_for_allow_listed_verified_telegram_id(self):
+        url = self.base + "/api/admin/overview"
+        def get(headers):
+            req = urllib.request.Request(url, headers=headers)
+            try: return urllib.request.urlopen(req).status
+            except urllib.error.HTTPError as e: return e.code
+        owner = {"id": ADMIN_ID, "first_name": "Owner"}
+        self.assertEqual(get({"X-Telegram-Init-Data": sign_init_data(owner)}), 200)                       # allow-listed + signed
+        self.assertEqual(get({"X-Telegram-Init-Data": sign_init_data({"id": 111, "first_name": "Eve"})}), 401)   # signed, not allow-listed
+        self.assertEqual(get({"X-Telegram-Init-Data": sign_init_data(owner, token="999:OTHER")}), 401)    # signed with another bot token
+        self.assertEqual(get({"X-Telegram-Init-Data": sign_init_data(owner, age=3 * 3600)}), 401)         # launch data older than the session limit
+        forged = sign_init_data({"id": 111, "first_name": "Eve"}).replace("111", str(ADMIN_ID))
+        self.assertEqual(get({"X-Telegram-Init-Data": forged}), 401)                                      # claiming the owner's id breaks the signature
+        self.assertEqual(get({"Authorization": "Bearer secret"}), 401)                                    # token login is off by default
+        self.assertEqual(get({"X-Client-Id": "aaaaaaaa-1"}), 401)
+        # moderator actions are attributed to the Telegram id, shown publicly only as the role
+        s, m = self.add(36.5, 62.5, name="Role test")
+        self.call("POST", "/api/admin/mosques/%s/archive" % m["id"], {"note": "t"}, admin=True)
+        self.assertEqual(self.db("SELECT actor FROM mosque_history WHERE mosque_id=%s AND action='archive'", m["id"])[0][0], "admin:%d" % ADMIN_ID)
+        items = self.call("GET", "/api/mosques/%s/history" % m["id"])[1]["items"]
+        self.assertEqual(items[0]["actor"], "moderator"); self.assertNotIn(str(ADMIN_ID), json.dumps(items))
+
+    def test_admin_disabled_without_allow_list(self):
+        srv, base = make_server(ADMIN_TG_IDS="")
+        req = urllib.request.Request(base + "/api/admin/overview", headers={"X-Telegram-Init-Data": sign_init_data({"id": ADMIN_ID})})
+        try: code = urllib.request.urlopen(req).status
+        except urllib.error.HTTPError as e: code = e.code
+        self.assertEqual(code, 401)                                   # empty allow-list = nobody is a moderator
+        srv.shutdown()
+
     def test_search_and_admin_views(self):
         self.add(37.5, 64.5, name="Alisher Navoiy jome masjidi")
         self.add(37.6, 64.6, name="100%_special")
@@ -211,7 +258,9 @@ class Api(unittest.TestCase):
 
 def make_server(**extra):
     """Fresh server on a free port against the test DB, independent of test order and of the real .env."""
-    env = dict(DATABASE_URL=TEST_URL, ADMIN_TOKEN="secret", PORT="0", WRITE_RATE_PER_MIN="1000", **extra)
+    env = dict(DATABASE_URL=TEST_URL, ADMIN_TOKEN="secret", PORT="0", WRITE_RATE_PER_MIN="1000", TELEGRAM_BOT_TOKEN=BOT_TOKEN,
+               ADMIN_TG_IDS=str(ADMIN_ID))
+    env.update(extra)
     old = {k: os.environ.get(k) for k in env}
     os.environ.update(env)
     try:
@@ -259,7 +308,7 @@ class TelegramIdentity(unittest.TestCase):
 
 class AdminLocalOnly(unittest.TestCase):
     def test_tunnelled_requests_cannot_reach_admin(self):
-        srv, base = make_server(ADMIN_LOCAL_ONLY="1")
+        srv, base = make_server(ADMIN_LOCAL_ONLY="1", ADMIN_ALLOW_TOKEN="1")
         def get(path, **h):
             req = urllib.request.Request(base + path, headers=dict({"Authorization": "Bearer secret"}, **h))
             try: return urllib.request.urlopen(req).status
@@ -276,13 +325,13 @@ class BruteForce(unittest.TestCase):
     """Own server instance: the failed-login counter is per process and must not leak into other tests."""
     def test_admin_bruteforce_limit(self):
         srv, base = make_server()
-        def hit(token):
-            req = urllib.request.Request(base + "/api/admin/overview", headers={"Authorization": "Bearer " + token})
+        def hit(init):
+            req = urllib.request.Request(base + "/api/admin/overview", headers={"X-Telegram-Init-Data": init})
             try: return urllib.request.urlopen(req).status
             except urllib.error.HTTPError as e: return e.code
-        codes = [hit("wrong") for _ in range(12)]
+        codes = [hit("hash=bad&user=%7B%7D") for _ in range(12)]
         self.assertEqual(codes[:10], [401] * 10); self.assertEqual(codes[10:], [429, 429])
-        self.assertEqual(hit("secret"), 429)          # locked out for the rest of the minute, even with the right token
+        self.assertEqual(hit(sign_init_data({"id": ADMIN_ID})), 429)   # locked out for the rest of the minute, even with valid data
         srv.shutdown()
 
 if __name__ == "__main__":

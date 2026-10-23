@@ -14,7 +14,7 @@ Docker Hub va CI/CD keyinroq kerak bo'lsa ham, server hozirning o'zida ishlaydi 
 ```bash
 # 1) loyihani serverga yuboring (git clone yoki):  rsync -a --exclude .venv --exclude .git --exclude .pgdata ./ user@server:~/masjid-uz/
 # 2) serverda:
-cd ~/masjid-uz && cp .env.example .env && nano .env      # POSTGRES_PASSWORD, ADMIN_TOKEN, DOMAIN, COMPOSE_PROFILES ...
+cd ~/masjid-uz && cp .env.example .env && nano .env      # POSTGRES_PASSWORD, ADMIN_TG_IDS, DOMAIN, COMPOSE_PROFILES ...
 ./deploy/bootstrap.sh
 ```
 Kompyuteringizdan bir buyruq bilan: `./deploy/push.sh user@SERVER_IP --run` — kodni yuboradi, serverda `.env` yo'q bo'lsa
@@ -49,7 +49,7 @@ mkdir -p ~/masjid-uz && cd ~/masjid-uz
 `.env` (server, `chmod 600`) — namuna `.env.example` da. Kamida:
 ```
 POSTGRES_PASSWORD=<openssl rand -hex 24>          # faqat hex: URL ichida maxsus belgi muammo bo'ladi
-ADMIN_TOKEN=<openssl rand -hex 32>
+ADMIN_TG_IDS=<sizning Telegram ID, botga /id yozing>
 TELEGRAM_BOT_TOKEN=<@BotFather'dan YANGI token>
 WEBAPP_URL=https://<domeningiz>/
 CLOUDFLARE_TUNNEL_TOKEN=<Zero Trust → Networks → Tunnels>   # public hostname → http://web:8080
@@ -62,11 +62,12 @@ Migratsiyalar `web` ishga tushganda avtomatik qo'llanadi.
 - Rollback: `IMAGE=<user>/masjid-uz:sha-abc1234 make prod-up`.
 - Loglar: `make prod-logs`. Holat: `make prod-ps`.
 
-## 4. Admin sahifa
-Compose'da `ADMIN_LOCAL_ONLY=1`: `/admin.html` ommaviy domen orqali **ochilmaydi** (404). Serverning o'zidan:
-```bash
-ssh -L 8080:127.0.0.1:8080 <user>@<server>        # keyin brauzerda  http://localhost:8080/admin.html
-```
+## 4. Moderator paneli (faqat Telegram, faqat sizning ID)
+Panel `https://<domen>/admin.html` da turadi, lekin **faqat Telegram Mini App ichida** va faqat `.env` dagi `ADMIN_TG_IDS`
+ro'yxatidagi Telegram ID uchun ochiladi: server Telegram imzosini (bot tokeni bilan HMAC) tekshiradi, 2 soatdan eski
+ma'lumotni rad etadi. Brauzerda ochilsa, yoki ID ro'yxatda bo'lmasa — ruxsat yo'q. ID bo'sh bo'lsa hech kim kira olmaydi.
+Ochish: botga `/admin` yozing (faqat ro'yxatdagi ID'larga "Moderator paneli" tugmasi chiqadi). ID'ni bilish: botga `/id`.
+Token bilan kirish faqat dasturlash uchun (`ADMIN_ALLOW_TOKEN=1`), serverda yoqilmaydi.
 
 ## 5. OSM masjidlari
 `COMPOSE_PROFILES` da `osm` bo'lsa hech narsa qilish shart emas: birinchi ishga tushishda baza to'ladi, keyin har 24 soatda yangilanadi (`docker compose logs osm-sync`). Qo'lda: docs/IMPORT-OSM.md.

@@ -4,7 +4,9 @@
   "use strict";
   var T = I18N.t;
   var $ = function (id) { return document.getElementById(id); };
-  var token = null;
+  // Access: Telegram Mini App launch data only (the server checks the signature and the allow-listed Telegram id).
+  // A token form exists solely when the server runs in development mode (ADMIN_ALLOW_TOKEN=1).
+  var inTg = location.hash.indexOf("tgWebAppData") >= 0, tg = null, token = null, devLogin = false;
   try { token = sessionStorage.getItem("adm"); } catch (e) {}
   var tab = "reports";
 
@@ -20,13 +22,17 @@
   }
   function toast(m) { var t = $("toast"); t.textContent = m; t.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(function () { t.hidden = true; }, 3500); }
   function api(method, path, body) {
-    return fetch(path, { method: method, headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
-      body: body ? JSON.stringify(body) : undefined })
+    var h = { "Content-Type": "application/json" };
+    if (tg && tg.initData) h["X-Telegram-Init-Data"] = tg.initData; else if (token) h["Authorization"] = "Bearer " + token;
+    return fetch(path, { method: method, headers: h, body: body ? JSON.stringify(body) : undefined })
       .then(function (r) { return r.json().then(function (j) { if (!r.ok) { j.status = r.status; throw j; } return j; }); });
   }
+  function gate(text) { $("gate-text").textContent = text; $("gate").hidden = false; $("login").hidden = true; $("tabs").hidden = true; $("stats").hidden = true; $("view").textContent = ""; }
   function fail(e) {
-    if (e && e.status === 401) { logout(); toast(T("adm.bad_token")); }
-    else toast(I18N.errMessage(e));
+    if (e && e.status === 401) {
+      if (tg) { gate(T("adm.denied")); return; }                // Telegram user not allowed, or launch data too old
+      logout(); toast(T("adm.bad_token"));
+    } else toast(I18N.errMessage(e));
   }
   function mapLink(m, text) { return el("a", { class: "link", href: "/?c=" + m.lat + "," + m.lon + ",17", target: "_blank", rel: "noopener", text: text }); }
   function skeletons(v) { v.textContent = ""; for (var i = 0; i < 3; i++) v.appendChild(el("div", { class: "sk" })); }
@@ -38,6 +44,7 @@
 
   function logout() { token = null; try { sessionStorage.removeItem("adm"); } catch (e) {} render(); }
   $("logout").onclick = logout;
+  $("logout").hidden = true;
   $("login").onsubmit = function (e) {
     e.preventDefault(); token = $("token").value.trim(); $("token").value = "";
     api("GET", "/api/admin/overview").then(function () { try { sessionStorage.setItem("adm", token); } catch (e) {} render(); }).catch(function (x) { token = null; fail(x); });
@@ -93,7 +100,7 @@
     }).catch(fail);
   }
   function who(h) {                                   // moderator-only detail: Telegram name / device / app version
-    if (h.actor === "admin") return T("adm.who_moderator");
+    if (h.actor === "admin" || (h.actor || "").indexOf("admin:") === 0) return T("adm.who_moderator");
     if (!h.actor) return T("adm.who_system");
     var parts = [h.actor_kind === "telegram" ? T("adm.who_telegram") + (h.tg_username ? " @" + h.tg_username : h.tg_first_name ? " " + h.tg_first_name : "")
       : h.actor_kind === "mobile" ? T("adm.who_mobile") : T("adm.who_web")];
@@ -115,8 +122,10 @@
   }
 
   function render() {
-    var on = !!token;
-    $("login").hidden = on; $("tabs").hidden = !on; $("logout").hidden = !on; $("stats").hidden = !on;
+    var on = !!tg || !!token;
+    $("gate").hidden = true;
+    $("login").hidden = on || !devLogin; $("tabs").hidden = !on; $("logout").hidden = !on || !!tg; $("stats").hidden = !on;
+    if (!on && !devLogin) { gate(T("adm.tg_only")); return; }
     var v = $("view"); v.textContent = "";
     if (!on) return;
     document.querySelectorAll("#tabs button").forEach(function (b) { b.classList.toggle("on", b.getAttribute("data-tab") === tab); });
@@ -136,5 +145,17 @@
       else viewActivity(v, ov);
     }).catch(fail);
   }
-  render();
+  function start() {
+    fetch("/api/config").then(function (r) { return r.json(); }).catch(function () { return {}; }).then(function (c) {
+      devLogin = !!c.admin_token_login;
+      render();
+    });
+  }
+  if (inTg) {                                          // load Telegram's script only inside Telegram
+    var sc = document.createElement("script");
+    sc.src = "https://telegram.org/js/telegram-web-app.js";
+    sc.onload = function () { tg = window.Telegram && window.Telegram.WebApp; if (tg) { tg.ready(); tg.expand(); } start(); };
+    sc.onerror = function () { start(); };
+    document.head.appendChild(sc);
+  } else start();
 })();

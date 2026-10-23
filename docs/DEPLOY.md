@@ -4,7 +4,7 @@
 2. **Code:** copy repo to `/opt/masjid-uz`; `useradd -r masjid`; `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`
 3. **Database:** edit passwords in `deploy/db_roles.sql`, run as postgres (`sudo -u postgres psql -f deploy/db_roles.sql`).
    PostgreSQL must listen on localhost only (`listen_addresses='localhost'`), firewall port 5432.
-4. **Config:** `cp .env.example /etc/masjid-uz.env; chmod 600; chown masjid` and fill `DATABASE_URL`, `ADMIN_TOKEN` (and bot token).
+4. **Config:** `cp .env.example /etc/masjid-uz.env; chmod 600; chown masjid` and fill `DATABASE_URL`, `ADMIN_TG_IDS` (moderator Telegram ids) and `TELEGRAM_BOT_TOKEN`.
    Secrets stay on the server; never commit them.
 5. **Migrations:** run automatically at start (`server/migrations/*.sql`, tracked in `schema_migrations`, guarded by an advisory lock).
    First start with the owner role, then apply the GRANTs from `db_roles.sql` and switch `DATABASE_URL` to `masjid_app`.
@@ -20,12 +20,12 @@
     localhost-only listener, encrypted backups if stored off-site.
 
 ## Moderator panel
-Open `https://<domain>/admin.html` and enter `ADMIN_TOKEN` (kept in sessionStorage only, sent as a Bearer header, never in a URL).
+Moderators open the panel from the bot (`/admin`) as a Telegram Mini App; only allow-listed Telegram ids (`ADMIN_TG_IDS`) get in.
 Tabs: open reports (grouped by mosque + kind), reported mosques, archive (restore), recent activity. 10 failed logins
 per minute per client address lock the panel for the rest of the minute. Set `TRUST_PROXY=1` in the env file behind Caddy,
 otherwise every visitor shares Caddy's address in the rate limiters. Consider also restricting `/admin.html` and
 `/api/admin/*` by IP in the Caddyfile.
 
-## Moderation (admin API, `Authorization: Bearer $ADMIN_TOKEN`)
+## Moderation (admin API; faqat Telegram imzosi + `ADMIN_TG_IDS`, sarlavha `X-Telegram-Init-Data`)
 - `GET  /api/admin/reports` – open reports grouped by mosque + kind
 - `POST /api/admin/mosques/{id}/archive|restore|dismiss|verify` with `{"note": "..."}` (`verify` requires an evidence note)

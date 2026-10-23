@@ -17,9 +17,10 @@ chmod 600 .env
 get() { sed -n "s/^$1=//p" .env | tail -n1 | sed -e "s/^['\"]//" -e "s/['\"]\$//" ; }
 
 say ".env tekshiruvi"
-pw="$(get POSTGRES_PASSWORD)"; adm="$(get ADMIN_TOKEN)"; prof="$(get COMPOSE_PROFILES)"
+pw="$(get POSTGRES_PASSWORD)"; adm="$(get ADMIN_TG_IDS)"; prof="$(get COMPOSE_PROFILES)"
 [ -n "$pw" ] && [ "$pw" != "masjid" ] || { echo "✗ POSTGRES_PASSWORD bering (standart 'masjid' ishlatilmaydi): openssl rand -hex 24"; exit 1; }
-[ -n "$adm" ] || { echo "✗ ADMIN_TOKEN bering: openssl rand -hex 32"; exit 1; }
+[ -n "$adm" ] || { echo "✗ ADMIN_TG_IDS bering: moderator Telegram ID'lari (botga /id yozing), vergul bilan"; exit 1; }
+[ -n "$(get TELEGRAM_BOT_TOKEN)" ] || echo "! TELEGRAM_BOT_TOKEN bo'sh: moderator paneli ishlamaydi (Telegram imzosini tekshirib bo'lmaydi)."
 case ",$prof," in
   *,https,*|*,cloudflare,*) ;;
   *) echo "! COMPOSE_PROFILES da https yoki cloudflare yo'q: sayt faqat serverning 127.0.0.1:8080 manzilida ochiladi." ;;

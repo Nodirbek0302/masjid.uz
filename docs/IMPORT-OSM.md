@@ -34,7 +34,7 @@ python3 -c "import json;print(len(json.load(open('osm-mosques.json'))['elements'
 psql "$DATABASE_URL" -c "select origin, source, status, count(*) from mosques group by 1,2,3"
 
 # 5. Run the app without the interim tile layer
-SHOW_TILE_MOSQUES=0 ADMIN_TOKEN=<token> .venv/bin/python server/app.py
+SHOW_TILE_MOSQUES=0 .venv/bin/python server/app.py
 ```
 
 If `overpass-api.de` is busy, retry later or use another public Overpass mirror in step 2.

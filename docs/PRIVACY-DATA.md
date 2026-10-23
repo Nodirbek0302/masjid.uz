@@ -32,3 +32,7 @@ Tarix yozuvlari qoladi (faqat opaque id bilan). Ilovada foydalanuvchiga nima saq
 
 ## Sozlama
 `ACTOR_SALT` — IP xeshi uchun tuz (bo'sh bo'lsa `ADMIN_TOKEN` dan olinadi). O'zgartirsangiz eski xeshlar mos kelmay qoladi.
+
+## Moderator kirishi
+Moderator = `ADMIN_TG_IDS` dagi Telegram ID, imzosi tekshirilgan Mini App ma'lumoti bilan (`admin_session` 2 soat). Moderator amallari
+tarixda `admin:<telegram id>` bo'lib yoziladi; ommaviy API'da faqat "moderator" roli ko'rinadi.

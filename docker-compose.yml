@@ -59,8 +59,7 @@ services:
       PORT: "8080"
       # Cloudflare Tunnel orqasida haqiqiy mijoz manzili X-Forwarded-For dan olinadi.
       TRUST_PROXY: "1"
-      # Admin faqat serverning o'zidan (SSH tunnel) ochiladi, ommaviy domen orqali emas. DEPLOY-DOCKER.md ga qarang.
-      ADMIN_LOCAL_ONLY: "1"
+      # Moderator paneli faqat Telegram Mini App orqali va faqat .env dagi ADMIN_TG_IDS ro'yxatidagi Telegram ID uchun ochiladi.
       SHOW_TILE_MOSQUES: "0"
     # Faqat localhost'ga bog'lanadi — tashqariga Cloudflare Tunnel orqali ochiladi (inbound port shart emas).
     ports:
