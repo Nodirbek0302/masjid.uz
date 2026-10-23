@@ -53,7 +53,12 @@ def log(msg):
 
 
 def pick_lang(code):
-    """The bot always answers in Uzbek (Latin), whatever language the user's Telegram app is set to."""
+    """Telegram language_code -> one of our texts (Uzbek is the default; the Mini App itself also offers Cyrillic)."""
+    code = (code or "").lower()
+    if code.startswith("ru") or code[:2] in ("kk", "ky", "tg", "tk", "be", "uk"):
+        return "ru"
+    if code.startswith("en"):
+        return "en"
     return "uz"
 
 

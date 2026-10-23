@@ -463,14 +463,6 @@ class BotFlow(unittest.TestCase):
         self.send(text="hello")                                                                 # session is over
         self.assertIn("lokatsiya", self.msgs()[-1])
 
-    def test_bot_always_answers_in_uzbek(self):
-        for code in ("en", "ru", "de", None):
-            self.assertEqual(self.botmod.pick_lang(code), "uz")
-        self.user = {"id": 600, "first_name": "Sam", "language_code": "en"}                     # English phone
-        self.send(text="/start"); self.assertIn("Assalomu alaykum", self.msgs()[-1])
-        self.user = {"id": 601, "first_name": "Ivan", "language_code": "ru"}
-        self.send(text="/id"); self.assertIn("Sizning Telegram ID", self.msgs()[-1])
-
     def test_best_of_prefers_two_columns_and_majority(self):
         import timetable as T
         one = "Bomdod 05:40\nPeshin 12:45\nAsr 16:15\nShom 17:40\nXufton 19:15"                # a pass that lost the second column
@@ -498,7 +490,7 @@ class BotFlow(unittest.TestCase):
         self.assertTrue(self.store.get(new[0]["id"])["prayer_times"])
         # a photo with no session is refused; groups are ignored; admin button only for admins
         self.sent.clear(); self.user = {"id": 556, "first_name": "Eve", "language_code": "en"}
-        self.send(photo=[{"file_id": "a"}]); self.assertIn("lokatsiya", self.msgs()[-1])   # English phone, still Uzbek
+        self.send(photo=[{"file_id": "a"}]); self.assertIn("location", self.msgs()[-1])
         self.send(text="/admin"); self.assertEqual(len(self.msgs()), 1)                         # no reply to a non-admin
         self.bot.handle({"update_id": 3, "message": {"chat": {"id": -1, "type": "group"}, "from": self.user, "text": "/id"}})
         self.assertEqual(len(self.msgs()), 1)
