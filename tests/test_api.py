@@ -445,12 +445,55 @@ class TimetableParser(unittest.TestCase):
         self.assertTrue(dated["complete"]); self.assertEqual(dated["times"]["fajr"], "05:20"); self.assertIn("sunrise_dropped", dated["warnings"])
         self.assertTrue(T.parse("23/10/2026 05:20 12:30 16:00 17:35 19:00")["complete"])
         rep = T.parse("Bomdod 05:20\nPeshin 12:30\nAsr 6:00\nShom 17:35\nXufton 19:00")           # OCR lost the "1" of 16:00
-        self.assertTrue(rep["complete"]); self.assertEqual(rep["times"]["asr"], "16:00"); self.assertIn("repaired", rep["warnings"])
+        self.assertTrue(rep["complete"]); self.assertEqual(rep["times"]["asr"], "16:00"); self.assertIn("ampm_resolved", rep["warnings"])
         self.assertFalse(T.parse("05:20 12:30 11:00 03:00 19:00")["complete"])                  # not repairable -> never complete
         weird = T.parse("Bomdod 09:20\nPeshin 12:30\nAsr 16:00\nShom 17:35\nXufton 19:00")      # fajr at 09:20 cannot be right
         self.assertFalse(weird["complete"]); self.assertIn("implausible", weird["warnings"])
         for bad in ("Bomdod 05:20\nAsr 16:00", "Assalomu alaykum 2026", "05:20 12:30 11:00 17:35 19:00", "99:99 88:88", ""):
             self.assertFalse(T.parse(bad)["complete"], bad)                # never "complete" on doubtful input
+
+
+class SpokenAndAmPm(unittest.TestCase):
+    FIVE = {"fajr": "05:20", "dhuhr": "12:30", "asr": "16:00", "maghrib": "17:35", "isha": "19:00"}
+
+    def test_twelve_hour_times_without_am_pm_land_in_the_right_half_of_the_day(self):
+        import timetable as T
+        r = T.parse("5:20 12:30 4:00 5:35 7:00")
+        self.assertTrue(r["complete"]); self.assertEqual(r["times"], self.FIVE)
+        r = T.parse("Bomdod 5:20\nPeshin 1:15\nAsr 4:05\nShom 5:40\nXufton 7:10")
+        self.assertEqual(r["times"], {"fajr": "05:20", "dhuhr": "13:15", "asr": "16:05", "maghrib": "17:40", "isha": "19:10"})
+        r = T.parse("Fajr 4:10\nDhuhr 12:00\nAsr 5:30\nMaghrib 8:20\nIsha 10:15")              # summer: late sunset, isha 22:15
+        self.assertEqual(r["times"], {"fajr": "04:10", "dhuhr": "12:00", "asr": "17:30", "maghrib": "20:20", "isha": "22:15"})
+        r = T.parse("Fajr 5:20 AM\nDhuhr 12:30 PM\nAsr 4:00 PM\nMaghrib 5:35 PM\nIsha 7:00 PM")  # explicit markers
+        self.assertEqual(r["times"], self.FIVE)
+        r = T.parse("5:20 6:00 7:00 8:00 9:00")                                                # nonsense stays unsaved
+        self.assertFalse(r["complete"])
+
+    def test_spoken_times_in_uzbek_russian_english(self):
+        import spoken as S
+        said = [
+            "Bomdod besh yigirma, Peshin o'n ikki o'ttiz, Asr o'n olti, Shom o'n yetti o'ttiz besh, Xufton o'n to'qqiz",
+            "Бомдод беш йигирма. Пешин ўн икки ўттиз. Аср ўн олти нол нол. Шом ўн етти ўттиз беш. Хуфтон ўн тўққиз",
+            "Фаджр пять двадцать, зухр двенадцать тридцать, аср шестнадцать ноль ноль, магриб семнадцать тридцать пять, иша девятнадцать ноль ноль",
+            "Fajr five twenty, Dhuhr twelve thirty, Asr sixteen hundred, Maghrib seventeen thirty five, Isha nineteen oh oh",
+            "Bomdod 5 20 Peshin 12 30 Asr 16 00 Shom 17 35 Xufton 19 00",
+            "Bomdod 5:20, Peshin 12:30, Asr 16:00, Shom 17:35, Xufton 19:00",
+            # no AM/PM spoken: 12-hour numbers are placed by the prayer's own time of day
+            "Bomdod besh yigirma, Peshin o'n ikki o'ttiz, Asr to'rt, Shom besh o'ttiz besh, Xufton yetti",
+            "Fajr five twenty, Dhuhr twelve thirty, Asr four, Maghrib five thirty five, Isha seven",
+            "Bomdod 5 20 Peshin 12 30 Asr 4 00 Shom 5 35 Xufton 7 00",
+            # explicit markers in words
+            "Fajr five twenty am, Dhuhr twelve thirty pm, Asr four pm, Maghrib five thirty five pm, Isha seven pm",
+            "Фаджр пять двадцать утра, зухр двенадцать тридцать дня, аср четыре дня, магриб пять тридцать пять вечера, иша семь вечера",
+        ]
+        for t in said:
+            r = S.parse(t)
+            self.assertTrue(r["complete"], t); self.assertEqual(r["times"], self.FIVE, t)
+        r = S.parse("зухр час пятнадцать дня, фаджр пять двадцать, аср четыре, магриб пять тридцать пять, иша семь")
+        self.assertEqual(r["times"]["dhuhr"], "13:15")                                         # Russian "час" = one o'clock
+        self.assertEqual(S.normalize("Bomdod nol besh yigirma besh"), "Bomdod 05:25")
+        for bad in ("salom, qalaysiz", "Bomdod besh yigirma, Asr to'rt", "", "bir ikki uch"):
+            self.assertFalse(S.parse(bad)["complete"], bad)                                    # never "complete" on doubtful speech
 
 
 class BotFlow(unittest.TestCase):
@@ -558,6 +601,35 @@ class BotFlow(unittest.TestCase):
         self.assertEqual(self.store.get(self.m["id"])["prayer_times"]["fajr"], "06:00")
         self.send(text="/start m_not-a-real-id-xxxxxxxxxxxxxxxxxxxxxxxx")                    # junk payload must not crash
         self.assertTrue(self.msgs())
+
+    def test_voice_message_flow(self):
+        heard = {"text": "Bomdod besh yigirma, Peshin o'n ikki o'ttiz, Asr to'rt, Shom besh o'ttiz besh, Xufton yetti"}
+        bot = self.botmod.Bot(lambda m, **kw: self.sent.append((m, kw)), self.store, None, lambda fid: b"ogg", "https://example.org",
+                              stt_read=lambda data: heard["text"])
+        def say(**kw):
+            base = {"chat": {"id": 555, "type": "private"}, "from": self.user}
+            bot.handle({"update_id": 1, "message": dict(base, **kw)})
+        say(voice={"file_id": "v", "duration": 5})                                            # no mosque chosen yet
+        self.assertIn("lokatsiya", self.msgs()[-1])
+        say(location={"latitude": 40.0, "longitude": 66.0})
+        bot.handle({"update_id": 2, "callback_query": {"id": "q", "from": self.user, "data": "pick:" + self.m["id"], "message": {"chat": {"id": 555}}}})
+        say(voice={"file_id": "v", "duration": 120}); self.assertIn("60", self.msgs()[-1])    # too long
+        say(voice={"file_id": "v", "duration": 8})
+        txt = self.msgs()[-1]
+        self.assertIn("Eshitilgan", txt); self.assertIn("16:00", txt); self.assertIn("19:00", txt)    # heard text and the resolved times
+        self.assertEqual(self.store.get(self.m["id"])["prayer_times"], {})                    # nothing saved before confirmation
+        bot.handle({"update_id": 3, "callback_query": {"id": "q", "from": self.user, "data": "save", "message": {"chat": {"id": 555}}}})
+        got = self.store.get(self.m["id"])["prayer_times"]
+        self.assertEqual((got["asr"], got["maghrib"], got["isha"]), ("16:00", "17:35", "19:00"))   # AM/PM resolved without being spoken
+        # unclear speech: asks again and saves nothing; recogniser missing: says so
+        heard["text"] = "salom qalaysiz"
+        say(location={"latitude": 40.0, "longitude": 66.0})
+        bot.handle({"update_id": 4, "callback_query": {"id": "q", "from": self.user, "data": "pick:" + self.m["id"], "message": {"chat": {"id": 555}}}})
+        say(voice={"file_id": "v", "duration": 3}); self.assertIn("ajrata olmadim", self.msgs()[-1])
+        nobot = self.botmod.Bot(lambda m, **kw: self.sent.append((m, kw)), self.store, None, lambda fid: b"x", "", stt_read=None)
+        nobot.state[555] = {"step": "await_times", "mosque_id": self.m["id"], "name": "x", "ts": __import__("time").time()}
+        nobot.handle({"update_id": 5, "message": {"chat": {"id": 555, "type": "private"}, "from": self.user, "voice": {"file_id": "v", "duration": 3}}})
+        self.assertIn("ishlamayapti", self.msgs()[-1])
 
     def test_unreadable_photo_and_typed_times(self):
         self.send(location={"latitude": 40.0, "longitude": 66.0}); self.click("pick:" + self.m["id"])

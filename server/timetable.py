@@ -26,11 +26,25 @@ _TR = str.maketrans({"O": "0", "o": "0", "l": "1", "I": "1", "|": "1"})
 _DATE = re.compile(r"(?<!\d)\d{1,2}\s*[./-]\s*\d{1,2}\s*[./-]\s*\d{2,4}(?!\d)")
 
 
+_AMPM = re.compile(r"(?<!\d)(\d{1,2})\s*[:.]\s*(\d{2})\s*([AaPp])\.?\s?[Mm]\b\.?")
+
+
+def _to24(h, ap):
+    """12-hour clock with an explicit marker -> 24-hour hour."""
+    ap = ap.lower()
+    if ap == "p" and h < 12:
+        return h + 12
+    if ap == "a" and h == 12:
+        return 0
+    return h
+
+
 def _times_in(line):
     """HH:MM values in a line. OCR confuses O/0 and l/1: letters are repaired only inside tokens shaped like a time.
     Dates such as 23.10.2026 (common on boards) are removed first so that "23.10" is not read as 23:10."""
     out = []
-    for h, m in _LOOSE.findall(_DATE.sub(" ", line)):
+    line = _AMPM.sub(lambda mo: "%02d:%s" % (_to24(int(mo.group(1)), mo.group(3)), mo.group(2)), _DATE.sub(" ", line))   # "4:00 PM" -> "16:00"
+    for h, m in _LOOSE.findall(line):
         h, m = h.translate(_TR), m.translate(_TR)
         if h.isdigit() and m.isdigit() and 0 <= int(h) <= 23 and 0 <= int(m) <= 59:
             out.append("%02d:%02d" % (int(h), int(m)))
@@ -54,6 +68,48 @@ PLAUSIBLE = {"fajr": (150, 480), "dhuhr": (660, 900), "asr": (840, 1110), "maghr
 
 def _minutes(t):
     return int(t[:2]) * 60 + int(t[3:])
+
+
+def _cands(k, t):
+    """Readings of one value for prayer k that fall in its window of the day, most natural first: as written, +12 h (PM written as
+    12-hour), the lost leading "1" of OCR (6:00 -> 16:00), -12 h."""
+    h, mi = int(t[:2]), t[3:]
+    lo, hi = PLAUSIBLE[k]
+    out = []
+    for cand in (h, h + 12, h + 10, h - 12):
+        if 0 <= cand < 24 and lo <= cand * 60 + int(mi) <= hi and "%02d:%s" % (cand, mi) not in out:
+            out.append("%02d:%s" % (cand, mi))
+    return out
+
+
+def resolve_12h(found):
+    """Boards and speakers often give 12-hour times without AM/PM ("Asr 4:00", "Isha 7:15"). Each prayer has a window of the day it can
+    fall in (PLAUSIBLE); the right reading is the one inside the window that also keeps the five prayers in increasing order:
+    4:00 -> 16:00 for Asr, 7:15 -> 19:15 for Isha, 1:15 -> 13:15 for Dhuhr, 5:20 stays 05:20 for Fajr, and an ambiguous "6:00" for Asr
+    becomes 16:00 or 18:00 depending on what Maghrib says. Returns (times, changed_prayers)."""
+    ks = [k for k in ORDER if k in found]
+    options = [_cands(k, found[k]) or [found[k]] for k in ks]
+
+    def search(i, prev):
+        if i == len(ks):
+            return []
+        for c in options[i]:
+            m = _minutes(c)
+            if m > prev:
+                rest = search(i + 1, m)
+                if rest is not None:
+                    return [c] + rest
+        return None
+    best = search(0, -1)
+    if best is None:                                                  # no increasing combination: first readings, flagged later
+        best = [o[0] for o in options]
+    out = dict(found)
+    changed = []
+    for k, c in zip(ks, best):
+        if c != found[k]:
+            out[k] = c
+            changed.append(k)
+    return out, changed
 
 
 def _repair(found):
@@ -114,6 +170,9 @@ def parse(text):
             warnings.append("too_many_times")
         elif not found:
             found = dict(zip(ORDER, allt))
+    found, changed = resolve_12h(found)
+    if changed:
+        warnings.append("ampm_resolved")
     complete = all(k in found for k in ORDER)
     if complete:
         mins = [_minutes(found[k]) for k in ORDER]
@@ -127,6 +186,8 @@ def parse(text):
     if complete and "not_in_order" not in warnings and any(not PLAUSIBLE[k][0] <= _minutes(found[k]) <= PLAUSIBLE[k][1] for k in ORDER):
         warnings.append("implausible")
     bad = {"not_in_order", "too_many_times", "two_columns", "implausible"} & set(warnings)
+    if alt:
+        alt, _ = resolve_12h(alt)
     return {"times": {k: found[k] for k in ORDER if k in found}, "alt": alt, "complete": complete and not bad, "warnings": warnings}
 
 

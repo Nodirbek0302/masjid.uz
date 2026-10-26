@@ -19,6 +19,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import app  # noqa: E402  (load_dotenv, Store)
 import ocr  # noqa: E402
+import spoken  # noqa: E402
+import stt  # noqa: E402
 import timetable  # noqa: E402
 
 app.load_dotenv()
@@ -31,6 +33,7 @@ MAX_PHOTO_BYTES = 8 * 1024 * 1024
 PHOTOS_PER_HOUR = 30
 SESSION_S = 1800
 MSGS_PER_MIN = 40
+MAX_VOICE_S = 60
 
 
 def call(method, **params):
@@ -73,12 +76,15 @@ TEXTS = {
     "uz": {
         "hello": "Assalomu alaykum! Bu bepul masjid xaritasi: masjidlarni toping, jamoat namozi vaqtlarini koʻring, yangi masjid qoʻshing yoki "
                  "notoʻgʻri maʼlumot haqida xabar bering.\n\n📍 Vaqtlarni yangilash: masjid lokatsiyasini yuboring (📎 → Joylashuv), keyin "
-                 "namoz vaqtlari jadvalining rasmini yuboring. Vaqtlarni oʻzim oʻqib yangilayman.",
+                 "namoz vaqtlari jadvalining rasmini yuboring yoki vaqtlarni ovozli xabar bilan ayting. Oʻzim oʻqib yangilayman.",
         "pending": "(Mini App hali ulanmagan: HTTPS manzil kutilmoqda.)", "open": "🕌 Xaritani ochish",
         "pick": "200 m ichida quyidagi masjidlar bor. Qaysi biri?", "none": "200 m ichida masjid topilmadi. Yangi masjid sifatida qoʻshamizmi?",
         "new": "➕ Yangi masjid qoʻshish", "noname": "Nomsiz masjid",
         "ask_name": "Masjid nomini yozing (yoki /skip: nomsiz qoʻshish):", "created": "✅ Masjid qoʻshildi.",
-        "send_photo": "📷 «{name}» uchun namoz vaqtlari jadvalining rasmini yuboring.\nYoki 5 ta vaqtni matn bilan yozing: 05:20 12:30 16:00 17:35 19:00",
+        "send_photo": "📷 «{name}» uchun jadval rasmini yuboring yoki 🎤 5 ta namoz vaqtini ovozli xabar bilan ayting (masalan: «Bomdod 5 20, Peshin 12 30, Asr 4, Shom 5 35, Xufton 7»; AM/PM aytish shart emas).\nYoki matn bilan yozing: 05:20 12:30 16:00 17:35 19:00",
+        "voice_reading": "🎧 Ovoz tinglanmoqda…", "no_stt": "Ovozni tanish hozircha ishlamayapti. Rasm yuboring yoki vaqtlarni matn bilan yozing: 05:20 12:30 16:00 17:35 19:00",
+        "voice_heard": "🎤 Eshitilgan: «{t}»", "voice_long": "Ovozli xabar 60 soniyadan oshmasin. Qisqaroq ayting.",
+        "voice_unclear": "Ovozdan 5 ta vaqtni aniq ajrata olmadim.{found}\nQayta ayting (masalan: «Bomdod 5 20, Peshin 12 30, Asr 4, Shom 5 35, Xufton 7») yoki matn bilan yozing.",
         "need_loc": "Avval masjidni tanlang: lokatsiyasini yuboring (📎 → Joylashuv) yoki masjid nomini yozing.",
         "search_pick": "Topilgan masjidlar. Qaysi biri?", "search_none": "Masjid topilmadi. Boshqa nom yozing yoki lokatsiya yuboring.", "reading": "🔎 Rasm oʻqilmoqda…",
         "no_ocr": "Rasmni oʻqish hozircha ishlamayapti. Vaqtlarni matn bilan yozing: 05:20 12:30 16:00 17:35 19:00",
@@ -100,12 +106,15 @@ TEXTS = {
     "ru": {
         "hello": "Ассаламу алайкум! Это бесплатная карта мечетей: находите мечети, смотрите время джамаат-намазов, добавляйте новые мечети "
                  "и сообщайте о неверных данных.\n\n📍 Обновить время: отправьте геопозицию мечети (📎 → Геопозиция), затем фото расписания "
-                 "намазов. Я прочитаю время сам и обновлю.",
+                 "намазов или назовите время голосом. Я прочитаю и обновлю.",
         "pending": "(Mini App ещё не подключено: ожидается HTTPS-адрес.)", "open": "🕌 Открыть карту",
         "pick": "В радиусе 200 м есть такие мечети. Какая из них?", "none": "В радиусе 200 м мечетей нет. Добавить как новую?",
         "new": "➕ Добавить новую мечеть", "noname": "Мечеть без названия",
         "ask_name": "Напишите название мечети (или /skip: добавить без названия):", "created": "✅ Мечеть добавлена.",
-        "send_photo": "📷 Отправьте фото расписания намазов для «{name}».\nИли напишите 5 времён текстом: 05:20 12:30 16:00 17:35 19:00",
+        "send_photo": "📷 Отправьте фото расписания для «{name}» или 🎤 назовите 5 времён намаза голосом (например: «Фаджр 5 20, Зухр 12 30, Аср 4, Магриб 5 35, Иша 7»; AM/PM говорить не нужно).\nИли напишите текстом: 05:20 12:30 16:00 17:35 19:00",
+        "voice_reading": "🎧 Слушаю голосовое…", "no_stt": "Распознавание голоса сейчас недоступно. Отправьте фото или напишите время текстом: 05:20 12:30 16:00 17:35 19:00",
+        "voice_heard": "🎤 Услышано: «{t}»", "voice_long": "Голосовое не длиннее 60 секунд. Скажите короче.",
+        "voice_unclear": "Не удалось чётко выделить 5 времён из голоса.{found}\nСкажите ещё раз (например: «Фаджр 5 20, Зухр 12 30, Аср 4, Магриб 5 35, Иша 7») или напишите текстом.",
         "need_loc": "Сначала выберите мечеть: отправьте её геопозицию (📎 → Геопозиция) или напишите название.",
         "search_pick": "Найденные мечети. Какая из них?", "search_none": "Мечеть не найдена. Напишите другое название или отправьте геопозицию.", "reading": "🔎 Читаю фото…",
         "no_ocr": "Чтение фото сейчас недоступно. Напишите время текстом: 05:20 12:30 16:00 17:35 19:00",
@@ -127,12 +136,15 @@ TEXTS = {
     "en": {
         "hello": "Assalamu alaykum! This is a free mosque map: find mosques, see congregation prayer times, add new mosques and report "
                  "incorrect information.\n\n📍 To update times: share the mosque's location (📎 → Location), then send a photo of its "
-                 "prayer timetable. I will read the times and update them.",
+                 "prayer timetable or say the times in a voice message. I will read them and update.",
         "pending": "(The Mini App is not connected yet: waiting for an HTTPS address.)", "open": "🕌 Open the map",
         "pick": "These mosques are within 200 m. Which one?", "none": "No mosque within 200 m. Add it as a new mosque?",
         "new": "➕ Add a new mosque", "noname": "Unnamed mosque",
         "ask_name": "Type the mosque's name (or /skip to add it without a name):", "created": "✅ Mosque added.",
-        "send_photo": "📷 Send a photo of the prayer timetable for “{name}”.\nOr type the 5 times: 05:20 12:30 16:00 17:35 19:00",
+        "send_photo": "📷 Send a photo of the timetable for “{name}” or 🎤 say the 5 prayer times in a voice message (e.g. “Fajr 5 20, Dhuhr 12 30, Asr 4, Maghrib 5 35, Isha 7”; no need to say AM/PM).\nOr type them: 05:20 12:30 16:00 17:35 19:00",
+        "voice_reading": "🎧 Listening…", "no_stt": "Voice recognition is not available right now. Send a photo or type the times: 05:20 12:30 16:00 17:35 19:00",
+        "voice_heard": "🎤 Heard: “{t}”", "voice_long": "Please keep the voice message under 60 seconds.",
+        "voice_unclear": "I could not clearly pick out the 5 times from your voice.{found}\nSay them again (e.g. “Fajr 5 20, Dhuhr 12 30, Asr 4, Maghrib 5 35, Isha 7”) or type them.",
         "need_loc": "First choose the mosque: share its location (📎 → Location) or type its name.",
         "search_pick": "Mosques found. Which one?", "search_none": "No mosque found. Type another name or share a location.", "reading": "🔎 Reading the photo…",
         "no_ocr": "Photo reading is not available right now. Type the times: 05:20 12:30 16:00 17:35 19:00",
@@ -161,8 +173,8 @@ def fmt_times(tx, times):
 class Bot:
     """All conversation logic; the Telegram API, the database and the OCR are injected so it can be tested without a network."""
 
-    def __init__(self, api, store, ocr_read=None, fetch_photo=None, webapp_url="", admin_ids=()):
-        self.api, self.store, self.ocr_read, self.fetch_photo = api, store, ocr_read, fetch_photo
+    def __init__(self, api, store, ocr_read=None, fetch_photo=None, webapp_url="", admin_ids=(), stt_read=None):
+        self.api, self.store, self.ocr_read, self.fetch_photo, self.stt_read = api, store, ocr_read, fetch_photo, stt_read
         self.webapp_url, self.admin_ids = webapp_url, set(admin_ids)
         self.state, self.photo_log, self.msg_log = {}, {}, {}
         self._locks, self._locks_guard = {}, threading.Lock()
@@ -250,6 +262,9 @@ class Bot:
                 return self.on_location(chat, user, tx, msg["location"])
             if msg.get("photo"):
                 return self.on_photo(chat, user, tx, msg["photo"])
+            voice = msg.get("voice") or msg.get("audio")
+            if voice:
+                return self.on_voice(chat, user, tx, voice)
             doc = msg.get("document")
             if doc and str(doc.get("mime_type", "")).startswith("image/"):       # a picture sent "as a file" (common on desktop)
                 return self.on_photo(chat, user, tx, [{"file_id": doc["file_id"], "file_size": doc.get("file_size", 0)}])
@@ -398,8 +413,31 @@ class Bot:
         st.update(step="confirm", times=r["times"], alt=None, ts=time.time())
         self.preview(chat, tx, st)
 
-    def preview(self, chat, tx, st):
-        self.say(chat, tx["confirm"].format(name=st["name"], t=fmt_times(tx, st["times"])),
+    # ---- voice -> speech-to-text -> spoken numbers (AM/PM resolved) -> preview
+    def on_voice(self, chat, user, tx, voice):
+        st = self.session(user["id"])
+        if not st or st["step"] not in ("await_times", "confirm"):
+            return self.say(chat, tx["need_loc"])
+        if voice.get("duration", 0) > MAX_VOICE_S:
+            return self.say(chat, tx["voice_long"])
+        if not self.allow_photo(user["id"]):                  # the same hourly budget as photos
+            return self.say(chat, tx["limit"])
+        if not self.stt_read or not self.fetch_photo:
+            return self.say(chat, tx["no_stt"])
+        self.say(chat, tx["voice_reading"])
+        heard = self.stt_read(self.fetch_photo(voice["file_id"]))
+        if heard is None:
+            return self.say(chat, tx["no_stt"])
+        r = spoken.parse(heard)
+        if not r["complete"] or r["alt"]:
+            found = tx["found"].format(t=", ".join("%s %s" % (n, r["times"][k]) for n, k in zip(tx["names"], timetable.ORDER) if k in r["times"])) if r["times"] else ""
+            return self.say(chat, tx["voice_heard"].format(t=heard[:300]) + "\n" + tx["voice_unclear"].format(found=found))
+        st.update(step="confirm", times=r["times"], alt=None, ts=time.time())
+        self.preview(chat, tx, st, heard=heard)
+
+    def preview(self, chat, tx, st, heard=None):
+        head = (tx["voice_heard"].format(t=heard[:300]) + "\n\n") if heard else ""
+        self.say(chat, head + tx["confirm"].format(name=st["name"], t=fmt_times(tx, st["times"])),
                  [[{"text": tx["yes"], "callback_data": "save"}], [{"text": tx["manual"], "callback_data": "manual"}, {"text": tx["cancel"], "callback_data": "cancel"}]])
 
     # ---- save
@@ -411,6 +449,10 @@ class Bot:
         self.say(chat, tx["saved"].format(name=st["name"]), self.open_button(st["mosque_id"], tx))
 
 
+def real_stt(data):
+    return stt.transcribe(data) if stt.available() else None
+
+
 def real_ocr(data):
     return ocr.read_texts(data) if ocr.available() else None
 
@@ -419,7 +461,7 @@ def main():
     if not TOKEN:
         sys.exit("TELEGRAM_BOT_TOKEN is not set")
     me = call("getMe")
-    log("bot @%s started; mini app url: %s; photo reading: %s" % (me["username"], WEBAPP_URL or "(not set)", "on" if ocr.available() else "off (no tesseract)"))
+    log("bot @%s started; mini app url: %s; photo reading: %s" % (me["username"], WEBAPP_URL or "(not set)", "on" if ocr.available() else "off (no tesseract)") + "; voice reading: %s" % ("on (%s)" % stt.MODEL if stt.available() else "off (no faster-whisper)"))
     call("deleteWebhook", drop_pending_updates=False)    # long polling and webhooks are mutually exclusive
     cmds = {"uz": ("Boshlash", "Yordam"), "ru": ("Начать", "Помощь"), "en": ("Start", "Help")}
     for lc, (d1, d2) in cmds.items():             # command menu in the user's own language; Uzbek is the default
@@ -434,7 +476,8 @@ def main():
     if WEBAPP_URL.startswith("https://"):
         call("setChatMenuButton", menu_button={"type": "web_app", "text": "Xarita", "web_app": {"url": WEBAPP_URL}})
     cfg = app.Config()
-    bot = Bot(call, app.Store(cfg), real_ocr if ocr.available() else None, download, WEBAPP_URL, ADMIN_IDS)
+    bot = Bot(call, app.Store(cfg), real_ocr if ocr.available() else None, download, WEBAPP_URL, ADMIN_IDS,
+              real_stt if stt.available() else None)
     offset, backoff = None, 1
     pool = ThreadPoolExecutor(max_workers=4)             # a slow photo (OCR) must not block everybody else
     while True:
