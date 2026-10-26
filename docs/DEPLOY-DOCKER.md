@@ -108,3 +108,12 @@ tavsiya etiladi (limit 768M). O'zbek tilida aniqlik rus/ingliz tilidagidan pastr
   Vaqtlar astronomik hisob bo'yicha (veb sahifadagi bilan bir xil), O'zbekiston vaqti (UTC+5). Har xabar kuniga **bir marta** yuboriladi
   (`bot_sent` jadvali: bot qayta ishga tushsa ham takrorlanmaydi). Bot bloklangan foydalanuvchining ma'lumotlarini o'zi o'chiradi.
 - `/stop` — foydalanuvchining barcha bot ma'lumotlari (obuna, eslatma sozlamalari) o'chadi.
+
+## Til (bot va veb bir xil tilda)
+Botga birinchi `/start` yozganda til so'raladi (Oʻzbekcha, Ўзбекча, Русский, English). Telegramning o'z tili **ishlatilmaydi**.
+Tanlov `bot_users.lang` da saqlanadi (`lang_set=true`), `/lang` bilan istalgan payt o'zgartiriladi. Shu tildan:
+- botning hamma xabari, buyruqlar menyusi (chat uchun) va eslatmalar;
+- Mini App havolalari (`?lang=...`) va chatning menyu tugmasi (`setChatMenuButton`, har chat uchun alohida);
+- Mini App ochilganda `GET /api/me` (Telegram imzosi tekshiriladi) bot tanlagan tilni qaytaradi; veb'da til almashtirilsa
+  `POST /api/me/lang` botni ham shu tilga o'tkazadi. Kirill matnlar lotindan avtomatik hosil qilinadi (`server/translit.py`).
+Tilni tanlamagan foydalanuvchining birinchi xabari (masalan, lokatsiya yoki `/start m_<id>`) saqlanadi va til tanlangach davom ettiriladi.
