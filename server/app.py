@@ -323,6 +323,9 @@ class Store:
                         merged[k] = v
                 new["prayer_times"] = clean_times(merged)
             changes = {k: [old[k], v] for k, v in new.items() if old[k] != v}
+            locked = [k for k in ("name", "address", "lat", "lon") if k in changes]
+            if old["origin"] == "imported" and locked:    # records taken over from the map data: only the congregation times are editable
+                raise ApiError(403, "field_locked", "only the prayer times of this mosque can be changed", fields=locked)
             if not changes:
                 return old
             version = old["version"] + 1

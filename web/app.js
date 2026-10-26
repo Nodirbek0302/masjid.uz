@@ -412,7 +412,7 @@
         ]),
         el("div", { class: "row" }, yandexLinks(m)),
         el("div", { class: "row" }, [
-          btn("", T("btn.edit"), function () { editForm(m); }),
+          m.origin === "imported" ? null : btn("", T("btn.edit"), function () { editForm(m); }),     // map-data mosques: only the times are editable (see the button above)
           btn("ghost", T("btn.history"), function () { historyView(m); }),
           btn("danger", T("btn.report"), function () { reportForm(m); })
         ])

@@ -135,14 +135,14 @@ class Api(unittest.TestCase):
         s, lst = self.call("GET", "/api/mosques?bbox=69.9,38.0,70.1,38.4")
         by_name = {m["name"]: m for m in lst["items"]}
         # a human edits B; C gets archived by a moderator; A is untouched
-        s, _ = self.call("PATCH", "/api/mosques/" + by_name["Old B"]["id"], {"expected_version": 1, "name": "Community B"})
+        s, _ = self.call("PATCH", "/api/mosques/" + by_name["Old B"]["id"], {"expected_version": 1, "prayer_times": {"fajr": "05:00"}})
         self.assertEqual(s, 200)
         self.call("POST", "/api/admin/mosques/%s/archive" % by_name["Old C"]["id"], {}, admin=True)
         second = {"elements": [el(901, 38.1, "New A"), el(902, 38.2, "OSM B changed"), el(903, 38.3, "New C")]}
         r = import_osm.run(second, app.Config())
         self.assertEqual((r["updated"], r["protected_edited"]), (1, 2))
         self.assertEqual(self.call("GET", "/api/mosques/" + by_name["Old A"]["id"])[1]["name"], "New A")        # followed OSM
-        self.assertEqual(self.call("GET", "/api/mosques/" + by_name["Old B"]["id"])[1]["name"], "Community B")  # human edit wins
+        self.assertEqual(self.call("GET", "/api/mosques/" + by_name["Old B"]["id"])[1]["prayer_times"]["fajr"], "05:00")   # human edit wins
         self.assertEqual(self.call("GET", "/api/mosques/" + by_name["Old C"]["id"])[1]["status"], "archived")
         actions = [h["action"] for h in self.call("GET", "/api/mosques/%s/history" % by_name["Old A"]["id"])[1]["items"]]
         self.assertEqual(actions, ["osm_sync", "create"])                                                       # audit trail kept
@@ -200,8 +200,7 @@ class Api(unittest.TestCase):
         import_osm.run(data, app.Config())
         s, lst = self.call("GET", "/api/mosques?bbox=70.9,32.9,71.4,33.4")
         ids = {m["name"]: m["id"] for m in lst["items"]}
-        self.call("PATCH", "/api/mosques/" + ids["Edited by human"], {"expected_version": 1, "name": "Edited by human"})   # no-op edit
-        self.call("PATCH", "/api/mosques/" + ids["Edited by human"], {"expected_version": 1, "name": "Edited by human 2"})
+        self.call("PATCH", "/api/mosques/" + ids["Edited by human"], {"expected_version": 1, "prayer_times": {"fajr": "05:05"}})
         addr_idx = {en.cell(33.00005, 71.0): [(33.00005, 71.0, "Muqimiy ko'chasi", "166", "Toshkent")],        # ~5.5 m from the first mosque
                     en.cell(33.3, 71.3): [(33.3, 71.3, "Should not apply", "1", "")]}                         # next to the human-edited one
         road_idx = {}
@@ -293,6 +292,23 @@ class Api(unittest.TestCase):
         self.assertEqual(far[0]["name"], "N4" if hav((34.4, 72.4), pts[4]) < hav((34.4, 72.4), pts[3]) else "N3")
         self.assertEqual(self.call("GET", "/api/mosques/nearest?lat=95&lon=0")[0], 400)
         self.assertEqual(self.call("GET", "/api/mosques/nearest?lat=34&lon=72&limit=x")[0], 400)
+
+    def test_imported_mosques_only_allow_time_edits(self):
+        import import_osm
+        import_osm.run({"elements": [{"type": "node", "id": 7501, "lat": 32.0, "lon": 74.0, "tags": {"name": "Map mosque", "addr:full": "Map street 1"}}]}, app.Config())
+        m = [x for x in self.call("GET", "/api/mosques?bbox=73.9,31.9,74.1,32.1")[1]["items"]][0]
+        self.assertEqual(m["origin"], "imported")
+        for field, value in (("name", "Renamed"), ("address", "Other street"), ("lat", 32.001), ("lon", 74.001)):
+            s, r = self.call("PATCH", "/api/mosques/" + m["id"], {"expected_version": m["version"], field: value})
+            self.assertEqual((s, r["error"]), (403, "field_locked"), field)
+            self.assertEqual(r["fields"], [field])
+        same = {"expected_version": m["version"], "name": "Map mosque", "address": "Map street 1", "prayer_times": {"fajr": "05:10"}}
+        s, r = self.call("PATCH", "/api/mosques/" + m["id"], same)                                  # unchanged values are fine
+        self.assertEqual(s, 200); self.assertEqual(r["prayer_times"]["fajr"], "05:10"); self.assertEqual(r["name"], "Map mosque")
+        # a community-added mosque keeps full editing
+        s, c = self.add(32.5, 74.5, name="Mine")
+        s, r = self.call("PATCH", "/api/mosques/" + c["id"], {"expected_version": 1, "name": "Mine 2", "address": "Somewhere", "lat": 32.5001})
+        self.assertEqual((s, r["name"], r["address"]), (200, "Mine 2", "Somewhere"))
 
     def test_osm_address_building(self):
         import import_osm as io_
