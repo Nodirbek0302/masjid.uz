@@ -13,13 +13,21 @@ class BotDB:
             return c.execute("SELECT * FROM bot_users WHERE telegram_id=%s", (tid,)).fetchone()
 
     def set_user(self, tid, **fields):
-        allowed = {"region", "daily", "before_prayer", "lang"}
+        allowed = {"region", "daily", "before_prayer", "lang", "lang_set"}
         fields = {k: v for k, v in fields.items() if k in allowed}
         with self.pool.connection() as c:
             c.execute("INSERT INTO bot_users(telegram_id%s) VALUES (%%s%s) ON CONFLICT (telegram_id) DO UPDATE SET %s, updated_at=now()" % (
                 "".join(", " + k for k in fields), ", %s" * len(fields),
                 ", ".join("%s=EXCLUDED.%s" % (k, k) for k in fields) or "lang=bot_users.lang"), (tid, *fields.values()))
         return self.user(tid)
+
+    def lang_of(self, tid):
+        """The language the user chose in the bot, or None when they have not been asked yet."""
+        u = self.user(tid)
+        return u["lang"] if u and u.get("lang_set") else None
+
+    def set_lang(self, tid, lang):
+        return self.set_user(tid, lang=lang, lang_set=True)
 
     def reminder_users(self):
         with self.pool.connection() as c:

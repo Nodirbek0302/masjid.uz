@@ -14,6 +14,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import urlencode
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -28,6 +29,7 @@ import prayertimes  # noqa: E402
 import spoken  # noqa: E402
 import stt  # noqa: E402
 import timetable  # noqa: E402
+import translit  # noqa: E402
 
 app.load_dotenv()
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -89,14 +91,13 @@ def log(msg):
     sys.stderr.flush()
 
 
-def pick_lang(code):
-    """Telegram language_code -> one of our texts (Uzbek is the default; the Mini App itself also offers Cyrillic)."""
-    code = (code or "").lower()
-    if code.startswith("ru") or code[:2] in ("kk", "ky", "tg", "tk", "be", "uk"):
-        return "ru"
-    if code.startswith("en"):
-        return "en"
-    return "uz"
+LANG_NAMES = [("uz", "Oʻzbekcha"), ("uz-cyrl", "Ўзбекча"), ("ru", "Русский"), ("en", "English")]
+LANG_ASK = "🌐 Tilni tanlang · Тилни танланг · Выберите язык · Choose a language"
+
+
+def web_url(base, lang, path="/", **q):
+    """Link into the Mini App that opens in the user's chosen language (the web page reads ?lang=)."""
+    return base.rstrip("/") + path + "?" + urlencode(dict(q, lang=lang))
 
 
 TEXTS = {
@@ -195,6 +196,29 @@ TEXTS = {
 
 for _lc, _more in bottexts.MORE.items():
     TEXTS[_lc].update(_more)
+for _lc, _v in {"uz": "Xarita", "ru": "Карта", "en": "Map"}.items():
+    TEXTS[_lc]["menu"] = _v
+CMDS = {   # command menu per language (Telegram shows it under "Menu")
+    "uz": [("start", "Boshlash"), ("nearest", "Eng yaqin masjid"), ("reminders", "Eslatmalar"), ("subs", "Obunalarim"), ("lang", "Til"),
+           ("help", "Yordam"), ("stop", "Maʼlumotlarimni oʻchirish")],
+    "ru": [("start", "Начать"), ("nearest", "Ближайшая мечеть"), ("reminders", "Напоминания"), ("subs", "Мои подписки"), ("lang", "Язык"),
+           ("help", "Помощь"), ("stop", "Удалить мои данные")],
+    "en": [("start", "Start"), ("nearest", "Nearest mosque"), ("reminders", "Reminders"), ("subs", "My subscriptions"), ("lang", "Language"),
+           ("help", "Help"), ("stop", "Delete my data")],
+}
+
+
+def _cyr(v):
+    return [translit.cyrillize(x) for x in v] if isinstance(v, list) else translit.cyrillize(v)
+
+
+# Uzbek in Cyrillic is derived from the Latin texts (same rules as the web interface), so the two can never drift apart.
+TEXTS["uz-cyrl"] = {k: _cyr(v) for k, v in TEXTS["uz"].items() if isinstance(v, (str, list))}
+bottexts.REGION_NAMES["uz-cyrl"] = [translit.cyrillize(n) for n in bottexts.REGION_NAMES["uz"]]
+CMDS["uz-cyrl"] = [(c, translit.cyrillize(d)) for c, d in CMDS["uz"]]
+for _lc, _t in TEXTS.items():
+    _t["_lang"] = _lc
+    _t["lang_ok"] = "✅ " + dict(LANG_NAMES)[_lc]
 
 
 def fmt_times(tx, times):
@@ -208,7 +232,7 @@ class Bot:
         self.api, self.store, self.ocr_read, self.fetch_photo, self.stt_read = api, store, ocr_read, fetch_photo, stt_read
         self.webapp_url, self.admin_ids = webapp_url, set(admin_ids)
         self.db = botdb.BotDB(store)
-        self.state, self.photo_log, self.msg_log = {}, {}, {}
+        self.state, self.photo_log, self.msg_log, self.pending = {}, {}, {}, {}
         self._locks, self._locks_guard = {}, threading.Lock()
 
     # ---- helpers
@@ -266,10 +290,39 @@ class Bot:
         self.photo_log[uid] = q
         return ok
 
+    def web(self, tx, path="/", **q):
+        return web_url(self.webapp_url, tx["_lang"], path, **q)
+
     def open_button(self, mosque_id, tx):
         if not self.webapp_url.startswith("https://"):
             return None
-        return [[{"text": tx["see"], "web_app": {"url": self.webapp_url.rstrip("/") + "/?m=" + mosque_id}}]]
+        return [[{"text": tx["see"], "web_app": {"url": self.web(tx, "/", m=mosque_id)}}]]
+
+    # ---- language: asked on the first contact, remembered, used for every message and for the Mini App links
+    def lang_of(self, uid):
+        try:
+            return self.db.lang_of(uid)
+        except Exception:
+            return None
+
+    def ask_language(self, chat):
+        rows = [[{"text": n, "callback_data": "lang:" + c} for c, n in LANG_NAMES[i:i + 2]] for i in (0, 2)]
+        self.say(chat, LANG_ASK, rows)
+
+    def apply_language(self, chat, user, lang):
+        """Store the choice and switch the chat's command menu and Mini App menu button to that language."""
+        self.db.set_lang(user["id"], lang)
+        tx = TEXTS[lang]
+        cmds = [{"command": c, "description": d} for c, d in CMDS[lang]]
+        if user["id"] in self.admin_ids:
+            cmds += [{"command": "admin", "description": "Moderator"}, {"command": "id", "description": "Telegram ID"}]
+        try:
+            self.api("setMyCommands", commands=cmds, scope={"type": "chat", "chat_id": chat})
+            if self.webapp_url.startswith("https://"):
+                self.api("setChatMenuButton", chat_id=chat, menu_button={"type": "web_app", "text": tx["menu"], "web_app": {"url": self.web(tx)}})
+        except Exception as e:
+            log("language menu not applied: %s" % type(e).__name__)
+        return tx
 
     # ---- entry point
     def handle(self, update):
@@ -286,9 +339,18 @@ class Bot:
         if msg.get("chat", {}).get("type") != "private" or not msg.get("from"):
             return
         user, chat = msg["from"], msg["chat"]["id"]
-        tx = TEXTS[pick_lang(user.get("language_code"))]
         if not self.allow_msg(user["id"]):                     # flood protection: silently drop the excess
             return
+        lang = self.lang_of(user["id"])
+        if lang is None:                                       # first contact: ask the language, then carry on with this very message
+            if len(self.pending) > 2000:
+                self.pending.pop(next(iter(self.pending)))
+            self.pending[user["id"]] = update
+            try:
+                return self.ask_language(chat)
+            except Exception as e:
+                return log("language question failed: %s" % type(e).__name__)
+        tx = TEXTS[lang]
         try:
             if msg.get("location"):
                 return self.on_location(chat, user, tx, msg["location"])
@@ -328,17 +390,19 @@ class Bot:
             return self.say(chat, tx["send_photo"].format(name=self.state[uid]["name"]))
         if cmd in ("/start", "/help"):
             if self.webapp_url.startswith("https://"):
-                self.say(chat, tx["hello"], [[{"text": tx["open"], "web_app": {"url": self.webapp_url}}]])
+                self.say(chat, tx["hello"], [[{"text": tx["open"], "web_app": {"url": self.web(tx)}}]])
             else:
                 self.say(chat, tx["hello"] + "\n\n" + tx["pending"])
             # persistent button under the input box: one tap sends the user's current location (they are standing at the mosque)
             self.say(chat, tx["loc_hint"], reply_keyboard=[[{"text": tx["loc_btn"], "request_location": True}]])
+        elif cmd == "/lang":
+            self.ask_language(chat)
         elif cmd == "/id":
             self.say(chat, tx["id"].format(id=uid))
         elif cmd == "/admin":
             if uid in self.admin_ids:
                 if self.webapp_url.startswith("https://"):
-                    self.say(chat, tx["admin_text"], [[{"text": tx["admin_btn"], "web_app": {"url": self.webapp_url.rstrip("/") + "/admin.html"}}]])
+                    self.say(chat, tx["admin_text"], [[{"text": tx["admin_btn"], "web_app": {"url": self.web(tx, "/admin.html")}}]])
                 else:
                     self.say(chat, tx["pending"])
         elif cmd == "/nearest":
@@ -375,7 +439,6 @@ class Bot:
         if not cb.get("message"):
             return
         chat = cb["message"]["chat"]["id"]
-        tx = TEXTS[pick_lang(user.get("language_code"))]
         uid = user["id"]
         try:
             self.api("answerCallbackQuery", callback_query_id=cb["id"])
@@ -383,9 +446,21 @@ class Bot:
             pass
         if not self.allow_msg(uid):                            # taps count towards the flood limit too (answered above so the button stops spinning)
             return
+        kind, _, arg = data.partition(":")
+        lang = self.lang_of(uid)
+        if lang is None and kind != "lang":
+            return self.ask_language(chat)
+        tx = TEXTS[lang or "uz"]
         try:
-            kind, _, arg = data.partition(":")
-            if kind == "pick":
+            if kind == "lang" and arg in TEXTS:
+                tx = self.apply_language(chat, user, arg)
+                self.say(chat, tx["lang_ok"])
+                pending = self.pending.pop(uid, None)
+                if pending:
+                    self._handle(pending)                      # the message that started the conversation, now in the chosen language
+                else:
+                    self.on_command(chat, user, tx, "/start")
+            elif kind == "pick":
                 m = self.store.get(arg)
                 self.state[uid] = {"step": "await_times", "mosque_id": m["id"], "name": m["name"] or tx["noname"], "ts": time.time()}
                 self.say(chat, tx["send_photo"].format(name=self.state[uid]["name"]))
@@ -409,7 +484,7 @@ class Bot:
                 self.db.unsubscribe(uid, m["id"])
                 self.say(chat, tx["unsubscribed"].format(name=m["name"] or tx["noname"]))
             elif kind == "reg" and arg.isdigit() and int(arg) < len(prayertimes.REGIONS):
-                self.db.set_user(uid, region=int(arg), lang=pick_lang(user.get("language_code")))
+                self.db.set_user(uid, region=int(arg))
                 self.reminders_menu(chat, user, tx)
             elif kind == "rm":
                 self.reminder_toggle(chat, user, tx, arg)
@@ -540,7 +615,6 @@ class Bot:
         m = self.store.get(mosque_id)
         if m["status"] == "archived":
             return self.say(chat, tx["archived"])
-        self.db.set_user(user["id"], lang=pick_lang(user.get("language_code")))
         res = self.db.subscribe(user["id"], m["id"])
         if res == "limit":
             return self.say(chat, tx["sub_limit"].format(n=botdb.MAX_SUBS))
@@ -555,7 +629,7 @@ class Bot:
 
     # ---- reminders
     def reminders_menu(self, chat, user, tx):
-        lang = pick_lang(user.get("language_code"))
+        lang = tx["_lang"]
         u = self.db.set_user(user["id"], lang=lang)
         if u["region"] is None:
             return self.region_picker(chat, lang, tx)
@@ -572,7 +646,7 @@ class Bot:
         self.say(chat, tx["rem_pick_region"], [btns[i:i + 2] for i in range(0, len(btns), 2)])
 
     def reminder_toggle(self, chat, user, tx, what):
-        lang = pick_lang(user.get("language_code"))
+        lang = tx["_lang"]
         u = self.db.set_user(user["id"], lang=lang)
         if what == "region":
             return self.region_picker(chat, lang, tx)
@@ -652,7 +726,7 @@ class Notifier:
                 tx = TEXTS[u["lang"] if u and u["lang"] in TEXTS else "uz"]
                 buttons = None
                 if self.webapp_url.startswith("https://"):
-                    buttons = [[{"text": tx["see"], "web_app": {"url": self.webapp_url.rstrip("/") + "/?m=" + r["mosque_id"]}}]]
+                    buttons = [[{"text": tx["see"], "web_app": {"url": web_url(self.webapp_url, tx["_lang"], "/", m=r["mosque_id"])}}]]
                 if not self.send(tid, tx["change_msg"].format(name=r["name"] or tx["noname"], t=fmt_times(tx, r["prayer_times"])), buttons):
                     continue                               # try again on the next tick (unless the user is gone)
             self.db.mark_notified(tid, r["mosque_id"], r["times_updated_at"])
@@ -672,16 +746,11 @@ def main():
     me = call("getMe")
     log("bot @%s started; mini app url: %s; photo reading: %s" % (me["username"], WEBAPP_URL or "(not set)", "on" if ocr.available() else "off (no tesseract)") + "; voice reading: %s" % ("on (%s)" % stt.MODEL if stt.available() else "off (no faster-whisper)"))
     call("deleteWebhook", drop_pending_updates=False)    # long polling and webhooks are mutually exclusive
-    cmds = {"uz": ("Boshlash", "Yordam"), "ru": ("Начать", "Помощь"), "en": ("Start", "Help")}
-    more = {"uz": ("Eng yaqin masjid", "Eslatmalar", "Obunalarim", "Maʼlumotlarimni oʻchirish"),
-            "ru": ("Ближайшая мечеть", "Напоминания", "Мои подписки", "Удалить мои данные"),
-            "en": ("Nearest mosque", "Reminders", "My subscriptions", "Delete my data")}
-    for lc, (d1, d2) in cmds.items():
-        cm = more[lc]             # command menu in the user's own language; Uzbek is the default
+    for lc, table in CMDS.items():                # global command menu (users who chose a language get their own, see apply_language)
+        if lc == "uz-cyrl":
+            continue
         kw = {} if lc == "uz" else {"language_code": lc}
-        call("setMyCommands", commands=[{"command": "start", "description": d1}, {"command": "nearest", "description": cm[0]},
-                                        {"command": "reminders", "description": cm[1]}, {"command": "subs", "description": cm[2]},
-                                        {"command": "help", "description": d2}, {"command": "stop", "description": cm[3]}], **kw)
+        call("setMyCommands", commands=[{"command": c, "description": d} for c, d in table], **kw)
     for aid in ADMIN_IDS:                         # the extra /admin command is visible to allow-listed admins only
         try:
             call("setMyCommands", commands=[{"command": "start", "description": "Start"}, {"command": "admin", "description": "Moderator"},

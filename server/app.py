@@ -21,6 +21,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qsl, unquote, urlparse
 
+import botdb
 import translit
 import psycopg
 from psycopg.rows import dict_row
@@ -526,6 +527,7 @@ COMPRESSIBLE = (".js", ".css", ".html", ".json", ".svg")
 
 def make_handler(cfg, store):
     limiter = RateLimiter(cfg.rate_limit)
+    bdb = botdb.BotDB(store)
     admin_limiter = RateLimiter(10)      # failed admin logins per minute per client
 
     class H(BaseHTTPRequestHandler):
@@ -603,6 +605,13 @@ def make_handler(cfg, store):
                 return "client:" + cid, info
             return None, info
 
+        def me_lang(self):
+            """The language this (signature-verified) Telegram user chose in the bot, else None. Used by the Mini App."""
+            actor, _ = self.identity()
+            if not (actor or "").startswith("tg:"):
+                return None
+            return bdb.lang_of(int(actor[3:]))
+
         def client_ip(self):
             """Real client address. X-Forwarded-For is honoured only when TRUST_PROXY=1 (behind our Caddy);
             otherwise a client could dodge limits by inventing the header."""
@@ -673,6 +682,15 @@ def make_handler(cfg, store):
                                             "prayer": cfg.prayer,
                                             "admin_token_login": cfg.allow_admin_token,
                                             "bot_username": cfg.bot_username})
+            if path == "/api/me" and method == "GET":
+                return self.send_json(200, {"lang": self.me_lang()})
+            if path == "/api/me/lang" and method == "POST":
+                actor, _ = self.identity()
+                code = self.body_json().get("lang")
+                if not (actor or "").startswith("tg:") or code not in ("uz", "uz-cyrl", "ru", "en"):
+                    raise ApiError(400, "invalid_lang", "a verified Telegram user and a known language are required")
+                bdb.set_lang(int(actor[3:]), code)
+                return self.send_json(200, {"lang": code})
             if path == "/api/health":
                 return self.send_json(200, {"ok": True})
             if path == "/api/mosques" and method == "GET":

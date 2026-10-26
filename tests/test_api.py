@@ -336,6 +336,28 @@ class Api(unittest.TestCase):
         self.assertEqual(code, 401)                                   # empty allow-list = nobody is a moderator
         srv.shutdown()
 
+    def test_mini_app_follows_the_language_chosen_in_the_bot(self):
+        import botdb
+        srv, base = make_server()
+        def call(method, path, headers=None, body=None):
+            req = urllib.request.Request(base + path, method=method, data=json.dumps(body).encode() if body is not None else None,
+                                         headers=dict({"Content-Type": "application/json"}, **(headers or {})))
+            try:
+                with urllib.request.urlopen(req) as r: return r.status, json.loads(r.read())
+            except urllib.error.HTTPError as e: return e.code, json.loads(e.read())
+        user = {"id": 880001, "first_name": "Lang"}
+        h = {"X-Telegram-Init-Data": sign_init_data(user)}
+        self.assertEqual(call("GET", "/api/me", h), (200, {"lang": None}))                      # not asked yet in the bot
+        botdb.BotDB(srv.store).set_lang(880001, "uz-cyrl")
+        self.assertEqual(call("GET", "/api/me", h), (200, {"lang": "uz-cyrl"}))
+        self.assertEqual(call("GET", "/api/me", {"X-Telegram-Init-Data": sign_init_data(user, token="1:OTHER")})[1], {"lang": None})   # forged: nothing
+        self.assertEqual(call("GET", "/api/me")[1], {"lang": None})
+        self.assertEqual(call("POST", "/api/me/lang", h, {"lang": "ru"}), (200, {"lang": "ru"}))   # chosen on the web: the bot follows
+        self.assertEqual(botdb.BotDB(srv.store).lang_of(880001), "ru")
+        self.assertEqual(call("POST", "/api/me/lang", h, {"lang": "xx"})[0], 400)
+        self.assertEqual(call("POST", "/api/me/lang", None, {"lang": "ru"})[0], 400)           # anonymous cannot set anything
+        srv.shutdown()
+
     def test_search_and_admin_views(self):
         self.add(37.5, 64.5, name="Alisher Navoiy jome masjidi")
         self.add(37.6, 64.6, name="100%_special")
@@ -577,16 +599,77 @@ class BotFlow(unittest.TestCase):
 
     def buttons(self):
         for m, kw in reversed(self.sent):
-            if m == "sendMessage" and "reply_markup" in kw:
+            if m == "sendMessage" and "inline_keyboard" in kw.get("reply_markup", {}):
                 return [b for row in kw["reply_markup"]["inline_keyboard"] for b in row]
         return []
 
+    autolang = True        # most tests are not about the language question: give the user a language first (like Telegram's own, as before)
+
+    def ensure_lang(self):
+        if self.autolang:                                      # the language follows the test user's language_code, as these tests assume
+            code = (self.user.get("language_code") or "").lower()
+            want = "ru" if code.startswith("ru") else "en" if code.startswith("en") else "uz"
+            if self.bot.db.lang_of(self.user["id"]) != want:
+                self.bot.db.set_lang(self.user["id"], want)
+
     def send(self, **kw):
+        self.ensure_lang()
         base = {"chat": {"id": 555, "type": "private"}, "from": self.user}
         self.bot.handle({"update_id": 1, "message": dict(base, **kw)})
 
     def click(self, data):
+        self.ensure_lang()
         self.bot.handle({"update_id": 2, "callback_query": {"id": "q", "from": self.user, "data": data, "message": {"chat": {"id": 555}}}})
+
+    def calls(self, method):
+        return [kw for m, kw in self.sent if m == method]
+
+    def test_language_is_asked_first_then_everything_follows_it(self):
+        self.autolang = False
+        self.user = {"id": 900, "first_name": "Sam", "language_code": "en"}                      # English phone, but wants the bot in Uzbek
+        self.send(text="/start")
+        self.assertEqual(len(self.msgs()), 1)                                                   # only the question, no hello yet
+        langs = [b["callback_data"] for b in self.buttons()]
+        self.assertEqual(langs, ["lang:uz", "lang:uz-cyrl", "lang:ru", "lang:en"])
+        self.assertIsNone(self.bot.db.lang_of(900))
+        self.click("lang:uz-cyrl")
+        self.assertEqual(self.bot.db.lang_of(900), "uz-cyrl")
+        sent = "\n".join(self.msgs())
+        self.assertIn("Ассалому алайкум", sent)                                                 # hello in Cyrillic Uzbek, not in English
+        self.assertTrue(any("lang=uz-cyrl" in b.get("web_app", {}).get("url", "") for b in self.buttons()))     # Mini App opens in it too
+        cmds = self.calls("setMyCommands")[-1]
+        self.assertEqual(cmds["scope"], {"type": "chat", "chat_id": 555}); self.assertIn("Бошлаш", [c["description"] for c in cmds["commands"]])
+        menu = self.calls("setChatMenuButton")[-1]
+        self.assertEqual(menu["chat_id"], 555); self.assertIn("lang=uz-cyrl", menu["menu_button"]["web_app"]["url"])
+        self.send(text="/id"); self.assertIn("Telegram ID", self.msgs()[-1]); self.assertIn("Сизнинг", self.msgs()[-1])
+        self.send(text="/lang"); self.assertEqual([b["callback_data"] for b in self.buttons()][0], "lang:uz")      # can be changed any time
+        self.click("lang:ru")
+        self.assertIn("Ассаламу алайкум", "\n".join(self.msgs())); self.assertTrue(any("lang=ru" in b.get("web_app", {}).get("url", "") for b in self.buttons()))
+        self.send(text="/id"); self.assertIn("Ваш Telegram ID", self.msgs()[-1])
+        self.user = {"id": 901, "first_name": "Other", "language_code": "uz"}; self.sent.clear()          # another person is asked on their own
+        self.send(text="/id"); self.assertEqual([b["callback_data"] for b in self.buttons()][:1], ["lang:uz"])
+
+    def test_the_first_message_is_continued_after_the_language_is_chosen(self):
+        self.autolang = False
+        self.user = {"id": 902, "first_name": "Dee", "language_code": "ru"}
+        self.send(text="/start m_" + self.m["id"])                                              # opened from a mosque page: deep link first
+        self.assertEqual(len(self.msgs()), 1)
+        self.click("lang:en")
+        self.assertIn("Bot mosque", self.msgs()[-1]); self.assertIn("Send a photo", self.msgs()[-1])      # carried on, in English
+        self.autolang = False
+        self.send(location={"latitude": 40.0004, "longitude": 66.0})
+        self.assertIn("Nearest mosque", "\n".join(self.msgs()))
+
+    def test_cyrillic_bot_texts_keep_placeholders_commands_and_brands(self):
+        import re
+        uz, cy = self.botmod.TEXTS["uz"], self.botmod.TEXTS["uz-cyrl"]
+        ph = lambda v: sorted(re.findall(r"\{\w+\}", v if isinstance(v, str) else " ".join(v)))   # noqa: E731
+        for k, v in uz.items():
+            if isinstance(v, (str, list)):
+                self.assertEqual(ph(cy[k]), ph(v), k)
+        self.assertIn("/subs", cy["sub_limit"]); self.assertIn("/skip", cy["ask_name"]); self.assertIn("05:20 12:30 16:00 17:35 19:00", cy["send_photo"])
+        self.assertEqual(cy["names"][0], "Бомдод"); self.assertEqual(len(self.botmod.bottexts.REGION_NAMES["uz-cyrl"]), 14)
+        self.assertEqual(self.botmod.bottexts.REGION_NAMES["uz-cyrl"][0], "Тошкент шаҳри")
 
     def test_location_photo_confirm_save_and_link(self):
         self.send(location={"latitude": 40.0004, "longitude": 66.0})
@@ -601,7 +684,7 @@ class BotFlow(unittest.TestCase):
         self.assertEqual(cur["prayer_times"]["asr"], "16:00"); self.assertTrue(cur["times_updated_at"])
         self.assertIn("oʻzgardi", self.msgs()[-1])                                              # "the times changed, you can check"
         link = self.buttons()[0]["web_app"]["url"]
-        self.assertEqual(link, "https://example.org/?m=" + self.m["id"])
+        self.assertEqual(link, "https://example.org/?m=" + self.m["id"] + "&lang=uz")
         with psycopg.connect(TEST_URL, autocommit=True) as c:                                  # who/what recorded
             self.assertEqual(c.execute("SELECT tg_username, platform FROM actors WHERE actor_id='tg:555'").fetchone(), ("ali_u", "telegram-bot"))
             self.assertEqual(c.execute("SELECT actor FROM mosque_history WHERE mosque_id=%s AND action='edit'", (self.m["id"],)).fetchone()[0], "tg:555")
@@ -636,10 +719,11 @@ class BotFlow(unittest.TestCase):
     def test_admin_without_mini_app_url_gets_an_answer_and_archived_is_explained(self):
         bot = self.botmod.Bot(lambda m, **kw: self.sent.append((m, kw)), self.store, None, None, "", admin_ids=[7])
         self.user = {"id": 7, "first_name": "Owner", "language_code": "uz"}; self.sent.clear()
+        bot.db.set_lang(7, "uz")
         bot.handle({"update_id": 9, "message": {"chat": {"id": 7, "type": "private"}, "from": self.user, "text": "/admin"}})
         self.assertIn("Mini App", self.msgs()[-1])
         self.store.moderate(self.m["id"], "archive", "admin:7", "t")
-        self.user = {"id": 8, "first_name": "A", "language_code": "uz"}
+        self.user = {"id": 8, "first_name": "A", "language_code": "uz"}; bot.db.set_lang(8, "uz")
         five = {"fajr": "05:20", "dhuhr": "12:30", "asr": "16:00", "maghrib": "17:35", "isha": "19:00"}
         bot.state[8] = {"step": "confirm", "mosque_id": self.m["id"], "name": "x", "times": five, "ts": __import__("time").time()}
         bot.handle({"update_id": 10, "callback_query": {"id": "q", "from": self.user, "data": "save", "message": {"chat": {"id": 8}}}})
@@ -665,6 +749,7 @@ class BotFlow(unittest.TestCase):
         heard = {"text": "Bomdod besh yigirma, Peshin o'n ikki o'ttiz, Asr to'rt, Shom besh o'ttiz besh, Xufton yetti"}
         bot = self.botmod.Bot(lambda m, **kw: self.sent.append((m, kw)), self.store, None, lambda fid: b"ogg", "https://example.org",
                               stt_read=lambda data: heard["text"])
+        bot.db.set_lang(555, "uz")
         def say(**kw):
             base = {"chat": {"id": 555, "type": "private"}, "from": self.user}
             bot.handle({"update_id": 1, "message": dict(base, **kw)})
@@ -732,7 +817,7 @@ class BotFlow(unittest.TestCase):
         self.bot.handle({"update_id": 3, "message": {"chat": {"id": -1, "type": "group"}, "from": self.user, "text": "/id"}})
         self.assertEqual(len(self.msgs()), 1)
         self.user = {"id": 7, "first_name": "Owner", "language_code": "ru"}; self.send(text="/admin")
-        self.assertTrue(self.buttons()[0]["web_app"]["url"].endswith("/admin.html"))
+        self.assertTrue(self.buttons()[0]["web_app"]["url"].endswith("/admin.html?lang=ru"))
 
     # ---- nearest card, subscriptions, reminders
     def set_times(self, mid=None, times=None, who=("tg:900", {"kind": "telegram", "platform": "telegram-bot"})):
@@ -872,7 +957,7 @@ class BotFlow(unittest.TestCase):
         self.assertEqual(sorted(got), [555, 557])                                              # not the editor
         self.assertIn("oʻzgardi", got[555]); self.assertIn("16:00", got[555]); self.assertIn("изменилось", got[557]); self.assertIn("Bot mosque", got[557])
         link = [kw for m, kw in self.sent if kw["chat_id"] == 555][0]["reply_markup"]["inline_keyboard"][0][0]["web_app"]["url"]
-        self.assertEqual(link, "https://example.org/?m=" + mid)
+        self.assertEqual(link, "https://example.org/?m=" + mid + "&lang=uz")
         count = len(self.sent); n.tick(); n.tick(); self.assertEqual(len(self.sent), count)    # announced once
         later = {"fajr": "05:25", "dhuhr": "12:30", "asr": "16:05", "maghrib": "17:35", "isha": "19:00"}
         self.set_times(times=later, who=("tg:555", {"kind": "telegram", "platform": "telegram-bot"}))

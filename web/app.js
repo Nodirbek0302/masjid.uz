@@ -14,6 +14,17 @@
     try { localStorage.setItem("cid", clientId); } catch (e) {}
   }
   var tg = null;
+  // Inside Telegram the language chosen in the bot decides: ask the server once per session (the bot's links also carry ?lang=)
+  var tgData = "";
+  try { tgData = new URLSearchParams(location.hash.slice(1)).get("tgWebAppData") || ""; } catch (e) {}
+  try {
+    if (tgData && !sessionStorage.getItem("langSync")) {
+      sessionStorage.setItem("langSync", "1");
+      fetch("/api/me", { headers: { "X-Telegram-Init-Data": tgData } }).then(function (r) { return r.json(); }).then(function (j) {
+        if (j && j.lang && j.lang !== I18N.lang()) { I18N.set(j.lang); location.reload(); }
+      }).catch(function () {});
+    }
+  } catch (e) {}
   if (location.hash.indexOf("tgWebAppData") >= 0) {         // load Telegram script only inside Telegram
     var sc = document.createElement("script");
     sc.src = "https://telegram.org/js/telegram-web-app.js";
@@ -175,6 +186,9 @@
     sel.value = I18N.lang();
     sel.onchange = function () {
       I18N.set(sel.value);
+      if (tgData) {                                    // keep the bot in the same language
+        try { fetch("/api/me/lang", { method: "POST", keepalive: true, headers: { "Content-Type": "application/json", "X-Telegram-Init-Data": tgData }, body: JSON.stringify({ lang: sel.value }) }); } catch (e) {}
+      }
       var u = new URL(location.href);
       u.searchParams.delete("lang");
       if (map) { var c = map.getCenter(); u.searchParams.set("c", c.lat.toFixed(5) + "," + c.lng.toFixed(5) + "," + map.getZoom().toFixed(2)); }

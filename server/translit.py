@@ -110,3 +110,13 @@ def search_variants(text):
 def search_key(name):
     """Stored in mosques.name_search so any form of a query can be matched with a plain LIKE."""
     return " ".join(search_variants(name)) if name else None
+
+
+_PROTECT = re.compile(
+    r"(\{[^}]*\}|AM/PM|/\w+|tiles\.openfreemap\.org|Yandex Maps|OpenStreetMap contributors|OpenStreetMap|Mini App|Telegram|HTTPS|VPN|"
+    r"HH:MM|ODbL|ADMIN_TOKEN|ID|©|[\U0001F300-\U0001FAFF\u2600-\u27BF\u2190-\u21FF])")
+
+
+def cyrillize(text):
+    """Uzbek Latin text -> Cyrillic; brand names, /commands, {placeholders}, emoji and digits stay as they are."""
+    return "".join(part if _PROTECT.fullmatch(part) else to_cyrillic(part) for part in _PROTECT.split(text))

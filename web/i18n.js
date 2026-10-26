@@ -755,22 +755,16 @@
     if (tag.indexOf("en") === 0) return "en";
     return null;
   }
-  function telegramLang() {                  // user language from the Mini App launch parameters (no script needed)
-    try {
-      var m = /[#&]tgWebAppData=([^&]+)/.exec(location.hash);
-      if (!m) return null;
-      var u = new URLSearchParams(decodeURIComponent(m[1])).get("user");
-      return u ? JSON.parse(u).language_code : null;
-    } catch (e) { return null; }
-  }
   function detect() {
-    var q = /[?&]lang=([\w-]+)/.exec(location.search);
+    // 1) ?lang= (the bot opens the Mini App with the user's chosen language) is remembered; 2) the saved choice; 3) the browser language.
+    // Telegram's own interface language is deliberately NOT used: inside Telegram the choice made in the bot (/api/me) decides.
+    var q = /[?&]lang=([\w-]+)/.exec(location.search), fromUrl = norm(q && q[1]);
+    if (fromUrl) { try { localStorage.setItem("lang", fromUrl); } catch (e) {} return fromUrl; }
     var saved = null;
     try { saved = localStorage.getItem("lang"); } catch (e) {}
-    var c = norm(q && q[1]) || (D[saved] ? saved : null) || norm(telegramLang());
-    if (c) return c;
+    if (D[saved]) return saved;
     var l = navigator.languages || [navigator.language];
-    for (var i = 0; i < l.length; i++) { c = norm(l[i]); if (c) return c; }
+    for (var i = 0; i < l.length; i++) { var c = norm(l[i]); if (c) return c; }
     return "uz";
   }
 
