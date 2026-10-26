@@ -7,6 +7,7 @@ birga saqlash. Ommaviy API shaxsiy ma'lumotni **ko'rsatmaydi**, faqat moderator 
 | Joy | Nima saqlanadi |
 |---|---|
 | `actors` (o'zgartirish/o'chirish mumkin) | `actor_id`; Telegram: `telegram_id`, username, ism, familiya, til (**faqat imzosi tekshirilgan** `initData` dan); mobil: `device_id`, platforma, OS versiyasi, ilova versiyasi, qurilma modeli; `user_agent`; `ip_hash` (tuzlangan HMAC, xom IP emas); hisoblagichlar; birinchi/oxirgi faollik |
+| `bot_users`, `bot_subs`, `bot_sent` (Telegram bot) | faqat Telegram ID, tanlangan hudud, eslatma sozlamalari, til, obuna qilingan masjidlar va "bugun yuborildi" belgisi. Foydalanuvchi `/stop` yozsa yoki botni bloklasa hammasi o'chadi. Ovozli xabar va rasm **saqlanmaydi** (xotirada o'qiladi va tashlanadi) |
 | `mosque_history.client`, `reports.client` (o'zgarmas) | faqat **shaxsiy bo'lmagan** snapshot: kind, platform, os_version, app_version, device_model, user_agent |
 | `mosque_history.actor`, `mosques.creator_id`, `reports.reporter_id` | `tg:<id>` / `device:<id>` / `client:<uuid>` — `actors` ga havola |
 

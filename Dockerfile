@@ -38,8 +38,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # ── 1-qatlam: faqat bog'liqliklar ─────────────────────────────
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+# WITH_VOICE=0 leaves out faster-whisper (about 250 MB smaller image; the bot then asks for a photo or typed times instead of a voice message).
+ARG WITH_VOICE=1
+COPY requirements.txt requirements-voice.txt ./
+RUN pip install --no-cache-dir -r requirements.txt \
+    && if [ "$WITH_VOICE" = "1" ]; then pip install --no-cache-dir -r requirements-voice.txt; fi
 
 # ── 2-qatlam: kod (o'zgarsa faqat shu qatlam qayta quriladi) ──
 COPY server ./server
@@ -49,7 +52,8 @@ COPY deploy/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 # Root bo'lmagan foydalanuvchi
-RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
+# (the speech model is downloaded on the bot's first start into /home/appuser/.cache/huggingface, which compose keeps in a volume)
+RUN useradd -m -u 1000 appuser && mkdir -p /home/appuser/.cache/huggingface && chown -R appuser:appuser /app /home/appuser/.cache
 USER appuser
 
 EXPOSE 8080

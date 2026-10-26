@@ -3,7 +3,7 @@
 Domen: `nodir0302.duckdns.org` (DuckDNS, bepul). Hammasi kompyuterdan bitta buyruq bilan o'rnatiladi.
 
 ## A. Serverni olayotganda
-- OS: **Ubuntu 22.04/24.04**, RAM 1–2 GB, disk 20 GB+ yetadi (image yengil, build 1–2 daqiqa).
+- OS: **Ubuntu 22.04/24.04**, RAM 2 GB (ovozli xabarlar uchun; ovozsiz 1 GB yetadi), disk 20 GB+ (image yengil, build 1–2 daqiqa; ovoz modeli +~150 MB).
 - Firewall / security group: **22 (SSH), 80, 443** ochiq. 5432 (Postgres) va 8080 ochilmaydi.
 - SSH kirish: kompyuteringizdagi ochiq kalitni (`cat ~/.ssh/id_ed25519.pub`) serverga qo'shing yoki panel orqali kalit yuklang.
   Sinash: `ssh user@SERVER_IP` parolsiz kirishi kerak. Root bilan ham bo'ladi, lekin oddiy foydalanuvchi + `sudo` yaxshiroq.

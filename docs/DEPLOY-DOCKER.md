@@ -88,3 +88,23 @@ vaqtlar saqlanadi va bot "shu masjid uchun vaqtlar o'zgardi, tekshirib ko'rishin
 (`/?m=<id>`). Rasm o'qish serverning o'zida **Tesseract** bilan bajariladi (Docker image'da o'rnatilgan, `rus`, `eng`, `uzb`, `uzb_cyrl`):
 rasm uchinchi tomonga yuborilmaydi va saqlanmaydi. Ishonchsiz o'qilgan vaqt hech qachon tasdiqsiz saqlanmaydi; ikki ustunli jadvalda
 foydalanuvchi jamoat ustunini tanlaydi; soatiga 30 ta rasm chegarasi bor. `bot` profili `DATABASE_URL` ni oladi (compose'da sozlangan).
+
+## Telegram: ovozli xabar orqali vaqtlarni yangilash
+Rasm o'rniga foydalanuvchi **ovozli xabar** yuborishi mumkin: «Bomdod besh yigirma, Peshin o'n ikki o'ttiz, Asr to'rt, Shom besh o'ttiz besh,
+Xufton yetti». O'zbek (lotin/kirill), rus va ingliz tilida tushuniladi; **AM/PM aytish shart emas**: 12 soatlik raqamlar har namozning o'z
+vaqt oralig'i va qo'shni namozlar orasidagi tabiiy farqqa qarab joylashtiriladi (Asr «6:00» — Shom 17:35 bo'lsa 16:00, Shom 19:45 bo'lsa 18:00).
+Natija har doim tasdiqlash uchun ko'rsatiladi («Eshitilgan: …» + 5 ta vaqt); tasdiqlanmaguncha hech narsa saqlanmaydi.
+Nutqni matnga o'girish serverning o'zida **faster-whisper** (`WHISPER_MODEL`, standart `base`, ~140 MB) bilan bajariladi: audio uchinchi tomonga
+yuborilmaydi va saqlanmaydi. Image'da `WITH_VOICE=1` (standart); `docker build --build-arg WITH_VOICE=0 .` bilan ovozsiz, ~250 MB yengilroq image
+olinadi (bot rasm/matn so'raydi). Model birinchi ishga tushishda yuklanadi va `whisper` volume'da saqlanadi. Bot konteyneri uchun **kamida 2 GB RAM**
+tavsiya etiladi (limit 768M). O'zbek tilida aniqlik rus/ingliz tilidagidan pastroq bo'lishi mumkin: shuning uchun tasdiqlash qadami majburiy.
+
+## Telegram: eng yaqin masjid, obuna va eslatmalar
+- **Eng yaqin masjid:** botga lokatsiya yuborilganda (yoki `/nearest`) karta chiqadi: nomi, masofa, manzil, jamoat vaqtlari, oxirgi yangilanish,
+  «🧭 Yo'nalish», «✏️ Vaqtlarni yangilash», «🔔 Obuna bo'lish».
+- **Masjidga obuna** (`/subs`, kartadagi tugma, `https://t.me/<bot>?start=s_<masjid id>` havolasi — veb sahifada ham «🔔 Obuna (Telegram)»):
+  masjid jamoat vaqtlari o'zgarsa bot xabar beradi (vaqtni o'zgartirgan odamning o'ziga yuborilmaydi). Bir kishi ko'pi bilan 20 masjidga obuna bo'ladi.
+- **Eslatmalar** (`/reminders`): hudud (14 ta) tanlanadi; «har kungi xabar» (Bomdoddan oldin, 5 vaqt + quyosh) va «namozdan 15 daqiqa oldin».
+  Vaqtlar astronomik hisob bo'yicha (veb sahifadagi bilan bir xil), O'zbekiston vaqti (UTC+5). Har xabar kuniga **bir marta** yuboriladi
+  (`bot_sent` jadvali: bot qayta ishga tushsa ham takrorlanmaydi). Bot bloklangan foydalanuvchining ma'lumotlarini o'zi o'chiradi.
+- `/stop` — foydalanuvchining barcha bot ma'lumotlari (obuna, eslatma sozlamalari) o'chadi.

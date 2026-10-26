@@ -84,7 +84,9 @@ services:
         required: false
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-masjid}:${POSTGRES_PASSWORD:-masjid}@postgres:5432/${POSTGRES_DB:-masjid}
-      DB_POOL_MAX: "4"
+      DB_POOL_MAX: "6"
+    volumes:
+      - whisper:/home/appuser/.cache/huggingface        # speech model (downloaded once, ~140 MB for "base")
     healthcheck:
       disable: true
     depends_on:
@@ -92,7 +94,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 384M
+          memory: 768M                                   # voice messages: the speech model needs ~400 MB while transcribing
 
   # OpenStreetMap'dan masjidlar: ishga tushganda bir marta, keyin har OSM_SYNC_HOURS (standart 24) soatda.
   # Tahrirlangan yozuvlarga tegmaydi. Overpass ochiq xizmat: kuniga 1 marta — ahloqli chastota.
@@ -159,5 +161,6 @@ services:
 
 volumes:
   pgdata:
+  whisper:
   caddy_data:
   caddy_config:

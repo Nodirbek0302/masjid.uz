@@ -1,0 +1,2 @@
+# Optional: voice messages (speech-to-text on our own server, nothing sent to a third party). Installed in the image when WITH_VOICE=1.
+faster-whisper>=1.0,<2

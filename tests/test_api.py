@@ -489,6 +489,10 @@ class SpokenAndAmPm(unittest.TestCase):
         for t in said:
             r = S.parse(t)
             self.assertTrue(r["complete"], t); self.assertEqual(r["times"], self.FIVE, t)
+        r = S.parse("Фаджр 5-20, Зухр 12-30, Asr 4, магриб 5-35, Ише 7.")                        # what Whisper really wrote for Russian speech
+        self.assertEqual(r["times"], self.FIVE)
+        r = S.parse("Fajr, 5-20, Dhuhr, 12-30, Asr 4, Maghrib, 5-35, Isha 7.")                    # ... and for English speech
+        self.assertEqual(r["times"], self.FIVE)
         r = S.parse("зухр час пятнадцать дня, фаджр пять двадцать, аср четыре, магриб пять тридцать пять, иша семь")
         self.assertEqual(r["times"]["dhuhr"], "13:15")                                         # Russian "час" = one o'clock
         self.assertEqual(S.normalize("Bomdod nol besh yigirma besh"), "Bomdod 05:25")

@@ -704,6 +704,14 @@ def main():
                 log("notifier error: %s" % type(e).__name__)
             time.sleep(30)
     threading.Thread(target=notify_loop, daemon=True).start()
+    if stt.available():                                   # download/load the speech model now, not during somebody's first voice message
+        def warm():
+            try:
+                stt._load()
+                log("speech model ready")
+            except Exception as e:
+                log("speech model failed to load: %s" % type(e).__name__)
+        threading.Thread(target=warm, daemon=True).start()
     offset, backoff = None, 1
     pool = ThreadPoolExecutor(max_workers=4)             # a slow photo (OCR) must not block everybody else
     while True:

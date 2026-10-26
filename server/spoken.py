@@ -39,9 +39,13 @@ TENS = _dict([
 ])
 ZERO_MINUTES = {fold(w) for w in "hundred ровно sharp roвно".split()}
 FILLERS = {fold(w) for w in "va soat soatu daqiqa daqiqada minut minutda и час часов часа минут минуты o'clock oclock and hours hour minutes minute am pm".split()}
-EXTRA_LABELS = {"fajr": ("bamdod", "бамдод", "bomdot", "fajar"), "sunrise": ("quyoş",), "dhuhr": ("pishin", "пешин", "peshn", "пешим", "dhur", "zuhr"),
-                "asr": ("asar", "аср", "asir"), "maghrib": ("shom", "шом", "magrib", "магриб"),
-                "isha": ("xuftan", "хуфтан", "huften", "khuftan", "xufton", "хуфтон", "isha", "иша")}
+# the second line of each prayer: spellings speech recognisers really produce ("Ише" for "Иша", "Фажр" for "Фаджр")
+EXTRA_LABELS = {"fajr": ("bamdod", "бамдод", "bomdot", "fajar", "фажр", "фаджер", "фаджир", "fajer", "fadjr", "bomdad"),
+                "sunrise": ("quyoş",),
+                "dhuhr": ("pishin", "пешин", "peshn", "пешим", "dhur", "zuhr", "зухр", "зохр", "зур", "зухур", "дхухр", "zuhur", "peshim"),
+                "asr": ("asar", "аср", "asir", "асыр", "аср", "ассар"),
+                "maghrib": ("shom", "шом", "magrib", "магриб", "магреб", "магрип", "мегриб", "mahrib", "magreb"),
+                "isha": ("xuftan", "хуфтан", "huften", "khuftan", "xufton", "хуфтон", "isha", "иша", "ише", "иши", "ишо", "ишаа", "esha", "ыша", "hufton")}
 CANON = {"fajr": "Bomdod", "sunrise": "Quyosh", "dhuhr": "Peshin", "asr": "Asr", "maghrib": "Shom", "isha": "Xufton"}
 _LABEL_FOLDED = {}
 for _k, _words in list(timetable.LABELS.items()) + list(EXTRA_LABELS.items()):
