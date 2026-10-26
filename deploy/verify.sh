@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Joylashtirishdan keyin tashqaridan tekshiradi (kompyuteringizdan yoki serverdan):
-#   ./deploy/verify.sh https://nodir0302.duckdns.org      (argument bo'lmasa lokal: http://127.0.0.1:8080)
+#   ./deploy/verify.sh https://<domen>      (argument bo'lmasa lokal: http://127.0.0.1:8080)
 set -uo pipefail
 base="${1:-http://127.0.0.1:8080}"; base="${base%/}"
 pass=0; fail=0

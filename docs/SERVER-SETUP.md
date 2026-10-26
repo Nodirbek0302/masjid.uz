@@ -1,6 +1,6 @@
 # Serverga o'rnatish — qadamma-qadam (myCloud / istalgan Ubuntu VPS)
 
-Domen: `nodir0302.duckdns.org` (DuckDNS, bepul). Hammasi kompyuterdan bitta buyruq bilan o'rnatiladi.
+Domen: o'zingizning domeningiz (`<domen>`). Hammasi kompyuterdan bitta buyruq bilan o'rnatiladi.
 
 ## A. Serverni olayotganda
 - OS: **Ubuntu 22.04/24.04**, RAM 2 GB (ovozli xabarlar uchun; ovozsiz 1 GB yetadi), disk 20 GB+ (image yengil, build 1–2 daqiqa; ovoz modeli +~150 MB).
@@ -8,9 +8,9 @@ Domen: `nodir0302.duckdns.org` (DuckDNS, bepul). Hammasi kompyuterdan bitta buyr
 - SSH kirish: kompyuteringizdagi ochiq kalitni (`cat ~/.ssh/id_ed25519.pub`) serverga qo'shing yoki panel orqali kalit yuklang.
   Sinash: `ssh user@SERVER_IP` parolsiz kirishi kerak. Root bilan ham bo'ladi, lekin oddiy foydalanuvchi + `sudo` yaxshiroq.
 
-## B. DuckDNS
-duckdns.org → `nodir0302` qatoridagi "current ip" ga **server IP'sini** yozing → "update ip".
-Tekshirish (kompyuterda): `dscacheutil -q host -a name nodir0302.duckdns.org` — server IP'sini ko'rsatishi kerak.
+## B. Domen (DNS)
+Domen DNS panelida `<domen>` uchun **A yozuvi**ni **server IP'siga** qarating.
+Tekshirish (kompyuterda): `dig +short <domen>` — server IP'sini ko'rsatishi kerak.
 Sertifikat (HTTPS) domen server IP'siga qaragandan keyingina olinadi.
 
 ## C. Sirlar (kompyuterda, `.env.server`)
@@ -30,7 +30,7 @@ sog'lomlik kutish → kunlik zaxira cron'i (03:15, 14 kun).
 
 ## E. Tekshirish
 ```bash
-./deploy/verify.sh https://nodir0302.duckdns.org
+./deploy/verify.sh https://<domen>
 ```
 Tekshiradi: health, bosh sahifa, masjidlar soni (osm-sync to'ldirgach ~2200), qidiruv, gzip, sarlavhalar, admin API yopiqligi,
 DELETE yo'qligi, admin API'ning Telegram imzosiz yopiqligi, HTTPS sertifikati, HSTS. Birinchi daqiqalarda "masjid yo'q" bo'lishi mumkin: `osm-sync` birinchi yuklashni
@@ -41,7 +41,7 @@ Faqat Telegram ichida va faqat `ADMIN_TG_IDS` dagi ID uchun. Botga `/admin` yozi
 Brauzerda ochilsa "faqat Telegram orqali" xabari chiqadi. Ruxsatsiz (yoki imzo/muddati yaroqsiz) so'rovlar 401 oladi.
 
 ## G. Telegram Mini App
-@BotFather → `/mybots` → bot → Bot Settings → Menu Button yoki Web App URL = `https://nodir0302.duckdns.org/`
+@BotFather → `/mybots` → bot → Bot Settings → Menu Button yoki Web App URL = `https://<domen>/`
 (bot ishga tushganda menyu tugmasini `WEBAPP_URL` bo'yicha o'zi ham o'rnatadi). Botga `/start` — "Xaritani ochish" tugmasi.
 
 ## H. Kundalik
