@@ -808,7 +808,9 @@ class BotFlow(unittest.TestCase):
             self.user = {"id": 800, "first_name": "L", "language_code": code}; self.send(text="/region"); self.click("reg:0"); self.assertIn(word, self.msgs()[-1])
 
     def notifier(self):
-        return self.botmod.Notifier(lambda m, **kw: self.sent.append((m, kw)), self.bot.db, "https://example.org")
+        n = self.botmod.Notifier(lambda m, **kw: self.sent.append((m, kw)), self.bot.db, "https://example.org")
+        n.pause = 0
+        return n
 
     def test_scheduler_sends_each_reminder_once_in_the_users_language(self):
         import prayertimes as P
@@ -845,9 +847,18 @@ class BotFlow(unittest.TestCase):
             if kw.get("chat_id") == 555:
                 raise self.botmod.TelegramError(method, 403, "Forbidden: bot was blocked by the user")
             self.sent.append((method, kw))
-        n3 = self.botmod.Notifier(api, self.bot.db); self.sent.clear()
+        n3 = self.botmod.Notifier(api, self.bot.db); n3.pause = 0; self.sent.clear()
         n3.tick(local(tt["maghrib"] - 0.2) + timedelta(days=3))
         self.assertIsNone(self.bot.db.user(555)); self.assertTrue(self.bot.db.user(556)); self.assertEqual(len(sent_to(556)), 1)
+
+    def test_idle_tick_with_many_users_is_fast(self):
+        import time
+        from datetime import datetime, timezone
+        for tid in range(1000, 1060):
+            self.bot.db.set_user(tid, region=tid % 14, daily=True, before_prayer=True)
+        n = self.botmod.Notifier(lambda m, **kw: self.sent.append((m, kw)), self.bot.db)           # default pause between messages
+        t0 = time.time(); n.tick(datetime(2026, 10, 26, 7, 0, tzinfo=timezone.utc))               # 12:00 local: nothing is due
+        self.assertEqual(self.sent, []); self.assertLess(time.time() - t0, 2.0)                  # no sleeping while nothing is sent
 
     def test_subscribers_hear_about_time_changes_but_not_the_editor(self):
         mid = self.m["id"]
@@ -879,7 +890,7 @@ class BotFlow(unittest.TestCase):
                 raise self.botmod.TelegramError(method, 429, "Too Many Requests")
             if kw["chat_id"] == 556:
                 raise self.botmod.TelegramError(method, 403, "Forbidden: bot was blocked by the user")
-        f = self.botmod.Notifier(flaky, self.bot.db); f.tick()
+        f = self.botmod.Notifier(flaky, self.bot.db); f.pause = 0; f.tick()
         self.assertEqual(sorted(calls), [555, 556, 557])
         self.assertIsNone(self.bot.db.user(556)); self.assertEqual(self.bot.db.subs(556), [])  # blocked: forgotten
         calls.clear(); f.tick(); self.assertEqual(calls, [555])                                # only the failed one is retried

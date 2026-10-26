@@ -381,6 +381,8 @@ class Bot:
             self.api("answerCallbackQuery", callback_query_id=cb["id"])
         except Exception:
             pass
+        if not self.allow_msg(uid):                            # taps count towards the flood limit too (answered above so the button stops spinning)
+            return
         try:
             kind, _, arg = data.partition(":")
             if kind == "pick":
@@ -591,7 +593,7 @@ class Notifier:
 
     def __init__(self, api, db, webapp_url=""):
         self.api, self.db, self.webapp_url = api, db, webapp_url
-        self.done, self.day = set(), None
+        self.done, self.day, self.pause = set(), None, 0.04
 
     def tick(self, now=None):
         now = now or datetime.now(timezone.utc)
@@ -607,6 +609,7 @@ class Notifier:
         kw = {"reply_markup": {"inline_keyboard": buttons}} if buttons else {}
         try:
             self.api("sendMessage", chat_id=tid, text=text, **kw)
+            time.sleep(self.pause)                         # stay far below Telegram's broadcast limit (~30 messages/s)
             return True
         except TelegramError as e:
             if e.gone:
@@ -640,7 +643,6 @@ class Notifier:
                         self.done.add((tid, k))
                         if self.db.claim(tid, "pre:" + k, day):
                             self.send(tid, tx["pre_msg"].format(prayer=n, time=prayertimes.hm(tt[k]), region=name))
-            time.sleep(0.04)                               # stay far below Telegram's broadcast limit (~30 messages/s)
 
     def changes(self):
         for r in self.db.due_changes():
@@ -653,7 +655,6 @@ class Notifier:
                     buttons = [[{"text": tx["see"], "web_app": {"url": self.webapp_url.rstrip("/") + "/?m=" + r["mosque_id"]}}]]
                 if not self.send(tid, tx["change_msg"].format(name=r["name"] or tx["noname"], t=fmt_times(tx, r["prayer_times"])), buttons):
                     continue                               # try again on the next tick (unless the user is gone)
-                time.sleep(0.04)
             self.db.mark_notified(tid, r["mosque_id"], r["times_updated_at"])
 
 
