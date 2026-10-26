@@ -857,7 +857,7 @@ class BotFlow(unittest.TestCase):
         for tid in range(1000, 1060):
             self.bot.db.set_user(tid, region=tid % 14, daily=True, before_prayer=True)
         n = self.botmod.Notifier(lambda m, **kw: self.sent.append((m, kw)), self.bot.db)           # default pause between messages
-        t0 = time.time(); n.tick(datetime(2026, 10, 26, 7, 0, tzinfo=timezone.utc))               # 12:00 local: nothing is due
+        t0 = time.time(); n.tick(datetime(2026, 10, 26, 9, 0, tzinfo=timezone.utc))               # 14:00 local: nothing is due
         self.assertEqual(self.sent, []); self.assertLess(time.time() - t0, 2.0)                  # no sleeping while nothing is sent
 
     def test_subscribers_hear_about_time_changes_but_not_the_editor(self):
