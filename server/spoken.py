@@ -82,7 +82,7 @@ def _events(text):
                 ev.append(("num", TEENS[f], True))
             elif f in TENS:
                 nxt = fold(toks[i + 1]) if i + 1 < len(toks) else ""
-                if f == "on" and nxt not in UNITS and nxt not in TENS:        # a bare English "on" is not the number 10
+                if f == "on" and nxt not in UNITS and nxt not in TENS and not (ev and ev[-1][0] == "num"):   # a bare English "on" is not 10; "to'rt o'n" is 4:10
                     continue
                 ev.append(("num", TENS[f], True))
             elif f in ZERO_MINUTES:

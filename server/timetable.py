@@ -63,7 +63,7 @@ def _label_of(line):
 
 
 # Wide windows (minutes after midnight) that hold for Uzbekistan all year; anything outside is an OCR slip or a typo, never saved silently.
-PLAUSIBLE = {"fajr": (150, 480), "dhuhr": (660, 900), "asr": (840, 1110), "maghrib": (960, 1320), "isha": (1050, 1439)}
+PLAUSIBLE = {"fajr": (150, 480), "dhuhr": (690, 810), "asr": (900, 1110), "maghrib": (990, 1290), "isha": (1060, 1410)}
 
 
 def _minutes(t):
@@ -71,40 +71,49 @@ def _minutes(t):
 
 
 def _cands(k, t):
-    """Readings of one value for prayer k that fall in its window of the day, most natural first: as written, +12 h (PM written as
-    12-hour), the lost leading "1" of OCR (6:00 -> 16:00), -12 h."""
+    """Readings of one value for prayer k inside its window of the day, as (value, kind): as written, +12 h (a 12-hour PM time), +10 h
+    (OCR lost the leading "1": 6:00 -> 16:00), -12 h."""
     h, mi = int(t[:2]), t[3:]
     lo, hi = PLAUSIBLE[k]
     out = []
-    for cand in (h, h + 12, h + 10, h - 12):
-        if 0 <= cand < 24 and lo <= cand * 60 + int(mi) <= hi and "%02d:%s" % (cand, mi) not in out:
-            out.append("%02d:%s" % (cand, mi))
+    for cand, kind in ((h, ""), (h + 12, "+12"), (h + 10, "+10"), (h - 12, "-12")):
+        v = "%02d:%s" % (cand, mi)
+        if 0 <= cand < 24 and lo <= cand * 60 + int(mi) <= hi and v not in [c[0] for c in out]:
+            out.append((v, kind))
     return out
 
 
-def resolve_12h(found):
-    """Boards and speakers often give 12-hour times without AM/PM ("Asr 4:00", "Isha 7:15"). Each prayer has a window of the day it can
-    fall in (PLAUSIBLE); the right reading is the one inside the window that also keeps the five prayers in increasing order:
-    4:00 -> 16:00 for Asr, 7:15 -> 19:15 for Isha, 1:15 -> 13:15 for Dhuhr, 5:20 stays 05:20 for Fajr, and an ambiguous "6:00" for Asr
-    becomes 16:00 or 18:00 depending on what Maghrib says. Returns (times, changed_prayers)."""
-    ks = [k for k in ORDER if k in found]
-    options = [_cands(k, found[k]) or [found[k]] for k in ks]
+# Natural gaps (minutes) between neighbouring prayers in Uzbekistan all year (Hanafi Asr). Used to choose between readings that all fit
+# the windows and the increasing order, e.g. Asr "6:00": 18:00 when Maghrib is 20:00, but 16:00 (OCR lost the "1") when Maghrib is 17:35.
+GAPS = {("fajr", "dhuhr"): (300, 560), ("dhuhr", "asr"): (150, 360), ("asr", "maghrib"): (55, 200), ("maghrib", "isha"): (45, 150)}
 
-    def search(i, prev):
-        if i == len(ks):
-            return []
-        for c in options[i]:
-            m = _minutes(c)
-            if m > prev:
-                rest = search(i + 1, m)
-                if rest is not None:
-                    return [c] + rest
-        return None
-    best = search(0, -1)
+
+def resolve_12h(found):
+    """Boards and speakers often give 12-hour times without AM/PM ("Asr 4:00", "Isha 7:15"), and OCR sometimes drops a leading "1".
+    For every prayer the readings inside its window of the day are candidates; the chosen combination keeps the prayers in increasing
+    order, has the fewest unnatural gaps between neighbours, uses one kind of fix throughout (all "+12 h" or all "lost 1") and then
+    prefers the most natural reading. 4:00 -> 16:00 for Asr, 7:15 -> 19:15 for Isha, 1:15 -> 13:15 for Dhuhr, 5:20 stays for Fajr;
+    Asr 6:00 -> 18:00 or 16:00 depending on what Maghrib says. Returns (times, changed_prayers)."""
+    import itertools
+    ks = [k for k in ORDER if k in found]
+    options = [_cands(k, found[k]) or [(found[k], "?")] for k in ks]
+    best, best_key = None, None
+    for idx in itertools.product(*[range(len(o)) for o in options]):
+        picks = [options[i][j] for i, j in enumerate(idx)]
+        mins = [_minutes(v) for v, _ in picks]
+        if any(b <= a for a, b in zip(mins, mins[1:])):
+            continue
+        bad = 0
+        for (k1, k2), (lo, hi) in GAPS.items():
+            if k1 in ks and k2 in ks:
+                bad += not lo <= mins[ks.index(k2)] - mins[ks.index(k1)] <= hi
+        kinds = len({kd for (v, kd), k in zip(picks, ks) if kd and v != found[k]})
+        key = (bad, kinds, sum(idx), idx)
+        if best_key is None or key < best_key:
+            best, best_key = [v for v, _ in picks], key
     if best is None:                                                  # no increasing combination: first readings, flagged later
-        best = [o[0] for o in options]
-    out = dict(found)
-    changed = []
+        best = [o[0][0] for o in options]
+    out, changed = dict(found), []
     for k, c in zip(ks, best):
         if c != found[k]:
             out[k] = c

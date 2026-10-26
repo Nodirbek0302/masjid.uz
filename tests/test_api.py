@@ -495,6 +495,61 @@ class SpokenAndAmPm(unittest.TestCase):
         for bad in ("salom, qalaysiz", "Bomdod besh yigirma, Asr to'rt", "", "bir ikki uch"):
             self.assertFalse(S.parse(bad)["complete"], bad)                                    # never "complete" on doubtful speech
 
+    def test_asr_six_oclock_is_16_or_18_depending_on_the_rest_of_the_day(self):
+        import spoken as S
+        import timetable as T
+        winter = {"fajr": "05:20", "dhuhr": "12:30", "asr": "16:00", "maghrib": "17:35", "isha": "19:00"}
+        summer = {"fajr": "04:10", "dhuhr": "12:30", "asr": "18:00", "maghrib": "19:45", "isha": "21:30"}
+        typed = {
+            "Bomdod 5:20\nPeshin 12:30\nAsr 6:00\nShom 5:35\nXufton 7:00": winter,                 # photo text / typed, no markers
+            "Bomdod 4:10\nPeshin 12:30\nAsr 6:00\nShom 7:45\nXufton 9:30": summer,
+            "Bomdod 4:10\nPeshin 12:30\nAsr 6:00 PM\nShom 7:45 PM\nXufton 9:30 PM": summer,
+            "Bomdod 5:20\nPeshin 12:30\nAsr 16:00\nShom 17:35\nXufton 19:00": winter,              # 24-hour is left alone
+            "Bomdod 4:10\nPeshin 12:30\nAsr 18:00\nShom 19:45\nXufton 21:30": summer,
+            "Bomdod 5:20\nPeshin 12:30\nAsr l6:00\nShom l7:35\nXufton l9:00": winter,              # OCR "l" for "1"
+            "4:10 12:30 6:00 7:45 9:30": summer,                                                  # no names at all
+            "5:20 12:30 6:00 5:35 7:00": winter,
+        }
+        for text, want in typed.items():
+            r = T.parse(text); self.assertTrue(r["complete"], text); self.assertEqual(r["times"], want, text)
+        spoken = {
+            "Bomdod besh yigirma, Peshin o'n ikki o'ttiz, Asr olti, Shom besh o'ttiz besh, Xufton yetti": winter,
+            "Bomdod to'rt o'n, Peshin o'n ikki o'ttiz, Asr olti, Shom yetti qirq besh, Xufton to'qqiz o'ttiz": summer,
+            "Bomdod besh yigirma, Peshin o'n ikki o'ttiz, Asr o'n olti, Shom o'n yetti o'ttiz besh, Xufton o'n to'qqiz": winter,
+            "Fajr four ten, Dhuhr twelve thirty, Asr six, Maghrib seven forty five, Isha nine thirty": summer,
+            "Fajr five twenty, Dhuhr twelve thirty, Asr six, Maghrib five thirty five, Isha seven": winter,
+            "Fajr four ten, Dhuhr twelve thirty, Asr six pm, Maghrib seven forty five pm, Isha nine thirty pm": summer,
+            "Фаджр четыре десять, зухр двенадцать тридцать, аср шесть, магриб семь сорок пять, иша девять тридцать": summer,
+            "Фаджр пять двадцать, зухр двенадцать тридцать, аср шесть, магриб пять тридцать пять, иша семь": winter,
+            "Фаджр четыре десять, зухр двенадцать тридцать, аср шесть вечера, магриб семь сорок пять вечера, иша девять тридцать вечера": summer,
+        }
+        for text, want in spoken.items():
+            r = S.parse(text); self.assertTrue(r["complete"], text); self.assertEqual(r["times"], want, text)
+
+    def test_every_region_and_month_in_every_notation(self):
+        """Real prayer times (14 regions x 12 months x 3 days) written the ways boards and speakers write them must come back exactly."""
+        import prayertimes as P
+        import timetable as T
+        names = {"fajr": "Bomdod", "dhuhr": "Peshin", "asr": "Asr", "maghrib": "Shom", "isha": "Xufton"}
+        def h12(t):
+            return "%d:%s" % ((int(t[:2]) % 12) or 12, t[3:])
+        notations = {
+            "24h": lambda t: t,
+            "24h without zero": lambda t: t.lstrip("0") if t[0] == "0" else t,
+            "12h without marker": h12,
+            "12h with marker": lambda t: h12(t) + (" AM" if int(t[:2]) < 12 else " PM"),
+            "lost leading 1": lambda t: t[1:] if t[0] == "1" else t,
+        }
+        for lat, lon in P.REGIONS:
+            for month in range(1, 13):
+                for day in (3, 12, 24):
+                    tt = P.times(2026, month, day, lat, lon)
+                    truth = {k: P.hm(tt[k]) for k in names}
+                    for nn, f in notations.items():
+                        r = T.parse("\n".join("%s %s" % (names[k], f(truth[k])) for k in names))
+                        self.assertTrue(r["complete"], (nn, lat, month, day, truth, r))
+                        self.assertEqual(r["times"], truth, (nn, lat, month, day))
+
 
 class BotFlow(unittest.TestCase):
     """The conversation logic with fake Telegram/OCR: location -> pick -> photo -> confirm -> saved, and the safety rules."""
