@@ -1,9 +1,10 @@
 """Telegram bot (long polling, standard library only).
 
-Commands: /start /help /id /admin /cancel.
+Commands: /start /help /nearest /reminders (/region) /subs /stop /id /admin /cancel.
 Update flow: the user shares a mosque's location -> picks the mosque (or adds a new one) -> sends a photo of the timetable (read with
 Tesseract) or types the five times -> checks the preview -> the times are saved, and the bot says they changed and offers a button to
-open that mosque in the Mini App. A photo is never stored and a wrong reading is never saved without the user's confirmation.
+open that mosque in the Mini App. Also: a nearest-mosque card for every shared location, subscriptions (a message when a mosque's
+congregation times change) and daily / 15-minutes-before prayer reminders (Notifier). A photo is never stored and a wrong reading is never saved without the user's confirmation.
 The token is read from the environment/.env and never logged.
 """
 import json
@@ -11,14 +12,19 @@ import os
 import sys
 import threading
 import time
+import urllib.error
 import urllib.request
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import app  # noqa: E402  (load_dotenv, Store)
+import botdb  # noqa: E402
+import bottexts  # noqa: E402
 import ocr  # noqa: E402
+import prayertimes  # noqa: E402
 import spoken  # noqa: E402
 import stt  # noqa: E402
 import timetable  # noqa: E402
@@ -34,15 +40,36 @@ PHOTOS_PER_HOUR = 30
 SESSION_S = 1800
 MSGS_PER_MIN = 40
 MAX_VOICE_S = 60
+TZ_HOURS = 5                      # Uzbekistan has no daylight saving time: UTC+5 all year
+REMIND_BEFORE_MIN = 15
+
+
+class TelegramError(RuntimeError):
+    def __init__(self, method, code, description):
+        super().__init__("%s failed: %s" % (method, description))
+        self.code, self.description = code, description or ""
+
+    @property
+    def gone(self):
+        """The user blocked the bot / deleted the chat: their data is removed instead of retrying forever."""
+        d = self.description.lower()
+        return self.code == 403 or "chat not found" in d or "deactivated" in d
 
 
 def call(method, **params):
     data = json.dumps(params).encode()
     req = urllib.request.Request(API + method, data=data, headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=60) as r:
-        out = json.load(r)
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            out = json.load(r)
+    except urllib.error.HTTPError as e:
+        try:
+            body = json.load(e)
+        except Exception:
+            body = {}
+        raise TelegramError(method, e.code, body.get("description")) from None
     if not out.get("ok"):
-        raise RuntimeError("%s failed: %s" % (method, out.get("description")))
+        raise TelegramError(method, out.get("error_code"), out.get("description"))
     return out["result"]
 
 
@@ -166,6 +193,10 @@ TEXTS = {
 }
 
 
+for _lc, _more in bottexts.MORE.items():
+    TEXTS[_lc].update(_more)
+
+
 def fmt_times(tx, times):
     return "\n".join("%s  %s" % (n, times.get(k, "—")) for n, k in zip(tx["names"], timetable.ORDER))
 
@@ -176,6 +207,7 @@ class Bot:
     def __init__(self, api, store, ocr_read=None, fetch_photo=None, webapp_url="", admin_ids=(), stt_read=None):
         self.api, self.store, self.ocr_read, self.fetch_photo, self.stt_read = api, store, ocr_read, fetch_photo, stt_read
         self.webapp_url, self.admin_ids = webapp_url, set(admin_ids)
+        self.db = botdb.BotDB(store)
         self.state, self.photo_log, self.msg_log = {}, {}, {}
         self._locks, self._locks_guard = {}, threading.Lock()
 
@@ -285,6 +317,8 @@ class Bot:
         cmd = parts[0].split("@")[0].lower()
         arg = parts[1] if len(parts) > 1 else ""
         uid = user["id"]
+        if cmd == "/start" and arg.startswith("s_") and len(arg) == 38:       # deep link: subscribe to this mosque's time changes
+            return self.subscribe(chat, user, tx, arg[2:])
         if cmd == "/start" and arg.startswith("m_") and len(arg) == 38:       # deep link from the mosque page: /start m_<mosque id>
             try:
                 m = self.store.get(arg[2:])
@@ -307,6 +341,16 @@ class Bot:
                     self.say(chat, tx["admin_text"], [[{"text": tx["admin_btn"], "web_app": {"url": self.webapp_url.rstrip("/") + "/admin.html"}}]])
                 else:
                     self.say(chat, tx["pending"])
+        elif cmd == "/nearest":
+            self.say(chat, tx["near_ask"], reply_keyboard=[[{"text": tx["loc_btn"], "request_location": True}]])
+        elif cmd == "/subs":
+            self.subs_list(chat, user, tx)
+        elif cmd in ("/reminders", "/region"):
+            self.reminders_menu(chat, user, tx)
+        elif cmd == "/stop":
+            self.db.forget(uid)
+            self.state.pop(uid, None)
+            self.say(chat, tx["stop_msg"])
         elif cmd == "/cancel":
             self.state.pop(uid, None)
             self.say(chat, tx["cancelled"])
@@ -318,7 +362,10 @@ class Bot:
     # ---- location -> choose mosque
     def on_location(self, chat, user, tx, loc):
         lat, lon = app.clean_coord(loc.get("latitude"), loc.get("longitude"))
-        near = [m for m in self.store.nearest(lat, lon, 3) if m["distance_m"] <= NEAR_M]
+        found = self.store.nearest(lat, lon, 3)
+        if found:                                          # the nearest mosque as a card (even when it is further than 200 m)
+            self.say(chat, tx["card_head"] + "\n\n" + self.card_text(tx, found[0]), self.card_buttons(tx, found[0], user["id"]))
+        near = [m for m in found if m["distance_m"] <= NEAR_M]
         rows = [[{"text": "%s · %d m" % (m["name"] or tx["noname"], round(m["distance_m"])), "callback_data": "pick:" + m["id"]}] for m in near]
         rows.append([{"text": tx["new"], "callback_data": "new:%.6f,%.6f" % (lat, lon)}])
         self.say(chat, tx["pick"] if near else tx["none"], rows)
@@ -353,6 +400,17 @@ class Bot:
                     st["times"] = times
                     return self.preview(chat, tx, st)
                 self.save(chat, user, tx, st)
+            elif kind == "sub":
+                self.subscribe(chat, user, tx, arg)
+            elif kind == "unsub":
+                m = self.store.get(arg)
+                self.db.unsubscribe(uid, m["id"])
+                self.say(chat, tx["unsubscribed"].format(name=m["name"] or tx["noname"]))
+            elif kind == "reg" and arg.isdigit() and int(arg) < len(prayertimes.REGIONS):
+                self.db.set_user(uid, region=int(arg), lang=pick_lang(user.get("language_code")))
+                self.reminders_menu(chat, user, tx)
+            elif kind == "rm":
+                self.reminder_toggle(chat, user, tx, arg)
             elif kind == "manual":
                 self.say(chat, tx["manual_ask"])
             elif kind == "cancel":
@@ -446,7 +504,157 @@ class Bot:
         # no version check: concurrent edits are merged by the store (the five times are applied on top of the latest state)
         self.store.edit(st["mosque_id"], {"prayer_times": st["times"], "note": "Telegram bot (photo/text)"}, actor, info)
         self.state.pop(user["id"], None)
-        self.say(chat, tx["saved"].format(name=st["name"]), self.open_button(st["mosque_id"], tx))
+        rows = self.open_button(st["mosque_id"], tx) or []
+        if not self.db.is_subscribed(user["id"], st["mosque_id"]):
+            rows = rows + [[{"text": tx["sub_offer"], "callback_data": "sub:" + st["mosque_id"]}]]
+        self.say(chat, tx["saved"].format(name=st["name"]), rows or None)
+
+    # ---- nearest-mosque card
+    @staticmethod
+    def local_stamp(iso_utc):
+        t = datetime.strptime(iso_utc, "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=TZ_HOURS)
+        return t.strftime("%d.%m.%Y %H:%M")
+
+    def card_text(self, tx, m):
+        d = m.get("distance_m")
+        where = ("%d %s" % (round(d), tx["m"]) if d < 1000 else "%.1f %s" % (d / 1000.0, tx["km"])) if d is not None else ""
+        lines = ["🕌 " + (m["name"] or tx["noname"])]
+        if where or m.get("address"):
+            lines.append("📍 " + " · ".join(x for x in (where, m.get("address")) if x))
+        times = m.get("prayer_times") or {}
+        lines += ["", fmt_times(tx, times) if any(k in times for k in timetable.ORDER) else tx["no_times"]]
+        if m.get("times_updated_at"):
+            lines.append(tx["updated"].format(d=self.local_stamp(m["times_updated_at"])))
+        return "\n".join(lines)
+
+    def card_buttons(self, tx, m, uid):
+        subbed = self.db.is_subscribed(uid, m["id"])
+        return [[{"text": tx["route"], "url": "https://yandex.com/maps/?rtext=~%s,%s&rtt=auto" % (m["lat"], m["lon"])}],
+                [{"text": tx["upd_btn"], "callback_data": "pick:" + m["id"]},
+                 {"text": tx["unsub_btn"] if subbed else tx["sub_btn"], "callback_data": ("unsub:" if subbed else "sub:") + m["id"]}]]
+
+    # ---- subscriptions
+    def subscribe(self, chat, user, tx, mosque_id):
+        m = self.store.get(mosque_id)
+        if m["status"] == "archived":
+            return self.say(chat, tx["archived"])
+        self.db.set_user(user["id"], lang=pick_lang(user.get("language_code")))
+        res = self.db.subscribe(user["id"], m["id"])
+        if res == "limit":
+            return self.say(chat, tx["sub_limit"].format(n=botdb.MAX_SUBS))
+        key = "sub_already" if res == "already" else "subscribed"
+        self.say(chat, tx[key].format(name=m["name"] or tx["noname"]), [[{"text": tx["unsub_btn"], "callback_data": "unsub:" + m["id"]}]])
+
+    def subs_list(self, chat, user, tx):
+        subs = self.db.subs(user["id"])
+        if not subs:
+            return self.say(chat, tx["subs_none"])
+        self.say(chat, tx["subs_title"], [[{"text": "🔕 " + (s["name"] or tx["noname"]), "callback_data": "unsub:" + s["mosque_id"]}] for s in subs])
+
+    # ---- reminders
+    def reminders_menu(self, chat, user, tx):
+        lang = pick_lang(user.get("language_code"))
+        u = self.db.set_user(user["id"], lang=lang)
+        if u["region"] is None:
+            return self.region_picker(chat, lang, tx)
+        onoff = lambda v: tx["on"] if v else tx["off"]  # noqa: E731
+        text = tx["rem_title"].format(region=bottexts.REGION_NAMES[lang][u["region"]], daily=onoff(u["daily"]), before=onoff(u["before_prayer"]))
+        self.say(chat, text, [[{"text": tx["rem_region"], "callback_data": "rm:region"}],
+                              [{"text": tx["rem_daily"].format(s=onoff(not u["daily"])), "callback_data": "rm:daily"}],
+                              [{"text": tx["rem_before"].format(s=onoff(not u["before_prayer"])), "callback_data": "rm:before"}],
+                              [{"text": tx["rem_off_all"], "callback_data": "rm:off"}]])
+
+    def region_picker(self, chat, lang, tx):
+        names = bottexts.REGION_NAMES[lang]
+        btns = [{"text": n, "callback_data": "reg:%d" % i} for i, n in enumerate(names)]
+        self.say(chat, tx["rem_pick_region"], [btns[i:i + 2] for i in range(0, len(btns), 2)])
+
+    def reminder_toggle(self, chat, user, tx, what):
+        lang = pick_lang(user.get("language_code"))
+        u = self.db.set_user(user["id"], lang=lang)
+        if what == "region":
+            return self.region_picker(chat, lang, tx)
+        if what == "off":
+            self.db.set_user(user["id"], daily=False, before_prayer=False)
+        elif what in ("daily", "before"):
+            if u["region"] is None:
+                return self.region_picker(chat, lang, tx)
+            field = "daily" if what == "daily" else "before_prayer"
+            self.db.set_user(user["id"], **{field: not u[field]})
+        self.reminders_menu(chat, user, tx)
+
+
+class Notifier:
+    """Sends what the bot promised on its own: the daily prayer-times message, the 15-minutes-before message and the announcements
+    that a subscribed mosque's congregation times changed. `tick(now)` is called every 30 s; every message is claimed in the database
+    first (bot_sent), so it goes out exactly once per day even if the bot restarts or ticks twice."""
+
+    def __init__(self, api, db, webapp_url=""):
+        self.api, self.db, self.webapp_url = api, db, webapp_url
+        self.done, self.day = set(), None
+
+    def tick(self, now=None):
+        now = now or datetime.now(timezone.utc)
+        local = now + timedelta(hours=TZ_HOURS)
+        if local.date() != self.day:                       # a new day: forget yesterday's in-memory marks and old ledger rows
+            self.day, self.done = local.date(), set()
+            self.db.purge_sent()
+        self.reminders(local)
+        self.changes()
+
+    def send(self, tid, text, buttons=None):
+        """-> True when delivered. A user who blocked the bot is forgotten; other failures are only logged."""
+        kw = {"reply_markup": {"inline_keyboard": buttons}} if buttons else {}
+        try:
+            self.api("sendMessage", chat_id=tid, text=text, **kw)
+            return True
+        except TelegramError as e:
+            if e.gone:
+                self.db.forget(tid)
+            else:
+                log("notify error: %s" % e.code)
+        except Exception as e:
+            log("notify error: %s" % type(e).__name__)
+        return False
+
+    def reminders(self, local):
+        day, mins, cache = local.date(), local.hour * 60 + local.minute, {}
+        for u in self.db.reminder_users():
+            tid, region = u["telegram_id"], u["region"]
+            if region not in cache:
+                lat, lon = prayertimes.REGIONS[region]
+                cache[region] = prayertimes.times(day.year, day.month, day.day, lat, lon)
+            tt = cache[region]
+            tx = TEXTS[u["lang"] if u["lang"] in TEXTS else "uz"]
+            name = bottexts.REGION_NAMES[u["lang"] if u["lang"] in TEXTS else "uz"][region]
+            at = {k: int(round(v * 60)) for k, v in tt.items()}
+            if u["daily"] and at["fajr"] - 30 <= mins < at["dhuhr"] and (tid, "daily") not in self.done:
+                self.done.add((tid, "daily"))
+                if self.db.claim(tid, "daily", day):
+                    labels = [(tx["names"][0], "fajr"), (tx["sun"], "sunrise")] + list(zip(tx["names"][1:], timetable.ORDER[1:]))
+                    rows = ["%s  %s" % (n, prayertimes.hm(tt[k])) for n, k in labels]
+                    self.send(tid, tx["daily_msg"].format(region=name, t="\n".join(rows)))
+            if u["before_prayer"]:
+                for n, k in zip(tx["names"], timetable.ORDER):
+                    if 0 < at[k] - mins <= REMIND_BEFORE_MIN and (tid, k) not in self.done:
+                        self.done.add((tid, k))
+                        if self.db.claim(tid, "pre:" + k, day):
+                            self.send(tid, tx["pre_msg"].format(prayer=n, time=prayertimes.hm(tt[k]), region=name))
+            time.sleep(0.04)                               # stay far below Telegram's broadcast limit (~30 messages/s)
+
+    def changes(self):
+        for r in self.db.due_changes():
+            tid = r["telegram_id"]
+            if r["editor"] != "tg:%d" % tid:               # the person who just changed the times already knows
+                u = self.db.user(tid)
+                tx = TEXTS[u["lang"] if u and u["lang"] in TEXTS else "uz"]
+                buttons = None
+                if self.webapp_url.startswith("https://"):
+                    buttons = [[{"text": tx["see"], "web_app": {"url": self.webapp_url.rstrip("/") + "/?m=" + r["mosque_id"]}}]]
+                if not self.send(tid, tx["change_msg"].format(name=r["name"] or tx["noname"], t=fmt_times(tx, r["prayer_times"])), buttons):
+                    continue                               # try again on the next tick (unless the user is gone)
+                time.sleep(0.04)
+            self.db.mark_notified(tid, r["mosque_id"], r["times_updated_at"])
 
 
 def real_stt(data):
@@ -464,9 +672,15 @@ def main():
     log("bot @%s started; mini app url: %s; photo reading: %s" % (me["username"], WEBAPP_URL or "(not set)", "on" if ocr.available() else "off (no tesseract)") + "; voice reading: %s" % ("on (%s)" % stt.MODEL if stt.available() else "off (no faster-whisper)"))
     call("deleteWebhook", drop_pending_updates=False)    # long polling and webhooks are mutually exclusive
     cmds = {"uz": ("Boshlash", "Yordam"), "ru": ("Начать", "Помощь"), "en": ("Start", "Help")}
-    for lc, (d1, d2) in cmds.items():             # command menu in the user's own language; Uzbek is the default
+    more = {"uz": ("Eng yaqin masjid", "Eslatmalar", "Obunalarim", "Maʼlumotlarimni oʻchirish"),
+            "ru": ("Ближайшая мечеть", "Напоминания", "Мои подписки", "Удалить мои данные"),
+            "en": ("Nearest mosque", "Reminders", "My subscriptions", "Delete my data")}
+    for lc, (d1, d2) in cmds.items():
+        cm = more[lc]             # command menu in the user's own language; Uzbek is the default
         kw = {} if lc == "uz" else {"language_code": lc}
-        call("setMyCommands", commands=[{"command": "start", "description": d1}, {"command": "help", "description": d2}], **kw)
+        call("setMyCommands", commands=[{"command": "start", "description": d1}, {"command": "nearest", "description": cm[0]},
+                                        {"command": "reminders", "description": cm[1]}, {"command": "subs", "description": cm[2]},
+                                        {"command": "help", "description": d2}, {"command": "stop", "description": cm[3]}], **kw)
     for aid in ADMIN_IDS:                         # the extra /admin command is visible to allow-listed admins only
         try:
             call("setMyCommands", commands=[{"command": "start", "description": "Start"}, {"command": "admin", "description": "Moderator"},
@@ -476,8 +690,20 @@ def main():
     if WEBAPP_URL.startswith("https://"):
         call("setChatMenuButton", menu_button={"type": "web_app", "text": "Xarita", "web_app": {"url": WEBAPP_URL}})
     cfg = app.Config()
-    bot = Bot(call, app.Store(cfg), real_ocr if ocr.available() else None, download, WEBAPP_URL, ADMIN_IDS,
+    cfg.db_pool_max = min(cfg.db_pool_max, 8)             # the bot needs a handful of connections: 4 handlers, the notifier, the poller
+    store = app.Store(cfg)
+    bot = Bot(call, store, real_ocr if ocr.available() else None, download, WEBAPP_URL, ADMIN_IDS,
               real_stt if stt.available() else None)
+    notifier = Notifier(call, bot.db, WEBAPP_URL)
+
+    def notify_loop():
+        while True:
+            try:
+                notifier.tick()
+            except Exception as e:
+                log("notifier error: %s" % type(e).__name__)
+            time.sleep(30)
+    threading.Thread(target=notify_loop, daemon=True).start()
     offset, backoff = None, 1
     pool = ThreadPoolExecutor(max_workers=4)             # a slow photo (OCR) must not block everybody else
     while True:

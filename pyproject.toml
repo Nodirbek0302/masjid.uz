@@ -9,5 +9,6 @@ select = ["E", "F", "W"]
 ignore = ["E701", "E702"]   # one-line `if x: return` in small helpers is intentional
 
 [tool.ruff.lint.per-file-ignores]
-"server/bot.py" = ["E501"]   # long user-facing text tables
+"server/bot.py" = ["E501"]
+"server/bottexts.py" = ["E501"]   # long user-facing text tables
 "tools/*.py" = ["E501"]

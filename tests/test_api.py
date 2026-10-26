@@ -730,6 +730,156 @@ class BotFlow(unittest.TestCase):
         self.user = {"id": 7, "first_name": "Owner", "language_code": "ru"}; self.send(text="/admin")
         self.assertTrue(self.buttons()[0]["web_app"]["url"].endswith("/admin.html"))
 
+    # ---- nearest card, subscriptions, reminders
+    def set_times(self, mid=None, times=None, who=("tg:900", {"kind": "telegram", "platform": "telegram-bot"})):
+        times = times or {"fajr": "05:20", "dhuhr": "12:30", "asr": "16:00", "maghrib": "17:35", "isha": "19:00"}
+        self.store.edit(mid or self.m["id"], {"prayer_times": times}, who[0], who[1])
+
+    def test_nearest_card_has_name_distance_times_route_and_subscribe(self):
+        self.store.edit(self.m["id"], {"address": "Muqimiy 166"}, "tg:900", {"kind": "telegram", "platform": "telegram-bot"})
+        self.set_times()
+        self.send(location={"latitude": 40.0027, "longitude": 66.0})                          # about 300 m away: card yes, pick-list "none"
+        card = [kw for m, kw in self.sent if m == "sendMessage" and kw["text"].startswith("Eng yaqin masjid")][0]
+        for part in ("Bot mosque", "Muqimiy 166", " m", "05:20", "19:00", "Yangilangan"):
+            self.assertIn(part, card["text"])
+        urls = [b["url"] for row in card["reply_markup"]["inline_keyboard"] for b in row if "url" in b]
+        self.assertEqual(urls, ["https://yandex.com/maps/?rtext=~40.0,66.0&rtt=auto"])
+        self.assertIn("sub:" + self.m["id"], [b.get("callback_data") for row in card["reply_markup"]["inline_keyboard"] for b in row])
+        self.assertEqual([b["callback_data"][:4] for b in self.buttons()], ["new:"])          # the update flow still follows
+        self.sent.clear(); self.user = {"id": 556, "first_name": "R", "language_code": "ru"}   # Russian, and a mosque without times
+        m2 = self.store.create({"lat": 40.5, "lon": 66.5, "name": "Dalnyaya"}, "client:test0001", {"kind": "web", "platform": "web"})
+        self.send(location={"latitude": 40.501, "longitude": 66.5})
+        txt = [kw["text"] for m, kw in self.sent if m == "sendMessage"][0]
+        self.assertTrue(txt.startswith("Ближайшая мечеть")); self.assertIn("Dalnyaya", txt); self.assertIn("Время джамаата ещё не указано", txt)
+        self.assertTrue(m2["id"])
+        self.sent.clear(); self.send(text="/nearest")
+        self.assertTrue(self.sent[-1][1]["reply_markup"]["keyboard"][0][0]["request_location"])
+
+    def test_subscribe_unsubscribe_limits_and_deep_link(self):
+        mid = self.m["id"]
+        self.click("sub:" + mid)
+        self.assertIn("obuna boʻldingiz", self.msgs()[-1]); self.assertEqual([s["mosque_id"] for s in self.bot.db.subs(555)], [mid])
+        self.click("sub:" + mid); self.assertIn("allaqachon", self.msgs()[-1])
+        self.send(text="/subs"); self.assertEqual(self.buttons()[0]["callback_data"], "unsub:" + mid)
+        self.click("unsub:" + mid); self.assertIn("bekor qilindi", self.msgs()[-1]); self.assertEqual(self.bot.db.subs(555), [])
+        self.send(text="/subs"); self.assertIn("obunalaringiz yoʻq", self.msgs()[-1])
+        self.send(text="/start s_" + mid); self.assertIn("obuna boʻldingiz", self.msgs()[-1])   # deep link from the web page
+        self.assertTrue(self.bot.db.is_subscribed(555, mid))
+        self.send(text="/start s_" + "0" * 36); self.assertIn("Xatolik", self.msgs()[-1])       # unknown mosque: an answer, no crash
+        self.store.moderate(self.m["id"], "archive", "admin:7", "t")
+        self.user = {"id": 600, "first_name": "B", "language_code": "en"}; self.click("sub:" + mid); self.assertIn("archived", self.msgs()[-1])
+        # the limit holds even when many taps arrive at once
+        ms = [self.store.create({"lat": 41 + i * 0.01, "lon": 67, "name": "M%d" % i}, "client:test0002", {"kind": "web", "platform": "web"}) for i in range(30)]
+        results = []
+        def tap(m):
+            results.append(self.bot.db.subscribe(777, m["id"]))
+        threads = [threading.Thread(target=tap, args=(m,)) for m in ms]
+        [t.start() for t in threads]; [t.join() for t in threads]
+        self.assertEqual(results.count("ok"), 20); self.assertEqual(results.count("limit"), 10); self.assertEqual(len(self.bot.db.subs(777)), 20)
+        results.clear(); same = [threading.Thread(target=tap, args=(ms[0],)) for _ in range(10)]
+        [t.start() for t in same]; [t.join() for t in same]
+        self.assertEqual(len(self.bot.db.subs(777)), 20)                                      # two taps on one mosque never double-subscribe
+
+    def test_save_offers_the_subscription_and_stop_deletes_everything(self):
+        self.send(location={"latitude": 40.0, "longitude": 66.0}); self.click("pick:" + self.m["id"])
+        self.send(text="05:20 12:30 16:00 17:35 19:00"); self.click("save")
+        self.assertEqual([b.get("callback_data") for b in self.buttons()], [None, "sub:" + self.m["id"]])    # open link first, then subscribe
+        self.click("sub:" + self.m["id"]); self.click("reg:3"); self.click("rm:daily")
+        self.send(text="/stop"); self.assertIn("oʻchirildi", self.msgs()[-1])
+        self.assertEqual(self.bot.db.subs(555), []); self.assertIsNone(self.bot.db.user(555))
+
+    def test_reminder_menu_regions_and_toggles_in_three_languages(self):
+        self.send(text="/reminders")                                                           # no region yet: the 14 regions to choose from
+        regs = [b for b in self.buttons() if b["callback_data"].startswith("reg:")]
+        self.assertEqual([b["callback_data"] for b in regs], ["reg:%d" % i for i in range(14)]); self.assertEqual(regs[0]["text"], "Toshkent shahri")
+        self.click("rm:daily"); self.assertEqual(self.buttons()[0]["callback_data"], "reg:0")  # toggling needs a region first
+        self.click("reg:11"); self.assertIn("Samarqand", self.msgs()[-1]); self.assertEqual(self.bot.db.user(555)["region"], 11)
+        self.click("rm:daily"); self.click("rm:before")
+        u = self.bot.db.user(555); self.assertTrue(u["daily"] and u["before_prayer"])
+        self.click("rm:daily"); self.assertFalse(self.bot.db.user(555)["daily"])
+        self.click("rm:off"); u = self.bot.db.user(555); self.assertFalse(u["daily"] or u["before_prayer"])
+        self.assertEqual(u["region"], 11)                                                      # the region is remembered
+        self.click("reg:99"); self.click("reg:x"); self.assertEqual(self.bot.db.user(555)["region"], 11)   # junk data is ignored
+        for code, word in (("ru", "Напоминания"), ("en", "Reminders")):
+            self.user = {"id": 800, "first_name": "L", "language_code": code}; self.send(text="/region"); self.click("reg:0"); self.assertIn(word, self.msgs()[-1])
+
+    def notifier(self):
+        return self.botmod.Notifier(lambda m, **kw: self.sent.append((m, kw)), self.bot.db, "https://example.org")
+
+    def test_scheduler_sends_each_reminder_once_in_the_users_language(self):
+        import prayertimes as P
+        from datetime import datetime, timedelta, timezone
+        tt = P.times(2026, 10, 26, *P.REGIONS[0])
+        local = lambda h: datetime(2026, 10, 26, tzinfo=timezone.utc) + timedelta(hours=h - 5)   # local (UTC+5) clock hour -> UTC instant  # noqa: E731
+        self.bot.db.set_user(555, region=0, daily=True, before_prayer=True, lang="uz")
+        self.bot.db.set_user(556, region=0, daily=False, before_prayer=True, lang="ru")
+        self.bot.db.set_user(557, region=None, daily=True, before_prayer=True, lang="en")      # no region: nothing can be sent
+        n = self.notifier()
+        sent_to = lambda tid: [kw["text"] for m, kw in self.sent if kw.get("chat_id") == tid]  # noqa: E731
+        n.tick(local(tt["fajr"] - 1.0))                                                        # 60 min before fajr: too early
+        self.assertEqual(self.sent, [])
+        n.tick(local(tt["fajr"] - 0.4))                                                        # 24 min before fajr: the daily message
+        self.assertEqual(len(sent_to(555)), 1); self.assertIn("Toshkent shahri", sent_to(555)[0]); self.assertIn(P.hm(tt["asr"]), sent_to(555)[0])
+        self.assertIn(P.hm(tt["sunrise"]), sent_to(555)[0]); self.assertEqual(sent_to(556), [])
+        n.tick(local(tt["fajr"] - 0.3)); n.tick(local(tt["fajr"] - 0.35))                      # more ticks: no second daily message
+        self.assertEqual(len(sent_to(555)), 1)
+        n.tick(local(tt["asr"] - 0.2))                                                         # 12 min before asr
+        self.assertIn("Asr", sent_to(555)[-1]); self.assertIn("15 daqiqa", sent_to(555)[-1])
+        self.assertIn("Аср", sent_to(556)[-1]); self.assertIn("15 минут", sent_to(556)[-1])   # Russian user, Russian text
+        total = len(self.sent)
+        n.tick(local(tt["asr"] - 0.1)); self.assertEqual(len(self.sent), total)                # same prayer, same day: once
+        n2 = self.notifier(); n2.tick(local(tt["asr"] - 0.15)); self.assertEqual(len(self.sent), total)   # restarted bot: still once
+        n2.tick(local(tt["asr"] + 0.1)); self.assertEqual(len(self.sent), total)               # prayer already started: no reminder
+        for k in ("fajr", "dhuhr", "maghrib", "isha"):                                         # every prayer gets its reminder
+            n2.tick(local(tt[k] - 0.2))
+        self.assertEqual(len([t for t in sent_to(555) if "15 daqiqa" in t]), 5)
+        tomorrow = local(tt["fajr"] - 0.4) + timedelta(days=1)
+        n2.tick(tomorrow); self.assertEqual(len([t for t in sent_to(555) if "Bugungi" in t]), 2)   # a new day: sent again
+        self.assertEqual(sent_to(557), [])
+        # a user who blocked the bot is forgotten, the others still get their messages
+        def api(method, **kw):
+            if kw.get("chat_id") == 555:
+                raise self.botmod.TelegramError(method, 403, "Forbidden: bot was blocked by the user")
+            self.sent.append((method, kw))
+        n3 = self.botmod.Notifier(api, self.bot.db); self.sent.clear()
+        n3.tick(local(tt["maghrib"] - 0.2) + timedelta(days=3))
+        self.assertIsNone(self.bot.db.user(555)); self.assertTrue(self.bot.db.user(556)); self.assertEqual(len(sent_to(556)), 1)
+
+    def test_subscribers_hear_about_time_changes_but_not_the_editor(self):
+        mid = self.m["id"]
+        self.bot.db.set_user(555, lang="uz"); self.bot.db.set_user(556, lang="en"); self.bot.db.set_user(557, lang="ru")
+        for tid in (555, 556, 557):
+            self.bot.db.subscribe(tid, mid)
+        n = self.notifier(); n.tick(); self.assertEqual(self.sent, [])                         # nothing changed yet
+        self.set_times(who=("tg:556", {"kind": "telegram", "platform": "telegram-bot"}))       # 556 is the one who edits
+        n.tick()
+        got = {kw["chat_id"]: kw["text"] for m, kw in self.sent}
+        self.assertEqual(sorted(got), [555, 557])                                              # not the editor
+        self.assertIn("oʻzgardi", got[555]); self.assertIn("16:00", got[555]); self.assertIn("изменилось", got[557]); self.assertIn("Bot mosque", got[557])
+        link = [kw for m, kw in self.sent if kw["chat_id"] == 555][0]["reply_markup"]["inline_keyboard"][0][0]["web_app"]["url"]
+        self.assertEqual(link, "https://example.org/?m=" + mid)
+        count = len(self.sent); n.tick(); n.tick(); self.assertEqual(len(self.sent), count)    # announced once
+        later = {"fajr": "05:25", "dhuhr": "12:30", "asr": "16:05", "maghrib": "17:35", "isha": "19:00"}
+        self.set_times(times=later, who=("tg:555", {"kind": "telegram", "platform": "telegram-bot"}))
+        n.tick(); self.assertEqual(sorted(kw["chat_id"] for m, kw in self.sent[count:]), [556, 557])   # now 555 is the editor
+        # an edit that does not touch the times is not announced
+        count = len(self.sent)
+        self.store.edit(mid, {"name": "Renamed"}, "tg:900", {"kind": "telegram", "platform": "telegram-bot"}); n.tick()
+        self.assertEqual(len(self.sent), count)
+        # failed delivery is retried on the next tick; a blocked user is dropped
+        self.set_times(times=dict(later, fajr="05:30"), who=("tg:900", {"kind": "telegram", "platform": "telegram-bot"}))
+        calls = []
+        def flaky(method, **kw):
+            calls.append(kw["chat_id"])
+            if kw["chat_id"] == 555:
+                raise self.botmod.TelegramError(method, 429, "Too Many Requests")
+            if kw["chat_id"] == 556:
+                raise self.botmod.TelegramError(method, 403, "Forbidden: bot was blocked by the user")
+        f = self.botmod.Notifier(flaky, self.bot.db); f.tick()
+        self.assertEqual(sorted(calls), [555, 556, 557])
+        self.assertIsNone(self.bot.db.user(556)); self.assertEqual(self.bot.db.subs(556), [])  # blocked: forgotten
+        calls.clear(); f.tick(); self.assertEqual(calls, [555])                                # only the failed one is retried
+
 
 @unittest.skipUnless(__import__("ocr").available() and os.path.exists("/System/Library/Fonts/Supplemental/Arial Bold.ttf"), "needs tesseract and a font")
 class RealOcr(unittest.TestCase):
