@@ -124,3 +124,5 @@ Tilni tanlamagan foydalanuvchining birinchi xabari (masalan, lokatsiya yoki `/st
 `PATCH` bilan saqlaydi. Rasm xotirada o'qiladi (Tesseract, Docker image'da bor) va tashlanadi. Himoya: bir qurilmadan soatiga `PHOTO_PER_HOUR`
 (standart 30; bir IP'dan 4 baravar), bir vaqtda `OCR_CONCURRENCY` (standart 2) ta rasm o'qiladi, qolganiga `503 busy`; hajm `MAX_PHOTO_BYTES`
 (8 MB); Tesseract yo'q bo'lsa `503 ocr_unavailable` va `/api/config` da `photo_reading: false` (ilova tugmani yashiradi).
+
+Ovozdan o'qish (`POST /api/timetable/voice`, ilovadagi mikrofon tugmasi): bot bilan bir xil ovoz modeli (`faster-whisper`, `WITH_VOICE=1`) va bir xil qoidalar (o'zbekcha, ruscha, inglizcha; AM/PM aniqlanadi). Yozuv xotirada tanib olinadi va tashlanadi; soatlik cheklov rasmniki bilan umumiy, hajm `MAX_VOICE_BYTES` (2 MB), bir vaqtda bitta yozuv (`503 busy`); model yo'q bo'lsa `503 stt_unavailable` va `/api/config` da `voice_reading: false` (ilova tugmani yashiradi).

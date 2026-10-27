@@ -593,6 +593,9 @@
   function showPanel(node) { var b = $("panel-body"); b.textContent = ""; b.appendChild(node); $("panel").hidden = false; $("panel").scrollTop = 0; document.body.classList.add("panel-open"); }
   function hidePanel() { $("panel").hidden = true; document.body.classList.remove("panel-open"); if (map) map.easeTo({ padding: mapPadding(), duration: 200 }); }
   $("panel-close").onclick = hidePanel;
+  if (window.ResizeObserver) new ResizeObserver(function () {          // the list/map button rides on top of the card
+    document.documentElement.style.setProperty("--panel-h", ($("panel").hidden ? 0 : $("panel").offsetHeight) + "px");
+  }).observe($("panel"));
   function skeleton() {                                    // instant feedback while the mosque loads
     return el("div", {}, [el("div", { class: "sk", style: "height:26px;width:70%;margin:8px 0" }), el("div", { class: "sk", style: "height:18px;width:45%;margin:8px 0" }),
       el("div", { class: "sk", style: "height:16px;width:85%;margin:14px 0" }), el("div", { class: "sk", style: "height:120px;margin:14px 0" })]);

@@ -460,6 +460,68 @@ def make_server(**extra):
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv, "http://127.0.0.1:%d" % srv.server_address[1]
 
+class TimetableVoiceEndpoint(unittest.TestCase):
+    """POST /api/timetable/voice with a fake speech recogniser (the real model is not needed to test the endpoint)."""
+    AUDIO = b"fakeaudio" * 50
+
+    def setUp(self):
+        import stt
+        self.stt = stt
+        self._saved = (stt.available, stt.transcribe)
+        self.heard = "Bomdod besh yigirma, Peshin o'n ikki o'ttiz, Asr to'rt, Shom besh o'ttiz besh, Xufton yetti"
+        stt.available = lambda: True
+        stt.transcribe = lambda data, suffix=".ogg": self.suffixes.append(suffix) or self.heard
+        self.suffixes = []
+        with psycopg.connect(TEST_URL, autocommit=True) as c:
+            c.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public")
+        self.srv, self.base = make_server()
+
+    def tearDown(self):
+        self.stt.available, self.stt.transcribe = self._saved
+        self.srv.shutdown()
+
+    def post(self, data=None, device="devicevoice01"):
+        req = urllib.request.Request(self.base + "/api/timetable/voice", method="POST", data=self.AUDIO if data is None else data,
+                                     headers={"Content-Type": "audio/mp4", "X-Device-Id": device})
+        try:
+            with urllib.request.urlopen(req) as r:
+                return r.status, json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            return e.code, json.loads(e.read())
+
+    def test_hears_the_five_times_in_words_with_am_pm_resolved_and_stores_nothing(self):
+        code, r = self.post()
+        self.assertEqual(code, 200)
+        self.assertTrue(r["complete"])
+        self.assertEqual(r["times"], {"fajr": "05:20", "dhuhr": "12:30", "asr": "16:00", "maghrib": "17:35", "isha": "19:00"})
+        self.assertIn("Bomdod", r["heard"])
+        self.assertEqual(self.suffixes, [".m4a"])                                        # the recording's type decides how it is decoded
+        with psycopg.connect(TEST_URL, autocommit=True) as c:
+            self.assertEqual(c.execute("SELECT count(*) FROM mosque_history").fetchone()[0], 0)
+        self.assertTrue(json.load(urllib.request.urlopen(self.base + "/api/config"))["voice_reading"])
+
+    def test_unclear_speech_empty_body_too_long_and_no_model(self):
+        self.heard = "Bomdod besh yigirma"
+        code, r = self.post()
+        self.assertEqual(code, 200); self.assertFalse(r["complete"]); self.assertEqual(r["times"], {"fajr": "05:20"})
+        self.assertEqual(self.post(b"")[0], 400)
+        small, base = make_server(MAX_VOICE_BYTES="1000")                        # the limit comes from the settings
+        try:
+            req = urllib.request.Request(base + "/api/timetable/voice", method="POST", data=b"x" * 2000, headers={"X-Device-Id": "devicevoice02"})
+            with self.assertRaises(urllib.error.HTTPError) as e:
+                urllib.request.urlopen(req)
+            self.assertEqual(e.exception.code, 413)
+        finally:
+            small.shutdown()
+        def broken(data, suffix=".ogg"): raise RuntimeError("cannot decode")
+        self.stt.transcribe = broken
+        self.assertEqual(self.post()[1]["error"], "bad_audio")
+        self.stt.available = lambda: False
+        code, r = self.post()
+        self.assertEqual((code, r["error"]), (503, "stt_unavailable"))
+        self.assertFalse(json.load(urllib.request.urlopen(self.base + "/api/config"))["voice_reading"])
+
+
 class TimetablePhotoEndpoint(unittest.TestCase):
     """POST /api/timetable/read with a fake OCR (the real Tesseract is not needed to test the endpoint)."""
     JPEG = b"\xff\xd8\xff\xe0" + b"0" * 64

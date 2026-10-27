@@ -28,11 +28,11 @@ def _load():
     return _model
 
 
-def transcribe(data):
-    """Audio bytes (Telegram voice = OGG/Opus; PyAV inside faster-whisper decodes it) -> text."""
+def transcribe(data, suffix=".ogg"):
+    """Audio bytes (Telegram voice = OGG/Opus, the app records AAC in .m4a; PyAV inside faster-whisper decodes both) -> text."""
     with _lock:
         model = _load()
-        with tempfile.NamedTemporaryFile(suffix=".ogg") as f:
+        with tempfile.NamedTemporaryFile(suffix=suffix) as f:
             f.write(data)
             f.flush()
             kw = dict(beam_size=5, initial_prompt=PROMPT, condition_on_previous_text=False)

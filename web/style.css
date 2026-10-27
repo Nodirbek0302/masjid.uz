@@ -227,5 +227,7 @@ body[data-page=list] #view-fab,body[data-page=map] #view-fab{display:inline-flex
 body[data-page=home] #search,body[data-page=home] #nearest,body[data-page=home] #map,body[data-page=home] #panel,body[data-page=home] #add-bar,body[data-page=home] #maperr{display:none!important}
 body[data-page=list] #nearest,body[data-page=list] #map,body[data-page=list] #panel,body[data-page=list] #add-bar,body[data-page=list] #maperr{display:none!important}
 body.picking #search,body.picking #nearest,body.picking #view-fab{display:none!important}
-body.panel-open #view-fab{display:none!important}
+#view-fab{transition:bottom .25s var(--ease)}
+body.panel-open #view-fab{bottom:calc(var(--nav-h) + var(--panel-h,0px) + 14px)}
+@media(min-width:700px),(orientation:landscape) and (max-height:520px){body.panel-open #view-fab{bottom:calc(var(--nav-h) + 16px)}}
 #nav{display:flex}

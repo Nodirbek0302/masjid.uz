@@ -23,6 +23,8 @@ from urllib.parse import parse_qsl, unquote, urlparse
 
 import botdb
 import ocr
+import spoken
+import stt
 import timetable
 import translit
 import psycopg
@@ -79,6 +81,7 @@ class Config:
         self.photo_per_hour = int(env("PHOTO_PER_HOUR", "30"))           # timetable photos one device may send per hour (the same IP: 4x)
         self.ocr_concurrency = max(1, int(env("OCR_CONCURRENCY", "2")))   # photos read at the same time; the rest are asked to retry
         self.max_photo_bytes = int(env("MAX_PHOTO_BYTES", str(8 * 1024 * 1024)))
+        self.max_voice_bytes = int(env("MAX_VOICE_BYTES", str(2 * 1024 * 1024)))   # a spoken minute is well under 1 MB
         self.tile_style_url = env("TILE_STYLE_URL", "https://tiles.openfreemap.org/styles/liberty")
         self.host = env("HOST", "127.0.0.1")
         self.port = int(env("PORT", "8080"))
@@ -537,6 +540,8 @@ class RateLimiter:
 # ---------------------------------------------------------------- http
 ID = r"([0-9a-f-]{36})"
 STATIC_CACHE = {}
+AUDIO_SUFFIX = {"audio/mp4": ".m4a", "audio/m4a": ".m4a", "audio/aac": ".aac", "audio/ogg": ".ogg", "audio/opus": ".ogg",
+                "audio/wav": ".wav", "audio/x-wav": ".wav", "audio/webm": ".webm"}
 COMPRESSIBLE = (".js", ".css", ".html", ".json", ".svg")
 
 
@@ -547,6 +552,7 @@ def make_handler(cfg, store):
     photo_limiter = RateLimiter(cfg.photo_per_hour, 3600)          # timetable photos per device per hour
     photo_ip_limiter = RateLimiter(cfg.photo_per_hour * 4, 3600)   # ... and per address (several people may share one)
     ocr_slots = threading.BoundedSemaphore(cfg.ocr_concurrency)    # photo reading is CPU-heavy: only a few at a time
+    stt_slots = threading.BoundedSemaphore(1)                      # so is speech recognition (the model also runs one at a time)
 
     class H(BaseHTTPRequestHandler):
         server_version = "masjid-uz"
@@ -610,6 +616,36 @@ def make_handler(cfg, store):
                 ocr_slots.release()
             r = timetable.best_of(texts)
             return {"times": r["times"], "alt": r["alt"], "complete": r["complete"], "warnings": r["warnings"]}
+
+        def read_voice(self):
+            """Reads the five congregation times from a spoken message (raw audio in the body: m4a/aac, ogg, wav ...). Recognised in
+            memory with the same speech model as the bot, understood with the same rules (Uzbek, Russian, English; AM/PM resolved),
+            never stored; the client shows what was heard and saves with a normal PATCH."""
+            self.close_connection = True
+            if not stt.available():
+                raise ApiError(503, "stt_unavailable", "voice reading is not available on this server")
+            try:
+                n = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                n = 0
+            if n <= 0:
+                raise ApiError(400, "bad_audio", "an audio recording is required")
+            if n > cfg.max_voice_bytes:
+                raise ApiError(413, "too_large", "recording too long")
+            actor, _ = self.identity()
+            if not photo_ip_limiter.allow(self.client_ip()) or not photo_limiter.allow(actor or self.client_ip()):   # the same hourly budget as photos
+                raise ApiError(429, "rate_limited", "too many recordings; try again later")
+            data = self.rfile.read(n)
+            if not stt_slots.acquire(blocking=False):
+                raise ApiError(503, "busy", "the listener is busy, retry in a moment")
+            try:
+                heard = stt.transcribe(data, suffix=AUDIO_SUFFIX.get((self.headers.get("Content-Type") or "").split(";")[0].strip().lower(), ".bin"))
+            except Exception:
+                raise ApiError(400, "bad_audio", "the recording could not be decoded") from None
+            finally:
+                stt_slots.release()
+            r = spoken.parse(heard)
+            return {"heard": heard[:300], "times": r["times"], "alt": r["alt"], "complete": r["complete"], "warnings": r["warnings"]}
 
         def body_json(self):
             try:
@@ -729,9 +765,12 @@ def make_handler(cfg, store):
                                             "prayer": cfg.prayer,
                                             "admin_token_login": cfg.allow_admin_token,
                                             "photo_reading": ocr.available(),
+                                            "voice_reading": stt.available(),
                                             "bot_username": cfg.bot_username})
             if path == "/api/timetable/read" and method == "POST":
                 return self.send_json(200, self.read_timetable())
+            if path == "/api/timetable/voice" and method == "POST":
+                return self.send_json(200, self.read_voice())
             if path == "/api/me" and method == "GET":
                 return self.send_json(200, {"lang": self.me_lang()})
             if path == "/api/me/lang" and method == "POST":
