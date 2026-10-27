@@ -586,8 +586,19 @@
   });
 
   // ---- panel
-  function showPanel(node) { var b = $("panel-body"); b.textContent = ""; b.appendChild(node); $("panel").hidden = false; $("panel").scrollTop = 0; document.body.classList.add("panel-open"); }
-  function hidePanel() { $("panel").hidden = true; document.body.classList.remove("panel-open"); if (map) map.easeTo({ padding: mapPadding(), duration: 200 }); }
+  var closeTimer = null;
+  function showPanel(node) {
+    clearTimeout(closeTimer); var p = $("panel"); p.classList.remove("closing");
+    var b = $("panel-body"); b.textContent = ""; b.appendChild(node); p.hidden = false; p.scrollTop = 0; document.body.classList.add("panel-open");
+  }
+  function hidePanel() {                                    // slides all the way down (in step with the list/map button), then goes
+    var p = $("panel"); document.body.classList.remove("panel-open");
+    if (map) map.easeTo({ padding: mapPadding(), duration: 200 });
+    if (p.hidden || p.classList.contains("closing")) return;
+    p.classList.add("closing");
+    clearTimeout(closeTimer);
+    closeTimer = setTimeout(function () { p.hidden = true; p.classList.remove("closing"); }, 340);
+  }
   $("panel-close").onclick = hidePanel;
   if (window.ResizeObserver) new ResizeObserver(function () {          // the list/map button rides on top of the card
     document.documentElement.style.setProperty("--panel-h", ($("panel").hidden ? 0 : $("panel").offsetHeight) + "px");
@@ -637,11 +648,8 @@
         el("div", { class: "cta" }, [
           el("p", { text: T(m.times_updated_at ? "cta.have" : "cta.empty") }),
           btn(m.times_updated_at ? "ghost small" : "small", T("cta.btn"), function () { editForm(m, { timesOnly: true }); }),
-          cfg.bot_username ? el("a", { class: "btn ghost small", target: "_blank", rel: "noopener noreferrer",
-            href: "https://t.me/" + cfg.bot_username + "?start=m_" + m.id, text: T("cta.photo") }) : null,
-          cfg.bot_username ? el("a", { class: "btn ghost small", target: "_blank", rel: "noopener noreferrer",
-            href: "https://t.me/" + cfg.bot_username + "?start=s_" + m.id, text: T("cta.sub") }) : null
         ]),
+        el("div", { class: "row" }, readButtons(m)),
         el("div", { class: "row" }, yandexLinks(m)),
         el("div", { class: "row" }, [
           m.origin === "imported" ? null : btn("", T("btn.edit"), function () { editForm(m); }),     // map-data mosques: only the times are editable (see the button above)
@@ -658,18 +666,206 @@
     revealPoint(map.getCenter().lng, map.getCenter().lat);
   }
 
+  // ---- reading the times from a photo or a voice recording (the same flow as the app): read, check, correct, save ----
+  function apiRaw(path, blob, type) {
+    var h = { "Content-Type": type, "X-Client-Id": clientId, "X-Client-Platform": "web", "ngrok-skip-browser-warning": "1" };
+    if (tg && tg.initData) h["X-Telegram-Init-Data"] = tg.initData;
+    return fetch(path, { method: "POST", headers: h, body: blob })
+      .then(function (r) { return r.json().then(function (j) { if (!r.ok) { j.status = r.status; throw j; } return j; }); });
+  }
+  function readButtons(m) {                               // photo and voice, always both; when the server cannot, the button opens the bot (or says so)
+    var bot = cfg.bot_username;
+    function fallback(code) { return bot ? function () { window.open("https://t.me/" + bot + "?start=m_" + m.id, "_blank", "noopener"); } : function () { toast(errText({ error: code })); }; }
+    var canVoice = cfg.voice_reading && navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder;
+    return [
+      btn("ghost small", "📷 " + T("photo.btn"), cfg.photo_reading ? function () { photoSource(m); } : fallback("ocr_unavailable")),
+      btn("ghost small", "🎙 " + T("voice.btn"), canVoice ? function () { voiceFlow(m); } : fallback("stt_unavailable")),
+      bot ? el("a", { class: "btn ghost small", target: "_blank", rel: "noopener noreferrer", href: "https://t.me/" + bot + "?start=s_" + m.id, text: T("cta.sub") }) : null
+    ];
+  }
+  function readSheet(m, o) {                              // o: title, reading, check, note, other, again(), read() -> Promise, header(result|null) -> node
+    var headBox = el("div", {}), body = el("div", {}), cancelled = false, res = null;
+    showPanel(el("div", {}, [el("h2", { text: o.title }), headBox, body]));
+    function head(r) { headBox.textContent = ""; var h = o.header && o.header(r); if (h) headBox.appendChild(h); }
+    function leave() { cancelled = true; openMosque(m.id); }
+    function run() {
+      head(res); body.textContent = "";
+      body.appendChild(el("div", { class: "reading" }, [el("p", { class: "strong", text: o.reading }), el("div", { class: "bar" }, [el("i")]), el("div", { class: "row" }, [btn("ghost", T("btn.cancel"), leave)])]));
+      o.read().then(function (r) {
+        if (cancelled) return;
+        res = r; head(r);
+        if (r.alt) choose(r); else review(r.times || {}, r.complete);
+      }).catch(function (e) {
+        if (cancelled) return;
+        body.textContent = "";
+        body.appendChild(el("div", { class: "errbox", text: errText(e) }));
+        body.appendChild(el("div", { class: "row" }, [btn("", T("btn.retry"), run), btn("ghost", o.other, o.again)]));
+      });
+    }
+    function choose(r) {                                  // a timetable with two columns: which one is the congregation time?
+      body.textContent = "";
+      body.appendChild(el("p", { class: "strong", text: T("photo.two") }));
+      [r.times, r.alt].forEach(function (col, i) {
+        var tile = el("button", { type: "button", class: "colpick", onclick: function () { review(col, Object.keys(col).length >= 5); } }, [el("small", { text: T("photo.col", { n: i + 1 }) }), timesGrid({ prayer_times: col })]);
+        body.appendChild(tile);
+      });
+      body.appendChild(el("div", { class: "row" }, [btn("ghost", o.other, o.again)]));
+    }
+    function review(times, complete) {
+      body.textContent = "";
+      var save = btn("", T("btn.save"), function () {
+        save.disabled = true;
+        var now = readTimes(grid), pt = {};
+        PRAYERS.forEach(function (p) { if ((now[p] || null) !== (m.prayer_times[p] || null)) pt[p] = now[p]; });
+        if (!Object.keys(pt).length) { toast(T("photo.same")); openMosque(m.id); return; }
+        api("PATCH", "/api/mosques/" + m.id, { prayer_times: pt, note: o.note }).then(function (u) { toast(T("toast.saved")); loadMosques(); openMosque(u.id); })
+          .catch(function (e) { toast(errText(e)); sync(); });
+      });
+      function sync() { var now = readTimes(grid); save.disabled = !PRAYERS.every(function (p) { return now[p]; }); }
+      var grid = timesInputs(times, function () { if (grid) sync(); });
+      var missing = !complete || PRAYERS.some(function (p) { return !times[p]; });
+      body.appendChild(el("p", { class: "muted", text: o.check }));
+      if (missing) body.appendChild(el("div", { class: "warnbox", text: T("photo.incomplete") }));
+      body.appendChild(grid);
+      body.appendChild(el("div", { class: "row" }, [save, btn("ghost", o.other, o.again)]));
+      sync();
+    }
+    run();
+  }
+
+  function photoSource(m) {                               // take a photo or choose one; if the picker is closed we stay here
+    function choose(camera) {
+      var inp = el("input", { type: "file", accept: "image/*", style: "display:none" });
+      if (camera) inp.setAttribute("capture", "environment");
+      document.body.appendChild(inp);
+      inp.addEventListener("change", function () { var f = inp.files && inp.files[0]; inp.remove(); if (f) photoRead(m, f); });
+      inp.click();
+    }
+    showPanel(el("div", {}, [
+      el("h2", { text: T("photo.title") }), el("p", { class: "muted", text: T("photo.src") }),
+      el("div", { class: "stack" }, [btn("", "📷 " + T("photo.take"), function () { choose(true); }), btn("ghost", "🖼 " + T("photo.pick"), function () { choose(false); })]),
+      el("div", { class: "row" }, [btn("ghost", T("btn.cancel"), function () { openMosque(m.id); })])
+    ]));
+  }
+  function scaleDown(file) {                              // a 12 MP photo becomes a few hundred KB: reading over mobile data stays fast
+    if (!window.createImageBitmap) return Promise.resolve(file);
+    return createImageBitmap(file).then(function (bm) {
+      var k = Math.min(1, 2200 / Math.max(bm.width, bm.height)), c = document.createElement("canvas");
+      c.width = Math.round(bm.width * k); c.height = Math.round(bm.height * k);
+      c.getContext("2d").drawImage(bm, 0, 0, c.width, c.height);
+      return new Promise(function (ok, no) { c.toBlob(function (b) { b ? ok(b) : no(); }, "image/jpeg", 0.85); });
+    }).catch(function () { return file; });
+  }
+  function photoRead(m, file) {
+    var url = URL.createObjectURL(file);
+    readSheet(m, {
+      title: T("photo.title"), reading: T("photo.reading"), check: T("photo.check"), other: T("photo.other"), note: "Veb (rasm)",
+      again: function () { URL.revokeObjectURL(url); photoSource(m); },
+      header: function () { return el("img", { class: "readpic", src: url, alt: "" }); },
+      read: function () { return scaleDown(file).then(function (b) { return apiRaw("/api/timetable/read", b, b.type || "image/jpeg"); }); }
+    });
+  }
+
+  function voiceFlow(m) {                                 // record up to a minute, then read the five times from what was said
+    var stream = null, rec = null, chunks = [], timer = null, t0 = 0, cancelled = false;
+    var clock = el("b", { class: "rec-time", text: "0:00" });
+    function release() { clearInterval(timer); if (stream) stream.getTracks().forEach(function (t) { t.stop(); }); stream = null; }
+    function finish() { if (rec && rec.state !== "inactive") rec.stop(); }
+    function cancel() { cancelled = true; if (rec && rec.state !== "inactive") rec.stop(); release(); openMosque(m.id); }
+    showPanel(el("div", {}, [
+      el("h2", { text: T("voice.title") }), el("p", { class: "muted", text: T("voice.say") }),
+      el("div", { class: "rec" }, [el("i", { class: "rec-dot" }), el("span", { text: T("voice.rec") }), clock]),
+      el("div", { class: "row" }, [btn("", "■ " + T("voice.stop"), finish), btn("ghost", T("btn.cancel"), cancel)])
+    ]));
+    navigator.mediaDevices.getUserMedia({ audio: true }).then(function (s) {
+      if (cancelled) { s.getTracks().forEach(function (t) { t.stop(); }); return; }
+      stream = s;
+      var type = ["audio/webm;codecs=opus", "audio/mp4", "audio/ogg;codecs=opus", "audio/webm"].filter(function (t) { return MediaRecorder.isTypeSupported(t); })[0] || "";
+      rec = new MediaRecorder(s, type ? { mimeType: type, audioBitsPerSecond: 48000 } : undefined);
+      rec.ondataavailable = function (e) { if (e.data && e.data.size) chunks.push(e.data); };
+      rec.onstop = function () {
+        release(); if (cancelled) return;
+        var blob = new Blob(chunks, { type: rec.mimeType || type || "audio/webm" });
+        if (!blob.size) { toast(errText({ error: "bad_audio" })); openMosque(m.id); return; }
+        voiceRead(m, blob);
+      };
+      rec.start(); t0 = Date.now();
+      timer = setInterval(function () { var sec = Math.floor((Date.now() - t0) / 1000); clock.textContent = Math.floor(sec / 60) + ":" + two(sec % 60); if (sec >= 60) finish(); }, 250);
+    }).catch(function () { if (!cancelled) { toast(T("voice.denied")); openMosque(m.id); } });
+  }
+  function voiceRead(m, blob) {
+    readSheet(m, {
+      title: T("voice.title"), reading: T("voice.listening"), check: T("voice.check"), other: T("voice.again"), note: "Veb (ovoz)",
+      again: function () { voiceFlow(m); },
+      header: function (r) { return r && r.heard ? el("p", { class: "heard", text: T("voice.heard", { t: r.heard }) }) : null; },
+      read: function () { return apiRaw("/api/timetable/voice", blob, blob.type || "audio/webm"); }
+    });
+  }
+
   function field(labelText, input) { return el("div", {}, [el("label", { text: labelText }), input]); }
 
-  function timesInputs(values) {
+  // ---- the time wheel (like the iPhone's picker): two scroll wheels over a soft band, a tick for every step ----
+  function two(n) { return (n < 10 ? "0" : "") + n; }
+  var audioCtx = null;
+  function tick() {
+    try { if (navigator.vibrate) navigator.vibrate(4); } catch (e) {}
+    try {
+      audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+      var o = audioCtx.createOscillator(), g = audioCtx.createGain(), t = audioCtx.currentTime;
+      o.type = "sine"; o.frequency.setValueAtTime(1900, t); o.frequency.exponentialRampToValueAtTime(900, t + 0.03);
+      g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.14, t + 0.003); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.045);
+      o.connect(g); g.connect(audioCtx.destination); o.start(t); o.stop(t + 0.05);
+    } catch (e) {}
+  }
+  function wheel(count, initial, onChange) {              // a looping wheel of 0..count-1: five copies, re-centred when it comes to rest
+    var ROW = 42, COPIES = 5, mid = Math.floor(COPIES / 2) * count, sel = initial, box = el("div", { class: "wheel", tabindex: "0" }), items = [], rest;
+    for (var c = 0; c < COPIES; c++) for (var i = 0; i < count; i++) { var d = el("div", { class: "wi", text: two(i) }); items.push(d); box.appendChild(d); }
+    function mark(n, on) { for (var k = n; k < items.length; k += count) items[k].classList.toggle("sel", on); }
+    box.addEventListener("scroll", function () {
+      var idx = Math.round(box.scrollTop / ROW), n = ((idx % count) + count) % count;
+      if (n !== sel) { mark(sel, false); sel = n; mark(sel, true); tick(); onChange(n); }
+      clearTimeout(rest);
+      rest = setTimeout(function () { if (idx < count || idx >= (COPIES - 1) * count) box.scrollTop = (mid + sel) * ROW; }, 160);
+    });
+    box.addEventListener("keydown", function (e) { if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); box.scrollBy({ top: e.key === "ArrowDown" ? ROW : -ROW, behavior: "smooth" }); } });
+    return { box: box, init: function () { mark(sel, true); box.scrollTop = (mid + sel) * ROW; } };
+  }
+  function pickTime(title, cur) {                         // -> Promise of "HH:MM", or null when cancelled
+    return new Promise(function (resolve) {
+      var m = /^(\d\d):(\d\d)$/.exec(cur || ""), h = m ? Math.min(23, +m[1]) : 12, mi = m ? Math.min(59, +m[2]) : 0;
+      var out = el("b", { class: "readout" });
+      function upd() { out.textContent = two(h) + ":" + two(mi); }
+      var wh = wheel(24, h, function (v) { h = v; upd(); }), wm = wheel(60, mi, function (v) { mi = v; upd(); });
+      var back = el("div", { class: "modal-back" });
+      function done(v) { document.removeEventListener("keydown", esc); back.classList.add("out"); setTimeout(function () { back.remove(); }, 220); resolve(v); }
+      function esc(e) { if (e.key === "Escape") done(null); }
+      back.appendChild(el("div", { class: "modal", role: "dialog" }, [
+        el("div", { class: "modal-head" }, [el("h2", { text: title }), out]),
+        el("div", { class: "wheels" }, [el("div", { class: "band" }), wh.box, el("span", { class: "colon", text: ":" }), wm.box]),
+        el("div", { class: "row" }, [btn("", T("btn.save"), function () { done(two(h) + ":" + two(mi)); }), btn("ghost", T("btn.cancel"), function () { done(null); })])
+      ]));
+      back.addEventListener("click", function (e) { if (e.target === back) done(null); });
+      document.body.appendChild(back); document.addEventListener("keydown", esc);
+      upd(); wh.init(); wm.init();
+      try { if (audioCtx && audioCtx.state === "suspended") audioCtx.resume(); else if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {}
+    });
+  }
+  function timesInputs(values, onChange) {                // five tiles: tap one to choose its time on the wheel, × clears it
     var grid = el("div", { class: "grid" });
     PRAYERS.forEach(function (p) {
-      grid.appendChild(field(T("pn." + p), el("input", { type: "time", "data-p": p, value: values[p] || "" })));
+      var val = el("span", { class: "tv" }), b = el("button", { type: "button", class: "tt", "data-p": p }, [val]);
+      var x = el("button", { type: "button", class: "tx", "aria-label": T("btn.close"), text: "×" });
+      function set(v) { b.dataset.v = v || ""; val.textContent = v || "—"; b.classList.toggle("empty", !v); x.hidden = !v; if (onChange) onChange(); }
+      b.onclick = function () { pickTime(T("pn." + p), b.dataset.v).then(function (v) { if (v) set(v); }); };
+      x.onclick = function () { set(null); };
+      set(values[p] || null);
+      grid.appendChild(el("div", { class: "tw" }, [el("label", { text: T("pn." + p) }), b, x]));
     });
     return grid;
   }
   function readTimes(root) {
     var out = {};
-    root.querySelectorAll("input[data-p]").forEach(function (i) { out[i.getAttribute("data-p")] = i.value || null; });
+    root.querySelectorAll(".tt[data-p]").forEach(function (i) { out[i.getAttribute("data-p")] = i.dataset.v || null; });
     return out;
   }
   function fmtC(lat, lng) { return lat.toFixed(6) + ", " + lng.toFixed(6); }

@@ -70,15 +70,19 @@ body[data-page=map]{--strip:0px}
 
 /* ---------- panel (bottom sheet on phones, card on wide screens) ---------- */
 #panel{position:absolute;z-index:18;left:0;right:0;bottom:var(--nav-h);max-height:calc(56vh - var(--nav-h));max-height:calc(56dvh - var(--nav-h));overflow:auto;overscroll-behavior:contain;background:var(--surface);border-radius:22px 22px 0 0;
-  padding:8px 18px 20px;box-shadow:0 -6px 28px rgba(6,78,59,.2);animation:sheet .28s var(--ease);scrollbar-width:thin}
+  padding:8px 18px 20px;box-shadow:0 -6px 28px rgba(6,78,59,.2);animation:sheet .36s var(--ease);scrollbar-width:thin}
+#panel.closing{animation:sheet-out .34s cubic-bezier(.65,0,.35,1) forwards;pointer-events:none}
 .grabber{width:42px;height:4px;border-radius:4px;background:var(--line);margin:2px auto 8px}
 #panel .close{position:absolute;right:10px;top:10px;border-color:var(--line);background:var(--soft);color:var(--muted)}
 #panel .close:hover{background:var(--g50);color:var(--g700)}
-@keyframes sheet{from{transform:translateY(40px);opacity:0}to{transform:none;opacity:1}}
+@keyframes sheet{from{transform:translateY(100%);opacity:0}40%{opacity:1}to{transform:none;opacity:1}}
+@keyframes sheet-out{from{transform:none;opacity:1}60%{opacity:1}to{transform:translateY(100%);opacity:0}}
+@keyframes slide-out{to{transform:translateX(-30px);opacity:0}}
 @keyframes slide{from{transform:translateX(-24px);opacity:0}to{transform:none;opacity:1}}
 @media(min-width:700px),(orientation:landscape) and (max-height:520px){
   #panel{left:12px;right:auto;top:calc(var(--strip) + 64px);bottom:calc(var(--nav-h) + 12px);width:min(390px,56vw);max-height:none;border-radius:20px;padding-top:18px;animation:slide .28s var(--ease);box-shadow:var(--sh)}
   .grabber{display:none}
+  #panel.closing{animation:slide-out .3s cubic-bezier(.65,0,.35,1) forwards}
 }
 #panel-body>div{animation:fade .22s var(--ease)}
 @keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
@@ -224,7 +228,67 @@ body[data-page=list] #view-fab,body[data-page=map] #view-fab{display:inline-flex
 body[data-page=home] #search,body[data-page=home] #nearest,body[data-page=home] #map,body[data-page=home] #panel,body[data-page=home] #add-bar,body[data-page=home] #maperr{display:none!important}
 body[data-page=list] #nearest,body[data-page=list] #map,body[data-page=list] #panel,body[data-page=list] #add-bar,body[data-page=list] #maperr{display:none!important}
 body.picking #search,body.picking #nearest,body.picking #view-fab{display:none!important}
-#view-fab{transition:bottom .25s var(--ease)}
+#view-fab{transition:bottom .36s cubic-bezier(.65,0,.35,1);transform-origin:bottom right;animation:fabpop .52s cubic-bezier(.34,1.4,.64,1) both}
+@keyframes fabpop{from{opacity:0;transform:scale(.6)}to{opacity:1;transform:none}}
 body.panel-open #view-fab{bottom:calc(var(--nav-h) + var(--panel-h,0px) + 14px)}
 @media(min-width:700px),(orientation:landscape) and (max-height:520px){body.panel-open #view-fab{bottom:calc(var(--nav-h) + 16px)}}
 #nav{display:flex}
+
+/* ---------- time wheel (like the iPhone's picker) ---------- */
+.grid .tw{position:relative}
+.tt{width:100%;min-height:42px;padding:8px 6px;border-radius:12px;border:1px solid var(--line);background:var(--surface);font-size:17px;font-weight:600;font-variant-numeric:tabular-nums;color:var(--fg)}
+.tt.empty{color:var(--muted);font-weight:400}
+.tt:active{transform:scale(.97)}
+.tx{position:absolute;right:4px;bottom:9px;width:24px;height:24px;border:0;border-radius:50%;background:var(--soft);color:var(--muted);font-size:16px;line-height:1;padding:0}
+.modal-back{position:fixed;inset:0;z-index:60;display:flex;align-items:flex-end;justify-content:center;background:rgba(0,0,0,.38);animation:fadein .2s ease}
+.modal-back.out{opacity:0;transition:opacity .2s}
+.modal{width:min(420px,100%);padding:14px 20px calc(18px + env(safe-area-inset-bottom));border-radius:24px 24px 0 0;background:var(--surface);box-shadow:0 -10px 40px rgba(0,0,0,.25);animation:sheet .32s var(--ease)}
+@media(min-width:700px){.modal-back{align-items:center}.modal{border-radius:24px}}
+.modal-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+.modal-head .readout{font-size:18px;color:var(--g700);font-variant-numeric:tabular-nums}
+.wheels{position:relative;display:flex;justify-content:center;align-items:center;height:210px;margin:8px 0 6px;
+  -webkit-mask-image:linear-gradient(180deg,transparent,#000 28%,#000 72%,transparent);mask-image:linear-gradient(180deg,transparent,#000 28%,#000 72%,transparent)}
+.wheels .band{position:absolute;left:24px;right:24px;top:84px;height:42px;border-radius:11px;background:color-mix(in srgb,var(--fg) 8%,transparent);pointer-events:none}
+.wheels .colon{width:16px;text-align:center;font-size:26px;font-weight:600}
+.wheel{width:96px;height:210px;overflow-y:scroll;padding:84px 0;box-sizing:border-box;scroll-snap-type:y mandatory;scrollbar-width:none;overscroll-behavior:contain;outline:none;-webkit-overflow-scrolling:touch}
+.wheel::-webkit-scrollbar{display:none}
+.wi{height:42px;line-height:42px;text-align:center;font-size:24px;font-variant-numeric:tabular-nums;scroll-snap-align:center;opacity:.55;transition:transform .12s,opacity .12s}
+.wi.sel{opacity:1;font-weight:600;transform:scale(1.12)}
+@keyframes fadein{from{opacity:0}to{opacity:1}}
+
+/* ---------- read from photo / voice ---------- */
+.readpic{display:block;width:100%;height:130px;object-fit:cover;border-radius:16px;margin-top:12px;background:var(--soft)}
+.heard{margin:12px 0 0;padding:10px 12px;border-radius:12px;background:var(--soft);font-style:italic}
+.strong{font-weight:600}
+.reading{margin-top:18px}
+.bar{height:6px;border-radius:8px;background:var(--g50);overflow:hidden;margin:12px 0}
+.bar i{display:block;height:100%;width:40%;border-radius:8px;background:var(--g600);animation:bar 1.1s ease-in-out infinite}
+@keyframes bar{from{transform:translateX(-100%)}to{transform:translateX(260%)}}
+.warnbox{margin:12px 0;padding:12px;border-radius:14px;background:var(--warn-bg);color:var(--warn);font-size:13.5px}
+.errbox{margin-top:14px;padding:12px;border-radius:14px;background:var(--warn-bg);color:var(--danger);font-size:14px}
+.colpick{display:block;width:100%;margin-top:10px;padding:10px;border-radius:18px;border:0;background:var(--soft);text-align:left}
+.colpick>small{display:block;margin:0 6px 6px;font-size:12px;font-weight:700;color:var(--muted)}
+.rec{display:flex;align-items:center;gap:10px;margin:22px 0 6px;font-weight:600}
+.rec-time{margin-left:auto;font-variant-numeric:tabular-nums}
+.rec-dot{width:12px;height:12px;border-radius:50%;background:var(--danger);animation:recpulse 1s ease-in-out infinite}
+@keyframes recpulse{50%{transform:scale(1.35);opacity:.55}}
+
+/* ---------- opening animation: the icon draws itself on a green backdrop ---------- */
+#splash{position:fixed;inset:0;z-index:100;display:grid;place-items:center;background:radial-gradient(circle at 50% 45%,#0b7a58,#064e3b 75%);animation:sp-out .45s ease-in 2.15s forwards}
+#splash.skip{animation:sp-out .25s ease-in forwards}
+.no-splash #splash{display:none}
+#splash .tile{width:148px;height:148px;border-radius:34px;background:linear-gradient(180deg,#065f46,#059669);box-shadow:0 12px 30px rgba(0,0,0,.4);animation:sp-tile .75s cubic-bezier(.34,1.4,.64,1) both}
+#splash svg{display:block;width:100%;height:100%;overflow:visible}
+#splash svg *{transform-box:fill-box;opacity:0;animation-fill-mode:both}
+#splash .g{fill:#fff;animation:sp-pop .5s cubic-bezier(.34,1.5,.64,1) both}
+#splash .door{fill:#059669}
+#splash .ground{transform-origin:50% 50%;animation-name:sp-x}
+#splash .rise{transform-origin:50% 100%;animation-name:sp-y}
+#splash .a1{animation-delay:.35s}#splash .a2{animation-delay:.55s}#splash .a3{animation-delay:.8s}#splash .a4{animation-delay:1.05s}#splash .a5{animation-delay:1.2s}#splash .a6{animation-delay:1.35s}
+#splash .g,#splash .door{animation-duration:.5s}
+@keyframes sp-tile{from{opacity:0;transform:scale(.4)}to{opacity:1;transform:none}}
+@keyframes sp-pop{from{opacity:0;transform:scale(0)}to{opacity:1;transform:none}}
+@keyframes sp-x{from{opacity:0;transform:scaleX(0)}to{opacity:1;transform:none}}
+@keyframes sp-y{from{opacity:0;transform:scaleY(0)}to{opacity:1;transform:none}}
+@keyframes sp-out{to{opacity:0;visibility:hidden}}
+@media(prefers-reduced-motion:reduce){#splash{display:none}}

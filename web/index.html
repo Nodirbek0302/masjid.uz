@@ -18,6 +18,17 @@
 <script src="app.js" defer></script>
 </head>
 <body>
+<div id="splash" aria-hidden="true">
+  <div class="tile"><svg viewBox="0 0 100 100">
+    <rect class="g ground a1" x="14" y="74" width="72" height="3"/>
+    <rect class="g rise a2" x="16" y="52" width="48" height="22"/>
+    <path class="g a3" style="transform-origin:50% 100%" d="M16 52A24 26 0 0 1 64 52Z"/>
+    <path class="g door a4" d="M35 61A5 5 0 0 1 45 61V74H35Z"/>
+    <g class="a5" style="animation:sp-pop .5s cubic-bezier(.34,1.5,.64,1) both;animation-delay:1.2s"><rect class="g" x="39" y="18" width="2" height="9" style="animation:none;opacity:1"/><circle class="g" cx="40" cy="17.8" r="2.8" style="animation:none;opacity:1"/></g>
+    <g class="rise a3" style="animation:sp-y .5s cubic-bezier(.34,1.5,.64,1) both;animation-delay:.85s"><rect class="g" x="71" y="40" width="6" height="34" style="animation:none;opacity:1"/><rect class="g" x="68.5" y="45" width="11" height="3" style="animation:none;opacity:1"/></g>
+    <g class="a6" style="animation:sp-pop .5s cubic-bezier(.34,1.5,.64,1) both;animation-delay:1.35s"><path class="g" d="M69.5 40L74 27L78.5 40Z" style="animation:none;opacity:1"/><circle class="g" cx="74" cy="24.4" r="1.4" style="animation:none;opacity:1"/></g>
+  </svg></div>
+</div>
 <!-- home page: today's prayer times -->
 <main id="home">
   <div class="home-top">
