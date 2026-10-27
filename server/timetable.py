@@ -19,8 +19,8 @@ LABELS = {
 _TIME = re.compile(r"(?<![\d:])([01]?\d|2[0-3])\s*[:.·\-]\s*([0-5]\d)(?![\d])")
 
 
-_LOOSE = re.compile(r"(?<![\w])([\dOolI|]{1,2})\s*[:.·\-]\s*([\dOolI|]{2})(?![\w])")
-_TR = str.maketrans({"O": "0", "o": "0", "l": "1", "I": "1", "|": "1"})
+_LOOSE = re.compile(r"(?<![\w])([\dOolIQD|]{1,2})\s*[:.·\-]\s*([\dOolIQD|]{2})(?![\w])")
+_TR = str.maketrans({"O": "0", "o": "0", "Q": "0", "D": "0", "l": "1", "I": "1", "|": "1"})
 
 
 _DATE = re.compile(r"(?<!\d)\d{1,2}\s*[./-]\s*\d{1,2}\s*[./-]\s*\d{2,4}(?!\d)")
@@ -194,7 +194,10 @@ def parse(text):
                 warnings.append("not_in_order")
     if complete and "not_in_order" not in warnings and any(not PLAUSIBLE[k][0] <= _minutes(found[k]) <= PLAUSIBLE[k][1] for k in ORDER):
         warnings.append("implausible")
-    bad = {"not_in_order", "too_many_times", "two_columns", "implausible"} & set(warnings)
+    multi = [k for k, v in per.items() if len(v) >= 2]
+    if len(multi) >= 2 and len(multi) < len(per):                  # some lines show two times and others one: a time was missed, columns would mix
+        warnings.append("inconsistent_columns")
+    bad = {"not_in_order", "too_many_times", "two_columns", "implausible", "inconsistent_columns"} & set(warnings)
     if alt:
         alt, _ = resolve_12h(alt)
     return {"times": {k: found[k] for k in ORDER if k in found}, "alt": alt, "complete": complete and not bad, "warnings": warnings}

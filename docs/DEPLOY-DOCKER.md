@@ -117,3 +117,10 @@ Tanlov `bot_users.lang` da saqlanadi (`lang_set=true`), `/lang` bilan istalgan p
 - Mini App ochilganda `GET /api/me` (Telegram imzosi tekshiriladi) bot tanlagan tilni qaytaradi; veb'da til almashtirilsa
   `POST /api/me/lang` botni ham shu tilga o'tkazadi. Kirill matnlar lotindan avtomatik hosil qilinadi (`server/translit.py`).
 Tilni tanlamagan foydalanuvchining birinchi xabari (masalan, lokatsiya yoki `/start m_<id>`) saqlanadi va til tanlangach davom ettiriladi.
+
+## Mobil ilova: rasmdan vaqtlarni o'qish (API)
+`POST /api/timetable/read` (tanasi: JPEG/PNG/WebP rasm) jadval rasmidan 5 ta vaqtni o'qiydi va qaytaradi: `{times, alt, complete, warnings}`
+(`alt` ikki ustunli jadvalda ikkinchi ustun). Server **hech narsa saqlamaydi**: ilova natijani foydalanuvchiga tekshirtiradi va oddiy
+`PATCH` bilan saqlaydi. Rasm xotirada o'qiladi (Tesseract, Docker image'da bor) va tashlanadi. Himoya: bir qurilmadan soatiga `PHOTO_PER_HOUR`
+(standart 30; bir IP'dan 4 baravar), bir vaqtda `OCR_CONCURRENCY` (standart 2) ta rasm o'qiladi, qolganiga `503 busy`; hajm `MAX_PHOTO_BYTES`
+(8 MB); Tesseract yo'q bo'lsa `503 ocr_unavailable` va `/api/config` da `photo_reading: false` (ilova tugmani yashiradi).

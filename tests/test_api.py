@@ -576,6 +576,10 @@ class TimetableParser(unittest.TestCase):
         self.assertFalse(T.parse("05:20 12:30 11:00 03:00 19:00")["complete"])                  # not repairable -> never complete
         weird = T.parse("Bomdod 09:20\nPeshin 12:30\nAsr 16:00\nShom 17:35\nXufton 19:00")      # fajr at 09:20 cannot be right
         self.assertFalse(weird["complete"]); self.assertIn("implausible", weird["warnings"])
+        q = T.parse("AZON - JAMOAT\nBomdod Q5:40 05:20\nPeshin 12:45 12:30\nAsr 16:15 16:00\nShom 17:40 17:35\nXufton 19:15 19:00")      # OCR read the 0 of 05:40 as Q
+        self.assertEqual(q["alt"]["fajr"], "05:20"); self.assertIn("two_columns", q["warnings"]); self.assertFalse(q["complete"])
+        mixed = T.parse("Bomdod 05:40 05:20\nPeshin 12:45 12:30\nAsr 16:15 16:00\nShom 17:40\nXufton 19:15")   # a lost time must not mix the columns silently
+        self.assertFalse(mixed["complete"]); self.assertIn("inconsistent_columns", mixed["warnings"])
         for bad in ("Bomdod 05:20\nAsr 16:00", "Assalomu alaykum 2026", "05:20 12:30 11:00 17:35 19:00", "99:99 88:88", ""):
             self.assertFalse(T.parse(bad)["complete"], bad)                # never "complete" on doubtful input
 
