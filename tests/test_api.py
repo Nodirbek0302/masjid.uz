@@ -293,6 +293,49 @@ class Api(unittest.TestCase):
         self.assertEqual(self.call("GET", "/api/mosques/nearest?lat=95&lon=0")[0], 400)
         self.assertEqual(self.call("GET", "/api/mosques/nearest?lat=34&lon=72&limit=x")[0], 400)
 
+    def test_nearest_list_is_read_page_by_page(self):
+        pts = [(-33.0000 + i * 0.001, 151.0000) for i in range(7)]
+        for i, (la, lo) in enumerate(pts):
+            self.add(la, lo, name="P%d" % i, force=True)
+        def page(off, lim=3):
+            return [m["name"] for m in self.call("GET", "/api/mosques/nearest?lat=-33.0005&lon=151&limit=%d&offset=%d" % (lim, off))[1]["items"]]
+        self.assertEqual(page(0), ["P0", "P1", "P2"])
+        self.assertEqual(page(3), ["P3", "P4", "P5"])
+        self.assertEqual(page(6)[0], "P6")                                          # the next page goes on with the next nearest (others, farther, may follow)
+        self.assertNotIn("P0", page(7))
+        self.assertEqual(self.call("GET", "/api/mosques/nearest?lat=-33&lon=151&offset=x")[0], 400)
+
+    def test_photos_come_only_from_commons_tags_and_are_not_editable(self):
+        import import_osm
+        import osm_photo
+        self.assertEqual(osm_photo.commons_title({"wikimedia_commons": "File:Kamolon_masjidi.jpg"}), ("title", "File:Kamolon_masjidi.jpg"))
+        self.assertEqual(osm_photo.commons_title({"wikimedia_commons": "Category:Novza mosque"}), ("title", "Category:Novza mosque"))
+        self.assertEqual(osm_photo.commons_title({"image": "https://commons.wikimedia.org/wiki/File:A%20b.jpg"}), ("title", "File:A b.jpg"))
+        self.assertEqual(osm_photo.commons_title({"image": "https://upload.wikimedia.org/wikipedia/commons/a/ab/X.jpg"})[0], "url")
+        for tags in ({}, {"image": "https://evil.example/x.jpg"}, {"wikimedia_commons": "Deggaron mosque"}, {"image": "http://upload.wikimedia.org/x.jpg"}):
+            self.assertIsNone(osm_photo.commons_title(tags), tags)                  # any other site, plain http, or a bare name: no photo
+        asked = []
+        def lookup(title):
+            asked.append(title)
+            return ("https://upload.wikimedia.org/thumb/x.jpg", "https://commons.wikimedia.org/wiki/" + title)
+        data = {"elements": [
+            {"type": "node", "id": 7901, "lat": -38.5, "lon": 147.5, "tags": {"name": "With photo", "wikimedia_commons": "File:Z.jpg"}},
+            {"type": "node", "id": 7902, "lat": -38.6, "lon": 147.6, "tags": {"name": "Without"}}]}
+        store = app.Store(app.Config())
+        self.assertEqual(import_osm.run(data, app.Config(), store, photo_lookup=lookup)["photos"], 1)
+        self.assertEqual(import_osm.sync_photos(data, store, lookup), 0)             # looked up once, not at every sync
+        self.assertEqual(asked, ["File:Z.jpg"])
+        items = {m["name"]: m for m in self.call("GET", "/api/mosques?bbox=147.4,-38.8,147.8,-38.4")[1]["items"]}
+        self.assertEqual(items["With photo"]["photo_url"], "https://upload.wikimedia.org/thumb/x.jpg")
+        self.assertTrue(items["With photo"]["photo_credit"].endswith("File:Z.jpg"))
+        self.assertIsNone(items["Without"]["photo_url"])
+        s, r = self.call("PATCH", "/api/mosques/" + items["With photo"]["id"], {"photo_url": "https://evil.example/x.jpg", "prayer_times": {"fajr": "05:00"}})
+        self.assertEqual(s, 200)
+        self.assertEqual(r["photo_url"], "https://upload.wikimedia.org/thumb/x.jpg")  # the field is not part of the API's edit
+        def failing(title): raise OSError("commons down")
+        data["elements"].append({"type": "node", "id": 7903, "lat": -38.7, "lon": 147.7, "tags": {"name": "Later", "wikimedia_commons": "File:Q.jpg"}})
+        self.assertEqual(import_osm.run(data, app.Config(), store, photo_lookup=failing)["photos"], 0)            # Commons down: no crash, retried next time
+
     def test_imported_mosques_only_allow_time_edits(self):
         import import_osm
         import_osm.run({"elements": [{"type": "node", "id": 7501, "lat": 32.0, "lon": 74.0, "tags": {"name": "Map mosque", "addr:full": "Map street 1"}}]}, app.Config())
@@ -755,12 +798,12 @@ class BotFlow(unittest.TestCase):
         self.click("lang:ru")
         self.assertIn("Ассаламу алайкум", "\n".join(self.msgs())); self.assertTrue(any("lang=ru" in b.get("web_app", {}).get("url", "") for b in self.buttons()))
         self.send(text="/id"); self.assertIn("Ваш Telegram ID", self.msgs()[-1])
-        self.user = {"id": 901, "first_name": "Other", "language_code": "uz"}; self.sent.clear()          # another person is asked on their own
+        self.user = {"id": 7901, "first_name": "Other", "language_code": "uz"}; self.sent.clear()          # another person is asked on their own
         self.send(text="/id"); self.assertEqual([b["callback_data"] for b in self.buttons()][:1], ["lang:uz"])
 
     def test_the_first_message_is_continued_after_the_language_is_chosen(self):
         self.autolang = False
-        self.user = {"id": 902, "first_name": "Dee", "language_code": "ru"}
+        self.user = {"id": 7902, "first_name": "Dee", "language_code": "ru"}
         self.send(text="/start m_" + self.m["id"])                                              # opened from a mosque page: deep link first
         self.assertEqual(len(self.msgs()), 1)
         self.click("lang:en")
@@ -932,6 +975,27 @@ class BotFlow(unittest.TestCase):
     def set_times(self, mid=None, times=None, who=("tg:900", {"kind": "telegram", "platform": "telegram-bot"})):
         times = times or {"fajr": "05:20", "dhuhr": "12:30", "asr": "16:00", "maghrib": "17:35", "isha": "19:00"}
         self.store.edit(mid or self.m["id"], {"prayer_times": times}, who[0], who[1])
+
+    def test_card_goes_out_with_the_mosque_picture_and_falls_back_to_text(self):
+        with self.store.pool.connection() as c:
+            c.execute("UPDATE mosques SET photo_url='https://upload.wikimedia.org/p.jpg' WHERE id=%s", (self.m["id"],))
+        self.send(location={"latitude": 40.0027, "longitude": 66.0})
+        photo = [kw for m, kw in self.sent if m == "sendPhoto"]
+        self.assertEqual(len(photo), 1)
+        self.assertEqual(photo[0]["photo"], "https://upload.wikimedia.org/p.jpg")
+        self.assertIn("Bot mosque", photo[0]["caption"]); self.assertIn("inline_keyboard", photo[0]["reply_markup"])
+        self.assertFalse([1 for m, kw in self.sent if m == "sendMessage" and kw["text"].startswith("Eng yaqin masjid")])
+        real = self.bot.api
+        def refuse(method, **kw):
+            if method == "sendPhoto": raise RuntimeError("wrong file identifier/HTTP URL")
+            return real(method, **kw)
+        self.bot.api = refuse
+        self.sent.clear(); self.send(location={"latitude": 40.0027, "longitude": 66.0})
+        self.bot.api = real
+        # Telegram refused the picture: the card still arrives
+        self.assertTrue([1 for m, kw in self.sent if m == "sendMessage" and kw["text"].startswith("Eng yaqin masjid")])
+        with self.store.pool.connection() as c:
+            c.execute("UPDATE mosques SET photo_url=NULL WHERE id=%s", (self.m["id"],))
 
     def test_nearest_card_has_name_distance_times_route_and_subscribe(self):
         self.store.edit(self.m["id"], {"address": "Muqimiy 166"}, "tg:900", {"kind": "telegram", "platform": "telegram-bot"})

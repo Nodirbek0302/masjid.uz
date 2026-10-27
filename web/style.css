@@ -136,3 +136,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--g500);bo
 .times-meta{margin:8px 2px 0;font-weight:600}
 .cta{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:10px 0 2px;padding:12px 14px;border-radius:14px;background:var(--g50);border:1px dashed var(--g200)}
 .cta p{margin:0;flex:1 1 200px;color:var(--g800);font-size:14px}
+
+.photo-wrap{margin:0 0 10px}.photo{display:block;width:100%;height:150px;object-fit:cover;border-radius:14px;background:var(--g50)}
+.photo-credit{text-align:right;font-size:11.5px;margin-top:3px}.photo-credit a,.photo-credit span{color:var(--muted);text-decoration:none}
+#results li .addr{margin-top:1px}

@@ -386,12 +386,24 @@
     return g;
   }
 
+  // A picture from Wikimedia Commons (taken from the OpenStreetMap tags) with its credit; nothing at all when the mosque has none.
+  function photoBlock(m) {
+    if (!m.photo_url || m.photo_url.indexOf("https://") !== 0) return null;
+    var img = el("img", { class: "photo", src: m.photo_url, alt: "", loading: "lazy", referrerpolicy: "no-referrer" });
+    img.addEventListener("error", function () { wrap.hidden = true; });
+    var credit = m.photo_credit && m.photo_credit.indexOf("https://") === 0
+      ? el("a", { href: m.photo_credit, target: "_blank", rel: "noopener noreferrer", text: T("m.photo") })
+      : el("span", { text: T("m.photo") });
+    var wrap = el("div", { class: "photo-wrap" }, [img, el("div", { class: "photo-credit" }, [credit])]);
+    return wrap;
+  }
   function openMosque(id, opts) {
     opts = opts || {};
     showPanel(skeleton());
     api("GET", "/api/mosques/" + id).then(function (m) {
       var lb = label(m);
       var node = el("div", {}, [
+        photoBlock(m),
         el("h2", m.name ? { text: m.name } : { class: "missing", text: T("m.name_unknown") }),
         lb ? el("span", { class: "badge " + lb[1], text: lb[0] }) : null,
         opts.dist != null ? el("div", { class: "dist", text: "📍 " + T("m.distance", { d: fmtDist(opts.dist) }) }) : null,
@@ -581,11 +593,11 @@
       ul.textContent = "";
       if (!r.items.length) ul.appendChild(el("li", { class: "muted", text: T("search.none") }));
       r.items.forEach(function (m) {
-        ul.appendChild(el("li", { text: m.name, onclick: function () {
+        ul.appendChild(el("li", { onclick: function () {
           hideResults(); $("q").value = m.name;
           map.flyTo({ center: [m.lon, m.lat], zoom: Math.max(map.getZoom(), 16), duration: 600 });
           openMosque(m.id);
-        } }));
+        } }, [el("div", { text: m.name || T("m.name_unknown") }), m.address ? el("div", { class: "muted addr", text: m.address }) : null]));
       });
       ul.hidden = false;
     }).catch(function () {});

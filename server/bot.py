@@ -244,6 +244,16 @@ class Bot:
             kw["reply_markup"] = {"keyboard": reply_keyboard, "resize_keyboard": True, "is_persistent": True}
         self.api("sendMessage", chat_id=chat_id, text=text, **kw)
 
+    def say_card(self, chat_id, text, buttons, photo_url=None):
+        """A mosque card; with the mosque's picture above it when there is one (Telegram loads it from Wikimedia). If Telegram
+        cannot take the picture, the card goes out as plain text: the answer is never lost because of a photo."""
+        if photo_url and photo_url.startswith("https://") and len(text) <= 1024:
+            try:
+                return self.api("sendPhoto", chat_id=chat_id, photo=photo_url, caption=text, reply_markup={"inline_keyboard": buttons})
+            except Exception:
+                pass
+        self.say(chat_id, text, buttons)
+
     def identity(self, user):
         actor = "tg:%d" % user["id"]
         info = {"kind": "telegram", "platform": "telegram-bot", "user_agent": "telegram-bot",
@@ -428,7 +438,7 @@ class Bot:
         lat, lon = app.clean_coord(loc.get("latitude"), loc.get("longitude"))
         found = self.store.nearest(lat, lon, 3)
         if found:                                          # the nearest mosque as a card (even when it is further than 200 m)
-            self.say(chat, tx["card_head"] + "\n\n" + self.card_text(tx, found[0]), self.card_buttons(tx, found[0], user["id"]))
+            self.say_card(chat, tx["card_head"] + "\n\n" + self.card_text(tx, found[0]), self.card_buttons(tx, found[0], user["id"]), found[0].get("photo_url"))
         near = [m for m in found if m["distance_m"] <= NEAR_M]
         rows = [[{"text": "%s · %d m" % (m["name"] or tx["noname"], round(m["distance_m"])), "callback_data": "pick:" + m["id"]}] for m in near]
         rows.append([{"text": tx["new"], "callback_data": "new:%.6f,%.6f" % (lat, lon)}])

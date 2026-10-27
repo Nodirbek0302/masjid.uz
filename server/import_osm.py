@@ -18,6 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import app  # noqa: E402
+import osm_photo  # noqa: E402
 import translit  # noqa: E402
 
 QUERY = ('[out:json][timeout:180];area["ISO3166-1"="UZ"][admin_level=2]->.a;'
@@ -54,7 +55,28 @@ def fetch(endpoint):
         return json.load(r)
 
 
-def run(data, cfg, store=None):
+def sync_photos(data, store, lookup=osm_photo.commons_lookup):
+    """Photos come from the tags and are never edited by people, so they follow OSM even for rows a human has edited.
+    A mosque is looked up once; a failed lookup is retried at the next sync."""
+    wanted = {"%s/%s" % (el["type"], el["id"]): el["tags"] for el in data.get("elements", []) if osm_photo.commons_title(el.get("tags") or {})}
+    done = 0
+    for ref, tags in wanted.items():
+        with store.pool.connection() as c:
+            row = c.execute("SELECT id, photo_url FROM mosques WHERE osm_ref=%s AND status<>'archived'", (ref,)).fetchone()
+            if not row or row["photo_url"]:
+                continue
+            try:
+                found = osm_photo.photo_for(tags, lookup)
+            except Exception as e:                      # Commons unreachable / odd answer: the sync itself must not fail
+                sys.stderr.write("photo lookup failed for %s: %s\n" % (ref, e))
+                continue
+            if found:
+                c.execute("UPDATE mosques SET photo_url=%s, photo_credit=%s WHERE id=%s", (found[0], found[1], row["id"]))
+                done += 1
+    return done
+
+
+def run(data, cfg, store=None, photo_lookup=osm_photo.commons_lookup):
     """Idempotent sync. New OSM objects are inserted. Existing imported rows are refreshed from OSM only while no
     human has touched them (every history row is by 'import:osm'); community edits always win. Objects that vanished
     from OSM are only counted, never archived automatically."""
@@ -108,8 +130,9 @@ def run(data, cfg, store=None):
     if seen:                                          # only meaningful for a complete download
         with store.pool.connection() as c:
             gone = sum(1 for r in c.execute("SELECT osm_ref FROM mosques WHERE osm_ref IS NOT NULL AND status<>'archived'") if r["osm_ref"] not in seen)
+    photos = sync_photos(data, store, photo_lookup)
     summary = {"added": added, "updated": updated, "unchanged": unchanged, "protected_edited": protected,
-               "near_existing": near, "missing_in_osm": gone}
+               "near_existing": near, "missing_in_osm": gone, "photos": photos}
     print(" ".join("%s=%d" % kv for kv in summary.items()))
     return summary
 

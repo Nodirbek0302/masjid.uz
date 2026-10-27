@@ -263,18 +263,20 @@ class Store:
                 out.append(item)
         return sorted(out, key=lambda x: x["distance_m"])
 
-    def nearest(self, lat, lon, limit=5, max_m=3000000.0):
-        """The `limit` nearest non-archived mosques. The search circle grows until it holds enough results; every mosque
-        inside a circle is considered, so what is returned really are the nearest ones (not an approximation)."""
-        limit = max(1, min(int(limit), 20))
+    def nearest(self, lat, lon, limit=5, max_m=3000000.0, offset=0):
+        """The `limit` nearest non-archived mosques after the first `offset` (a list is read page by page). The search circle grows
+        until it holds enough results; every mosque inside a circle is considered, so what is returned really are the nearest
+        ones (not an approximation)."""
+        limit = max(1, min(int(limit), 50))
+        offset = max(0, min(int(offset), 500))
         found = []
         with self.pool.connection() as c:
             cur = c.cursor()
             for r in (500.0, 2000.0, 8000.0, 30000.0, 100000.0, max_m):
                 found = self._nearby(cur, lat, lon, min(r, max_m))
-                if len(found) >= limit:
+                if len(found) >= limit + offset:
                     break
-        return found[:limit]
+        return found[offset:offset + limit]
 
     def nearby(self, lat, lon, radius):
         with self.pool.connection() as c:
@@ -366,7 +368,7 @@ class Store:
         pats = ["%" + v.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%" for v in translit.search_variants(q)]
         with self.pool.connection() as c:
             return [dict(r, id=str(r["id"])) for r in c.execute(
-                "SELECT id,name,lat,lon,status FROM mosques WHERE status<>'archived' AND name_search LIKE ANY(%s) "
+                "SELECT id,name,address,photo_url,lat,lon,status FROM mosques WHERE status<>'archived' AND name_search LIKE ANY(%s) "
                 "ORDER BY char_length(name), name LIMIT %s", (pats, limit))]
 
     def admin_list(self, status, limit=100, offset=0):
@@ -575,7 +577,7 @@ def make_handler(cfg, store):
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "no-referrer")
             self.send_header("Content-Security-Policy",
-                             "default-src 'self'; img-src 'self' data: blob: https://tiles.openfreemap.org; "
+                             "default-src 'self'; img-src 'self' data: blob: https://tiles.openfreemap.org https://upload.wikimedia.org https://thumb.wikimedia.org; "
                              "connect-src 'self' https://tiles.openfreemap.org; worker-src 'self' blob:; "
                              "style-src 'self' 'unsafe-inline'; script-src 'self' https://telegram.org; "
                              "frame-ancestors 'self' https://web.telegram.org https://*.telegram.org")
@@ -757,10 +759,10 @@ def make_handler(cfg, store):
             if path == "/api/mosques/nearest" and method == "GET":
                 lat, lon = clean_coord(q.get("lat"), q.get("lon"))
                 try:
-                    limit = int(q.get("limit", 5))
+                    limit, offset = int(q.get("limit", 5)), int(q.get("offset", 0))
                 except ValueError:
-                    raise ApiError(400, "invalid_limit", "limit must be a number")
-                return self.send_json(200, {"items": store.nearest(lat, lon, limit)})
+                    raise ApiError(400, "invalid_limit", "limit and offset must be numbers")
+                return self.send_json(200, {"items": store.nearest(lat, lon, limit, offset=offset)})
             if path == "/api/mosques/nearby" and method == "GET":
                 lat, lon = clean_coord(q.get("lat"), q.get("lon"))
                 r = min(float(q.get("radius", cfg.dup_radius_m)), 500)
