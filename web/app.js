@@ -159,7 +159,7 @@
     });
     style.sources.mosques = { type: "geojson", data: lastFC };
     var font = ["Noto Sans Regular"];
-    var halo = { "text-color": "#064e3b", "text-halo-color": "#fff", "text-halo-width": 1.6 };
+    var halo = isDark() ? { "text-color": "#d1fae5", "text-halo-color": "#101416", "text-halo-width": 1.6 } : { "text-color": "#064e3b", "text-halo-color": "#fff", "text-halo-width": 1.6 };
     if (c.show_tile_mosques !== false && style.sources.openmaptiles) {
       // Mosques already present in the OSM tiles, drawn live and never stored. The tile schema has no religion
       // field, so this matches on the name (masjid/мечеть/...): an interim, incomplete heuristic.
@@ -179,24 +179,171 @@
     return style;
   }
 
-  // ---- language switch: store the choice, reload at the same map view (labels are baked into the style) ----
-  function initLang() {
-    var sel = $("lang");
-    I18N.langs.forEach(function (l) { sel.appendChild(el("option", { value: l[0], text: l[1], title: l[2] })); });
-    sel.value = I18N.lang();
-    sel.onchange = function () {
-      I18N.set(sel.value);
-      if (tgData) {                                    // keep the bot in the same language
-        try { fetch("/api/me/lang", { method: "POST", keepalive: true, headers: { "Content-Type": "application/json", "X-Telegram-Init-Data": tgData }, body: JSON.stringify({ lang: sel.value }) }); } catch (e) {}
-      }
-      var u = new URL(location.href);
-      u.searchParams.delete("lang");
-      if (map) { var c = map.getCenter(); u.searchParams.set("c", c.lat.toFixed(5) + "," + c.lng.toFixed(5) + "," + map.getZoom().toFixed(2)); }
-      location.href = u.toString();                // keeps the #tgWebAppData hash inside Telegram
-    };
+  // ---- night mode: the choice is remembered; until the user chooses, the phone's own setting is followed ----
+  var theme = null;
+  try { theme = localStorage.getItem("theme"); } catch (e) {}
+  var darkMQ = window.matchMedia ? matchMedia("(prefers-color-scheme: dark)") : null;
+  function isDark() { return theme ? theme === "dark" : !!(darkMQ && darkMQ.matches); }
+  function applyTheme() {
+    document.documentElement.dataset.theme = isDark() ? "dark" : "light";
+    var m = document.querySelector('meta[name="theme-color"]'); if (m) m.content = isDark() ? "#12211e" : "#047857";
+    if (map && rawStyle) map.setStyle(buildStyle());                       // the map is recoloured at the same view
+  }
+  function toggleTheme() { theme = isDark() ? "light" : "dark"; try { localStorage.setItem("theme", theme); } catch (e) {} applyTheme(); }
+  if (darkMQ && darkMQ.addEventListener) darkMQ.addEventListener("change", function () { if (!theme) applyTheme(); });
+
+  // The base map is light only: for night its colours are recomputed (the same rules as the mobile app): land, water and
+  // buildings become a neutral slate, roads stay subtly visible, text turns light with a dark halo. Real hues are kept, quieter.
+  var HEX = /^#([0-9a-fA-F]{3,8})$/, FN = /^(rgba?|hsla?)\(([^)]*)\)$/;
+  function parseColor(c) {
+    var r, g, b, a = 1, m = HEX.exec(c.trim());
+    if (m) {
+      var x = m[1]; if (x.length <= 4) x = x.replace(/./g, "$&$&");
+      r = parseInt(x.substr(0, 2), 16) / 255; g = parseInt(x.substr(2, 2), 16) / 255; b = parseInt(x.substr(4, 2), 16) / 255;
+      if (x.length === 8) a = parseInt(x.substr(6, 2), 16) / 255;
+    } else {
+      m = FN.exec(c.trim()); if (!m) return null;
+      var p = m[2].split(/[,\s/]+/).filter(Boolean); if (p.length < 3) return null;
+      var num = function (e, k) { return /%$/.test(e) ? parseFloat(e) / 100 * k : parseFloat(e); };
+      if (/^rgb/.test(m[1])) { r = num(p[0], 255) / 255; g = num(p[1], 255) / 255; b = num(p[2], 255) / 255; if (p.length > 3) a = num(p[3], 1); }
+      else return [parseFloat(p[0]) % 360, Math.min(1, Math.max(0, num(p[1], 1))), Math.min(1, Math.max(0, num(p[2], 1))), p.length > 3 ? num(p[3], 1) : 1];
+    }
+    var mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2, d = mx - mn;
+    if (d === 0) return [0, 0, l, a];
+    var s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
+    var h = mx === r ? (g - b) / d + (g < b ? 6 : 0) : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    return [h * 60, s, l, a];
+  }
+  function darkenOne(c, prop) {
+    var p = parseColor(c); if (!p) return null;
+    var h0 = p[0], s0 = p[1], l = p[2], a = p[3];
+    var warm = s0 < 0.12 || h0 <= 75 || h0 >= 345;
+    var h = warm ? 210 : h0, nl, ns;
+    if (/^(text|icon)/.test(prop)) {
+      if (prop.indexOf("halo") >= 0) { nl = 0.06 + 0.1 * l; ns = warm ? 0.12 : s0 * 0.5; }
+      else { nl = 0.97 - 0.28 * l; ns = warm ? 0.1 : s0 * 0.35; }
+    } else if (/^line/.test(prop)) {
+      if (warm && s0 >= 0.55) { nl = 0.26 + 0.18 * l; ns = 0.12; }
+      else if (warm) { nl = 0.15 + 0.2 * l; ns = 0.07; }
+      else { nl = 0.15 + 0.2 * l; ns = s0 * 0.6; }
+    } else { nl = 0.075 + 0.12 * l; ns = warm ? 0.1 : s0 * 0.32; }
+    return "hsla(" + h.toFixed(1) + "," + (ns * 100).toFixed(1) + "%," + (nl * 100).toFixed(1) + "%," + a.toFixed(3) + ")";
+  }
+  function darkenColors(v, prop) {
+    if (typeof v === "string") return darkenOne(v, prop) || v;
+    if (Array.isArray(v)) return v.map(function (e) { return darkenColors(e, prop); });
+    if (v && typeof v === "object") { var o = {}; Object.keys(v).forEach(function (k) { o[k] = darkenColors(v[k], prop); }); return o; }
+    return v;
+  }
+  function darkenStyle(style) {
+    style.layers = style.layers.filter(function (l) { return !/^(highway-shield|road_shield)/.test(l.id); });   // their light plates would glare at night
+    style.layers.forEach(function (l) {
+      if (l.paint) Object.keys(l.paint).forEach(function (k) { if (/-color$/.test(k)) l.paint[k] = darkenColors(l.paint[k], k); });
+    });
+    return style;
+  }
+  var rawStyle = null;
+  function buildStyle() {
+    var st = JSON.parse(JSON.stringify(rawStyle));
+    if (isDark()) darkenStyle(st);
+    return patchStyle(st, cfg);
   }
 
-  // ---- daily prayer times strip (computed on the device; region can be switched) ----------------
+  // ---- pages: home | list | map (body[data-page] decides what is visible), pages are built when first opened ----
+  var page = "home", mapStart = null, mapQuery = false;
+  function whenMap(fn) { if (map) fn(); else pendingMap.push(fn); }
+  var pendingMap = [];
+  function setPage(p) {
+    page = p;
+    try { sessionStorage.setItem("page", p); } catch (e) {}
+    document.body.dataset.page = p;
+    $("nav-home").classList.toggle("on", p === "home");
+    $("nav-mosques").classList.toggle("on", p !== "home");
+    var fab = $("view-fab");                                                    // one button: the other way of looking
+    var toMap = p === "list";
+    fab.querySelector("span").textContent = T(toMap ? "view.map" : "view.list");
+    fab.querySelector("svg").innerHTML = toMap
+      ? '<path fill="currentColor" d="M9 3 3 5.5v15L9 18l6 3 6-2.5v-15L15 6zm0 2.3 4 2v11.4l-4-2zm-4 .4 2-.8v11.4l-2 .8zm12 .8v11.4l-2 .8V7z"/>'
+      : '<path fill="currentColor" d="M4 5h3v3H4zm5 0h11v3H9zm-5 5.5h3v3H4zm5 0h11v3H9zM4 16h3v3H4zm5 0h11v3H9z"/>';
+    if (p === "map") { createMap(); if (map) setTimeout(function () { map.resize(); map.easeTo({ padding: mapPadding(), duration: 0 }); }, 0); }
+    if (p === "list") ensureList();
+    if (p === "home") renderPrayer();
+  }
+  $("nav-home").onclick = function () { setPage("home"); };
+  $("nav-mosques").onclick = function () { if (page === "home") setPage(sessionStorage.getItem("view") === "map" ? "map" : "list"); };
+  $("view-fab").onclick = function () { var v = page === "list" ? "map" : "list"; try { sessionStorage.setItem("view", v); } catch (e) {} setPage(v); };
+  function showOnMap(id, lon, lat, dist) {                                      // a mosque chosen in the list or the search
+    try { sessionStorage.setItem("view", "map"); } catch (e) {}
+    setPage("map");
+    whenMap(function () {
+      if (lon != null) map.jumpTo({ center: [lon, lat], zoom: Math.max(map.getZoom(), 16) });
+      openMosque(id, dist != null ? { dist: dist } : null);
+    });
+  }
+
+  // ---- the "⋮" menu: add a mosque, region, refresh, day/night, language (one popup shared by every page) ----
+  var ICON = {
+    add: '<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 21s7-6.2 7-12a7 7 0 1 0-14 0c0 5.8 7 12 7 12zM12 6.5v5M9.5 9h5"/>',
+    region: '<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 21s7-6.2 7-12a7 7 0 1 0-14 0c0 5.8 7 12 7 12z"/><circle cx="12" cy="9" r="2.4" fill="currentColor"/>',
+    refresh: '<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/>',
+    moon: '<path fill="currentColor" d="M20 14.5A8 8 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/>',
+    sun: '<circle cx="12" cy="12" r="4.2" fill="currentColor"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9 17 7M7 17l-2.1 2.1" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+    globe: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18" fill="none" stroke="currentColor" stroke-width="1.8"/>'
+  };
+  function svg(name) { var s = el("span"); s.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">' + ICON[name] + "</svg>"; return s.firstChild; }
+  function menuBtn(icon, text, value, onclick, on) {
+    var b = el("button", { type: "button", role: "menuitem", class: on ? "on" : "", onclick: onclick }, [icon ? svg(icon) : null, el("span", { text: text }), value ? el("span", { class: "v", text: value }) : null]);
+    return b;
+  }
+  function regionLabel() { return prayerSel !== "me" && REGIONS[+prayerSel] ? regionName(+prayerSel) : T("prayer.me").replace(/^\S*\s/, ""); }
+  function closeMenu() { $("menu").hidden = true; }
+  function openMenu(anchor) {
+    var m = $("menu"), r = anchor.getBoundingClientRect();
+    m.style.top = Math.round(r.bottom + 6) + "px"; m.style.right = Math.max(12, Math.round(innerWidth - r.right)) + "px"; m.style.left = "auto";
+    menuMain(); m.hidden = false;
+  }
+  function menuMain() {
+    var m = $("menu"); m.textContent = "";
+    m.appendChild(menuBtn("add", T("btn.add"), "", function () { closeMenu(); setPage("map"); whenMap(startAdd); }));
+    m.appendChild(menuBtn("region", T("prayer.region"), regionLabel(), function () { menuPick(T("prayer.region"), [["me", T("prayer.me").replace(/^\S*\s/, "")]].concat(REGIONS.map(function (r, i) { return [String(i), regionName(i)]; })), prayerSel, setRegion); }));
+    m.appendChild(menuBtn("refresh", T("btn.refresh"), "", function () { closeMenu(); refreshAll(); }));
+    m.appendChild(menuBtn(isDark() ? "sun" : "moon", T(isDark() ? "theme.day" : "theme.night"), "", function () { closeMenu(); toggleTheme(); }));
+    m.appendChild(menuBtn("globe", T("lang.label"), I18N.langs.filter(function (l) { return l[0] === I18N.lang(); }).map(function (l) { return l[2]; })[0], function () {
+      menuPick(T("lang.label"), I18N.langs.map(function (l) { return [l[0], l[2]]; }), I18N.lang(), changeLang);
+    }));
+  }
+  function menuPick(title, items, cur, onPick) {
+    var m = $("menu"); m.textContent = "";
+    m.appendChild(el("div", { class: "mt", text: title }));
+    items.forEach(function (it) { m.appendChild(menuBtn(null, it[1], "", function () { closeMenu(); onPick(it[0]); }, it[0] === cur)); });
+  }
+  document.querySelectorAll(".more-btn").forEach(function (b) {
+    b.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><circle cx="12" cy="5" r="2" fill="currentColor"/><circle cx="12" cy="12" r="2" fill="currentColor"/><circle cx="12" cy="19" r="2" fill="currentColor"/></svg>';
+    b.onclick = function (e) { e.stopPropagation(); if ($("menu").hidden) openMenu(b); else closeMenu(); };
+  });
+  document.addEventListener("click", function (e) { if (!$("menu").contains(e.target)) closeMenu(); });
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape") closeMenu(); });
+
+  function changeLang(code) {                                                   // labels are baked into the map style: reload at the same view
+    I18N.set(code);
+    if (tgData) {                                                                // keep the bot in the same language
+      try { fetch("/api/me/lang", { method: "POST", keepalive: true, headers: { "Content-Type": "application/json", "X-Telegram-Init-Data": tgData }, body: JSON.stringify({ lang: code }) }); } catch (e) {}
+    }
+    var u = new URL(location.href);
+    u.searchParams.delete("lang");
+    if (map) { var c = map.getCenter(); u.searchParams.set("c", c.lat.toFixed(5) + "," + c.lng.toFixed(5) + "," + map.getZoom().toFixed(2)); }
+    location.href = u.toString();                                                // keeps the #tgWebAppData hash inside Telegram
+  }
+  function refreshAll() {                                                        // a fresh device position, then everything that depends on it
+    if (prayerSel === "me" && navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(function (p) {
+        if (inRegion(p.coords.longitude, p.coords.latitude)) try { localStorage.setItem("lastpos", JSON.stringify({ lat: p.coords.latitude, lon: p.coords.longitude })); } catch (e) {}
+        renderPrayer(); if (list.built) reloadList();
+      }, function () { renderPrayer(); }, { maximumAge: 0, timeout: 6000 });
+    } else { renderPrayer(); if (list.built) reloadList(); }
+  }
+
+  // ---- daily prayer times: the strip on the map and the home page (computed on the device; region can be switched) ----
   var REGIONS = [[41.3111, 69.2797], [41.0167, 69.35], [40.7821, 72.3442], [39.7747, 64.4286], [40.3864, 71.7864], [40.1158, 67.8422], [41.55, 60.6333],
     [41.0011, 71.6683], [40.0844, 65.3792], [38.8606, 65.7891], [42.4531, 59.6103], [39.6542, 66.9597], [40.4897, 68.7842], [37.2242, 67.2783]];
   var PNAMES = ["fajr", "sunrise", "dhuhr", "asr", "maghrib", "isha"];
@@ -208,46 +355,45 @@
     REGIONS.forEach(function (r, i) { var d = Math.pow(r[0] - lat, 2) + Math.pow((r[1] - lon) * Math.cos(lat * Math.PI / 180), 2); if (d < bd) { bd = d; best = i; } });
     return best;
   }
-  function prayerPos(startCenter) {
-    if (prayerSel !== "me" && REGIONS[+prayerSel]) { var r = REGIONS[+prayerSel]; return { lat: r[0], lon: r[1], name: regionName(+prayerSel) }; }
+  function prayerPos() {
+    if (prayerSel !== "me" && REGIONS[+prayerSel]) { var r = REGIONS[+prayerSel]; return { lat: r[0], lon: r[1], name: regionName(+prayerSel), region: regionName(+prayerSel) }; }
     var sp = savedPos(), c = map ? map.getCenter() : null;
-    var p = sp ? { lat: sp.lat, lon: sp.lon } : c ? { lat: c.lat, lon: c.lng } : { lat: startCenter[1], lon: startCenter[0] };
-    return { lat: p.lat, lon: p.lon, name: T(sp ? "prayer.where_me" : "prayer.where_map") + " · " + regionName(nearestRegion(p.lat, p.lon)) };
+    var p = sp ? { lat: sp.lat, lon: sp.lon } : c ? { lat: c.lat, lon: c.lng } : { lat: start0[1], lon: start0[0] };
+    var reg = regionName(nearestRegion(p.lat, p.lon));
+    return { lat: p.lat, lon: p.lon, name: T(sp ? "prayer.where_me" : "prayer.where_map") + " · " + reg, region: reg };
   }
   function renderPrayer() {
-    var now = new Date(), p = prayerPos(start0), o = cfg.prayer || {};
+    var now = new Date(), p = prayerPos(), o = cfg.prayer || {};
     var tz = inRegion(p.lon, p.lat) ? 5 : -now.getTimezoneOffset() / 60;
     var t = Prayer.times(now.getFullYear(), now.getMonth() + 1, now.getDate(), p.lat, p.lon, tz,
       { fajr: o.fajr_angle, isha: o.isha_angle, asr: o.asr_factor, dhuhrMin: o.dhuhr_offset_min });
     var nowH = (now.getUTCHours() + now.getUTCMinutes() / 60 + tz + 24) % 24;       // current time in that region
-    var nextKey = null;
-    PNAMES.forEach(function (n) { if (!nextKey && t[n] > nowH && n !== "sunrise") nextKey = n; });
+    var nextKey = null, cur = "isha";
+    PNAMES.forEach(function (n) { if (!nextKey && t[n] > nowH && n !== "sunrise") nextKey = n; if (t[n] <= nowH) cur = n; });
     if (!nextKey) nextKey = "fajr";                                                   // after Isha: tomorrow's Fajr
-    var box = $("ptimes"); box.textContent = "";
-    PNAMES.forEach(function (n) { box.appendChild(el("span", { class: n === nextKey ? "next" : "", text: T("pn." + n) + " " + Prayer.format(t[n]) })); });
     var diff = t[nextKey] - nowH; if (diff <= 0) diff += 24;
     var mins = Math.round(diff * 60);
     var left = mins >= 60 ? T("dur.hm", { h: Math.floor(mins / 60), m: mins % 60 }) : T("dur.m", { m: mins });
+    var box = $("ptimes"); box.textContent = "";
+    PNAMES.forEach(function (n) { box.appendChild(el("span", { class: n === nextKey ? "next" : "", text: T("pn." + n) + " " + Prayer.format(t[n]) })); });
     box.appendChild(el("span", { class: "info", text: "· " + p.name + " · " + T("prayer.approx") + " · " + T("prayer.next") + ": " + left }));
     $("prayer").title = T("prayer.tip");
+    // the home page
+    $("home-date").textContent = T("date.fmt", { d: now.getDate(), m: T("date.m" + (now.getMonth() + 1)), w: T("date.d" + (now.getDay() || 7)) });
+    $("home-place").textContent = p.region;
+    $("hero-name").textContent = T("pn." + nextKey);
+    $("hero-time").textContent = Prayer.format(t[nextKey]);
+    $("hero-left").textContent = T("home.left", { t: left });
+    var rows = $("home-times"); rows.textContent = "";
+    PNAMES.forEach(function (n) {
+      rows.appendChild(el("div", { class: "trow" + (n === cur ? " cur" : t[n] < nowH ? " past" : "") }, [el("i"), el("span", { text: T("pn." + n) }), el("b", { text: Prayer.format(t[n]) })]));
+    });
+    $("home-note").textContent = T("prayer.approx") + " · " + p.name;
   }
   var start0 = TASHKENT;
+  function setRegion(v) { prayerSel = v; try { localStorage.setItem("preg", v); } catch (e) {} renderPrayer(); }
   function initPrayer() {
-    var sel = $("region");
-    sel.appendChild(el("option", { value: "me", text: T("prayer.me") }));
-    REGIONS.forEach(function (r, i) { sel.appendChild(el("option", { value: String(i), text: regionName(i) })); });
-    sel.value = prayerSel;
-    sel.onchange = function () { prayerSel = sel.value; try { localStorage.setItem("preg", prayerSel); } catch (e) {} renderPrayer(); };
-    $("prefresh").onclick = function () {
-      var b = $("prefresh"); b.classList.remove("spin"); void b.offsetWidth; b.classList.add("spin");
-      if (prayerSel === "me" && navigator.geolocation) {                       // fresh device position, then recompute
-        navigator.geolocation.getCurrentPosition(function (p) {
-          if (inRegion(p.coords.longitude, p.coords.latitude)) try { localStorage.setItem("lastpos", JSON.stringify({ lat: p.coords.latitude, lon: p.coords.longitude })); } catch (e) {}
-          renderPrayer();
-        }, renderPrayer, { maximumAge: 0, timeout: 6000 });
-      } else renderPrayer();
-    };
-    setInterval(function () { renderPrayer(); }, 30000);                      // keeps "next prayer" and the date current
+    setInterval(function () { renderPrayer(); }, 20000);                      // keeps "next prayer" and the date current
     renderPrayer();
   }
 
@@ -260,21 +406,34 @@
   function init() {
     var qs = new URLSearchParams(location.search).get("c");                    // optional deep link: ?c=lat,lon,zoom
     var qm = qs && /^(-?[\d.]+),(-?[\d.]+),([\d.]+)$/.exec(qs);
-    var q = !!qm;
+    mapQuery = !!qm;
     var sp = savedPos();
-    var start = q ? { center: [+qm[2], +qm[1]], zoom: +qm[3] }
+    mapStart = mapQuery ? { center: [+qm[2], +qm[1]], zoom: +qm[3] }
       : sp ? { center: [sp.lon, sp.lat], zoom: 14 } : { center: TASHKENT, zoom: 12 };
-    start0 = start.center;
-    initLang();
+    start0 = mapStart.center;
     configPromise.then(function (c) { cfg = c; initPrayer(); });
-    // first mosque query right away, around the start position (~11 km window), in parallel with the style
-    var d = 0.1;
-    fetchMosques([start.center[0] - d, start.center[1] - d, start.center[0] + d, start.center[1] + d]);
+    var deep = new URLSearchParams(location.search).get("m");                  // ?m=<mosque id>: open that mosque (bot links, shares)
+    var first = "home";
+    try { first = sessionStorage.getItem("page") || "home"; } catch (e) {}      // after a language change: the same page again
+    if (mapQuery || (deep && /^[0-9a-f-]{36}$/.test(deep))) first = "map";
+    setPage(first);
+    if (first === "map" && deep && /^[0-9a-f-]{36}$/.test(deep)) whenMap(function () { openMosque(deep); });
+    if (first === "home" || first === "list") { watchPosition(); }
+    applyTheme();
+  }
 
+  // The first mosque query and the map itself are only started when the map page is opened (the home page needs neither).
+  var mapCreated = false;
+  function createMap() {
+    if (mapCreated) return;
+    mapCreated = true;
+    var start = mapStart;
+    var d = 0.1;                                                              // first mosque query right away, around the start position (~11 km window)
+    fetchMosques([start.center[0] - d, start.center[1] - d, start.center[0] + d, start.center[1] + d]);
     configPromise.then(function (c) {
       cfg = c;
       var sp2 = c.style_url && c.style_url !== DEFAULT_STYLE ? fetch(c.style_url).then(function (r) { return r.json(); }) : stylePromise;
-      return sp2.then(function (style) { return patchStyle(style, c); });
+      return sp2.then(function (style) { rawStyle = style; return buildStyle(); });
     }).then(function (style) {
       map = new maplibregl.Map({ container: "map", style: style, center: start.center, zoom: start.zoom, locale: mapLocale(),
         minZoom: 5, maxBounds: REGION, fadeDuration: 0, pixelRatio: Math.min(window.devicePixelRatio || 1, 2),
@@ -292,9 +451,9 @@
       map.on("mouseenter", "mosques", function () { map.getCanvas().style.cursor = "pointer"; });
       map.on("mouseleave", "mosques", function () { map.getCanvas().style.cursor = ""; });
       map.on("click", onMapClick);
-      var deep = new URLSearchParams(location.search).get("m");          // ?m=<mosque id>: open that mosque (bot links, shares)
-      if (deep && /^[0-9a-f-]{36}$/.test(deep)) openMosque(deep);
-      if (!q && !deep) locate(start);
+      var q = mapQuery, hasDeep = !!pendingMap.length;
+      var fns = pendingMap; pendingMap = []; fns.forEach(function (fn) { fn(); });
+      if (!q && !hasDeep) locate(start);
       var errs = 0;
       map.on("error", function () {                   // tile/style/sprite request failures: say so instead of a silent blank map
         if (++errs >= 3 && !map.loaded()) mapProblem(T("map.err_tiles"));
@@ -306,8 +465,19 @@
     });
   }
 
-  // Device location in the background: never blocks rendering. If the user has not touched the map yet and the
-  // device is somewhere else than the cached start, jump there (inside Uzbekistan only).
+  // The device position decides the prayer times and the list's distances: asked once at the start, never blocking anything.
+  function watchPosition() {
+    if (!navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(function (p) {
+      var lon = p.coords.longitude, lat = p.coords.latitude;
+      if (!inRegion(lon, lat)) return;
+      try { localStorage.setItem("lastpos", JSON.stringify({ lat: lat, lon: lon })); } catch (e) {}
+      renderPrayer();
+      if (list.built) reloadList();
+    }, function () {}, { maximumAge: 600000, timeout: 6000, enableHighAccuracy: false });
+  }
+
+  // On the map: if the user has not touched it yet and the device is somewhere else than the cached start, jump there.
   function locate(start) {
     if (!navigator.geolocation) return;
     navigator.geolocation.getCurrentPosition(function (p) {
@@ -319,6 +489,57 @@
       renderPrayer();
     }, function () {}, { maximumAge: 600000, timeout: 6000, enableHighAccuracy: false });
   }
+
+  // ---- the list of mosques: nearest first, 20 at a time while scrolling, a picture when there is one, the address under the name ----
+  var list = { items: [], loading: false, done: false, gen: 0, built: false, known: false };
+  var LIST_PAGE = 20, LIST_MAX = 200;
+  function ensureList() { if (list.built) return; list.built = true; reloadList(); }
+  function reloadList() {
+    list.gen++; list.items = []; list.done = false; list.loading = false;
+    $("list").textContent = ""; $("list-more").textContent = "";
+    loadMore();
+  }
+  function listCard(m) {
+    var lead;
+    if (m.photo_url && m.photo_url.indexOf("https://") === 0) {
+      lead = el("img", { class: "ph", src: m.photo_url, alt: "", loading: "lazy", width: "76", height: "76", referrerpolicy: "no-referrer" });
+      lead.addEventListener("error", function () { var i = el("span", { class: "ic" }); i.innerHTML = '<svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M12 2c1 1.6 2.6 2.4 2.6 4.4a2.6 2.6 0 0 1-5.2 0C9.4 4.4 11 3.6 12 2zM5 21V12.5a7 7 0 0 1 14 0V21h-4.5v-4a2.5 2.5 0 0 0-5 0v4z"/></svg>'; lead.replaceWith(i); });
+    } else {
+      lead = el("span", { class: "ic" }); lead.innerHTML = '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path fill="currentColor" d="M12 2c1 1.6 2.6 2.4 2.6 4.4a2.6 2.6 0 0 1-5.2 0C9.4 4.4 11 3.6 12 2zM5 21V12.5a7 7 0 0 1 14 0V21h-4.5v-4a2.5 2.5 0 0 0-5 0v4z"/></svg>';
+    }
+    var meta = [];
+    if (list.known && m.distance_m != null) meta.push(el("span", { text: "↗ " + fmtDist(m.distance_m) }));
+    if (m.times_updated_at) meta.push(el("span", { text: "🕒 " + T("list.times") }));
+    return el("button", { class: "card", type: "button", onclick: function () { showOnMap(m.id, m.lon, m.lat, list.known ? m.distance_m : null); } }, [lead, el("div", { class: "tx" }, [
+      el("div", m.name ? { class: "nm", text: m.name } : { class: "nm missing", text: T("m.name_unknown") }),
+      el("div", m.address ? { class: "ad", text: m.address } : { class: "ad missing", text: T("m.addr_unknown") }),
+      meta.length ? el("div", { class: "mt" }, meta) : null])]);
+  }
+  function loadMore() {
+    if (list.loading || list.done) return;
+    var gen = list.gen, sp = savedPos(), o = sp || { lat: TASHKENT[1], lon: TASHKENT[0] };
+    list.known = !!sp; $("list-hint").hidden = list.known; $("list-hint").textContent = T("list.hint");
+    list.loading = true;
+    var more = $("list-more"); more.textContent = "";
+    if (!list.items.length) for (var i = 0; i < 5; i++) more.appendChild(el("div", { class: "sk sk-card" }));
+    api("GET", "/api/mosques/nearest?lat=" + (+o.lat).toFixed(5) + "&lon=" + (+o.lon).toFixed(5) + "&limit=" + LIST_PAGE + "&offset=" + list.items.length).then(function (r) {
+      if (gen !== list.gen) return;
+      more.textContent = ""; list.loading = false;
+      r.items.forEach(function (m) { list.items.push(m); $("list").appendChild(listCard(m)); });
+      list.done = r.items.length < LIST_PAGE || list.items.length >= LIST_MAX;
+      if (list.done && !list.items.length) more.appendChild(el("p", { class: "muted", text: T("list.none") }));
+      fillList();
+    }).catch(function (e) {
+      if (gen !== list.gen) return;
+      list.loading = false; more.textContent = "";
+      more.appendChild(el("p", { class: "muted", text: errText(e) })); more.appendChild(btn("ghost small", T("btn.retry"), loadMore));
+    });
+  }
+  function fillList() {                                                            // a tall screen: ask for the next page until the end is out of sight
+    var p = $("list-page");
+    if (page === "list" && !list.done && p.scrollHeight - p.scrollTop - p.clientHeight < 700) loadMore();
+  }
+  $("list-page").addEventListener("scroll", fillList, { passive: true });
 
   // Provider POIs (OpenStreetMap data inside the vector tiles). Read transiently from the rendered
   // tiles; nothing from them is stored or copied into our database.
@@ -358,7 +579,7 @@
     var shown = !$("panel").hidden;
     if (!shown) return { top: 0, right: 0, bottom: 0, left: 0 };
     if (sideLayout()) return { top: 0, right: 0, bottom: 0, left: Math.min(402, innerWidth * 0.56 + 12) };
-    return { top: 0, right: 0, left: 0, bottom: Math.round(innerHeight * 0.56) };   // matches the sheet height
+    return { top: 0, right: 0, left: 0, bottom: Math.max(0, Math.round(innerHeight * 0.56 - $("nav").offsetHeight)) };   // matches the sheet height
   }
   function revealPoint(lon, lat) { map.easeTo({ center: [lon, lat], duration: 350, padding: mapPadding() }); }
 
@@ -369,8 +590,8 @@
   });
 
   // ---- panel
-  function showPanel(node) { var b = $("panel-body"); b.textContent = ""; b.appendChild(node); $("panel").hidden = false; $("panel").scrollTop = 0; }
-  function hidePanel() { $("panel").hidden = true; if (map) map.easeTo({ padding: mapPadding(), duration: 200 }); }
+  function showPanel(node) { var b = $("panel-body"); b.textContent = ""; b.appendChild(node); $("panel").hidden = false; $("panel").scrollTop = 0; document.body.classList.add("panel-open"); }
+  function hidePanel() { $("panel").hidden = true; document.body.classList.remove("panel-open"); if (map) map.easeTo({ padding: mapPadding(), duration: 200 }); }
   $("panel-close").onclick = hidePanel;
   function skeleton() {                                    // instant feedback while the mosque loads
     return el("div", {}, [el("div", { class: "sk", style: "height:26px;width:70%;margin:8px 0" }), el("div", { class: "sk", style: "height:18px;width:45%;margin:8px 0" }),
@@ -594,9 +815,8 @@
       if (!r.items.length) ul.appendChild(el("li", { class: "muted", text: T("search.none") }));
       r.items.forEach(function (m) {
         ul.appendChild(el("li", { onclick: function () {
-          hideResults(); $("q").value = m.name;
-          map.flyTo({ center: [m.lon, m.lat], zoom: Math.max(map.getZoom(), 16), duration: 600 });
-          openMosque(m.id);
+          hideResults(); $("q").value = m.name || "";
+          showOnMap(m.id, m.lon, m.lat);
         } }, [el("div", { text: m.name || T("m.name_unknown") }), m.address ? el("div", { class: "muted addr", text: m.address }) : null]));
       });
       ul.hidden = false;
@@ -622,13 +842,12 @@
   }
   function startAdd() {
     mode = "pick"; picked = null; pickDone = null; clearPick(); closePopup();
-    $("add-btn").hidden = true; $("search").hidden = true; $("nearest").hidden = true; $("add-bar").hidden = false; $("add-hint").textContent = T("add.pick"); hidePanel();
+    document.body.classList.add("picking"); $("add-bar").hidden = false; $("add-hint").textContent = T("add.pick"); hidePanel();
   }
   function endAdd() {
     mode = "browse"; pickDone = null; picked = null; clearPick();
-    $("add-btn").hidden = false; $("search").hidden = false; $("nearest").hidden = false; $("add-bar").hidden = true; hidePanel();
+    document.body.classList.remove("picking"); $("add-bar").hidden = true; hidePanel();
   }
-  $("add-btn").onclick = startAdd;
   $("add-cancel").onclick = endAdd;
 
   function showAddForm() {

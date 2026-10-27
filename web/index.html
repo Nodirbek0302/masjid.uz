@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#047857">
+<script src="theme-init.js"></script>
 <title data-i18n="app.title">Masjid xaritasi</title>
 <link rel="preconnect" href="https://tiles.openfreemap.org" crossorigin>
 <link rel="preload" as="fetch" href="https://tiles.openfreemap.org/styles/liberty" crossorigin>
@@ -17,13 +18,32 @@
 <script src="app.js" defer></script>
 </head>
 <body>
-<header id="prayer" role="region" data-i18n-aria="prayer.region">
-  <select id="region" data-i18n-aria="prayer.region"></select>
+<!-- home page: today's prayer times -->
+<main id="home">
+  <div class="home-top">
+    <div><div id="home-date"></div><div id="home-place"></div></div>
+    <button class="more-btn" type="button" data-i18n-aria="menu.more" aria-haspopup="menu"></button>
+  </div>
+  <section class="glass hero">
+    <div class="hero-lab" data-i18n="home.next"></div>
+    <div class="hero-row"><span id="hero-name"></span><span id="hero-time"></span></div>
+    <div id="hero-left" class="pill"></div>
+  </section>
+  <section id="home-times" class="glass"></section>
+  <div id="home-note"></div>
+</main>
+
+<!-- the mosques as a list -->
+<section id="list-page">
+  <header class="strip"><h1 data-i18n="nav.mosques">Masjidlar</h1><button class="more-btn" type="button" data-i18n-aria="menu.more" aria-haspopup="menu"></button></header>
+  <div id="list-hint" hidden></div>
+  <div id="list"></div>
+  <div id="list-more"></div>
+</section>
+
+<header id="prayer" class="strip" role="region" data-i18n-aria="prayer.region">
   <div id="ptimes"></div>
-  <button id="prefresh" class="icon-btn" data-i18n-aria="btn.refresh" type="button">
-    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg>
-  </button>
-  <select id="lang" data-i18n-aria="lang.label"></select>
+  <button class="more-btn" type="button" data-i18n-aria="menu.more" aria-haspopup="menu"></button>
 </header>
 
 <div id="map"></div>
@@ -39,9 +59,9 @@
   <span data-i18n="nearest.btn">Eng yaqin masjid</span>
 </button>
 
-<button id="add-btn" class="fab" type="button">
-  <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
-  <span data-i18n="btn.add">Masjid qoʻshish</span>
+<button id="view-fab" class="fab" type="button">
+  <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"></svg>
+  <span></span>
 </button>
 
 <div id="add-bar" hidden>
@@ -58,6 +78,11 @@
 </aside>
 
 <div id="maperr" role="alert" hidden><span id="maperr-text"></span> <button id="maperr-retry" class="btn small" type="button" data-i18n="btn.retry">Qayta urinish</button></div>
+<nav id="nav">
+  <button id="nav-home" type="button"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M12 3 3 10.5V21h6v-6h6v6h6V10.5z"/></svg><span data-i18n="nav.home">Bosh sahifa</span></button>
+  <button id="nav-mosques" type="button"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M12 2c1 1.6 2.6 2.4 2.6 4.4a2.6 2.6 0 0 1-5.2 0C9.4 4.4 11 3.6 12 2zM5 21V12.5a7 7 0 0 1 14 0V21h-4.5v-4a2.5 2.5 0 0 0-5 0v4z"/></svg><span data-i18n="nav.mosques">Masjidlar</span></button>
+</nav>
+<div id="menu" role="menu" hidden></div>
 <div id="toast" role="status" aria-live="polite" hidden></div>
 </body>
 </html>
