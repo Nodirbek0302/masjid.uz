@@ -343,7 +343,7 @@
     } else { renderPrayer(); if (list.built) reloadList(); }
   }
 
-  // ---- daily prayer times: the strip on the map and the home page (computed on the device; region can be switched) ----
+  // ---- daily prayer times: the home page (computed on the device; region can be switched) ----
   var REGIONS = [[41.3111, 69.2797], [41.0167, 69.35], [40.7821, 72.3442], [39.7747, 64.4286], [40.3864, 71.7864], [40.1158, 67.8422], [41.55, 60.6333],
     [41.0011, 71.6683], [40.0844, 65.3792], [38.8606, 65.7891], [42.4531, 59.6103], [39.6542, 66.9597], [40.4897, 68.7842], [37.2242, 67.2783]];
   var PNAMES = ["fajr", "sunrise", "dhuhr", "asr", "maghrib", "isha"];
@@ -374,10 +374,6 @@
     var diff = t[nextKey] - nowH; if (diff <= 0) diff += 24;
     var mins = Math.round(diff * 60);
     var left = mins >= 60 ? T("dur.hm", { h: Math.floor(mins / 60), m: mins % 60 }) : T("dur.m", { m: mins });
-    var box = $("ptimes"); box.textContent = "";
-    PNAMES.forEach(function (n) { box.appendChild(el("span", { class: n === nextKey ? "next" : "", text: T("pn." + n) + " " + Prayer.format(t[n]) })); });
-    box.appendChild(el("span", { class: "info", text: "· " + p.name + " · " + T("prayer.approx") + " · " + T("prayer.next") + ": " + left }));
-    $("prayer").title = T("prayer.tip");
     // the home page
     $("home-date").textContent = T("date.fmt", { d: now.getDate(), m: T("date.m" + (now.getMonth() + 1)), w: T("date.d" + (now.getDay() || 7)) });
     $("home-place").textContent = p.region;
