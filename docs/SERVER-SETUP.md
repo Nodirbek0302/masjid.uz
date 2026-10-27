@@ -1,5 +1,7 @@
 # Serverga o'rnatish — qadamma-qadam (myCloud / istalgan Ubuntu VPS)
 
+Bepul variant: [ORACLE-FREE.md](ORACLE-FREE.md) (Oracle Cloud Always Free + shu Docker Compose).
+
 Domen: o'zingizning domeningiz (`<domen>`). Hammasi kompyuterdan bitta buyruq bilan o'rnatiladi.
 
 ## A. Serverni olayotganda
