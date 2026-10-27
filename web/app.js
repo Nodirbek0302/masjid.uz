@@ -167,13 +167,13 @@
       var words = ["masjid", "machit", "mechet", "mosque", "jome", "jame", "мечеть", "масжид", "масджид", "мачит", "жоме", "жаме", "مسجد"];
       style.layers.push({ id: "osm-mosques", type: "symbol", source: "openmaptiles", "source-layer": "poi", minzoom: 12,
         filter: ["all", ["==", ["get", "class"], "place_of_worship"], ["any"].concat(words.map(function (w) { return ["in", w, nm]; }))],
-        layout: { "icon-image": "mosque-osm", "icon-size": ["interpolate", ["linear"], ["zoom"], 12, 0.5, 16, 0.9], "icon-allow-overlap": true,
+        layout: { "icon-image": "mosque-osm", "icon-size": ["interpolate", ["linear"], ["zoom"], 12, 0.6, 16, 1.1], "icon-allow-overlap": true,
           "text-field": ["step", ["zoom"], "", 14, ["get", "name"]], "text-font": font, "text-size": 11, "text-offset": [0, 1.5], "text-anchor": "top", "text-optional": true },
         paint: halo });
     }
     style.layers.push({ id: "mosques", type: "symbol", source: "mosques",
       layout: { "icon-image": ["match", ["get", "status"], "reported", "mosque-amber", "mosque-green"],
-        "icon-size": ["interpolate", ["linear"], ["zoom"], 8, 0.6, 14, 1], "icon-allow-overlap": true,
+        "icon-size": ["interpolate", ["linear"], ["zoom"], 8, 0.75, 14, 1.25], "icon-allow-overlap": true,
         "text-field": ["step", ["zoom"], "", 13, ["get", "name"]], "text-font": font, "text-size": 12, "text-offset": [0, 1.6], "text-anchor": "top", "text-optional": true },
       paint: halo });
     return style;
