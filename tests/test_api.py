@@ -417,6 +417,95 @@ def make_server(**extra):
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv, "http://127.0.0.1:%d" % srv.server_address[1]
 
+class TimetablePhotoEndpoint(unittest.TestCase):
+    """POST /api/timetable/read with a fake OCR (the real Tesseract is not needed to test the endpoint)."""
+    JPEG = b"\xff\xd8\xff\xe0" + b"0" * 64
+    TEXT = ["Bomdod 05:20\nPeshin 12:30\nAsr 16:00\nShom 17:35\nXufton 19:00"]
+
+    def setUp(self):
+        import ocr
+        self.ocr = ocr
+        self._saved = (ocr.available, ocr.read_texts)
+        ocr.available = lambda: True
+        ocr.read_texts = lambda data: self.TEXT
+        with psycopg.connect(TEST_URL, autocommit=True) as c:
+            c.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public")
+
+    def tearDown(self):
+        self.ocr.available, self.ocr.read_texts = self._saved
+        for srv in getattr(self, "servers", []):
+            srv.shutdown()
+
+    def server(self, **env):
+        srv, base = make_server(**env)
+        self.servers = getattr(self, "servers", []) + [srv]
+        return base
+
+    def post(self, base, data=None, device="devicephoto01", ctype="image/jpeg"):
+        req = urllib.request.Request(base + "/api/timetable/read", method="POST", data=self.JPEG if data is None else data,
+                                     headers={"Content-Type": ctype, "X-Device-Id": device})
+        try:
+            with urllib.request.urlopen(req) as r:
+                return r.status, json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            return e.code, json.loads(e.read())
+
+    def test_reads_the_five_times_and_stores_nothing(self):
+        base = self.server()
+        code, r = self.post(base)
+        self.assertEqual(code, 200)
+        self.assertTrue(r["complete"]); self.assertEqual(r["times"], {"fajr": "05:20", "dhuhr": "12:30", "asr": "16:00", "maghrib": "17:35", "isha": "19:00"})
+        self.assertIsNone(r["alt"])
+        with psycopg.connect(TEST_URL, autocommit=True) as c:
+            self.assertEqual(c.execute("SELECT count(*) FROM mosques").fetchone()[0], 0)        # nothing was saved
+            self.assertEqual(c.execute("SELECT count(*) FROM mosque_history").fetchone()[0], 0)
+        _, cfg = (None, json.load(urllib.request.urlopen(base + "/api/config")))
+        self.assertTrue(cfg["photo_reading"])
+
+    def test_two_columns_unclear_photo_and_no_ocr(self):
+        base = self.server()
+        self.TEXT = ["Bomdod 05:20 05:40\nPeshin 12:30 12:45\nAsr 16:00 16:15\nShom 17:35 17:40\nXufton 19:00 19:15"]
+        code, r = self.post(base)
+        self.assertFalse(r["complete"]); self.assertEqual(r["alt"]["fajr"], "05:40"); self.assertIn("two_columns", r["warnings"])
+        self.TEXT = ["garbage"]
+        code, r = self.post(base)
+        self.assertEqual(code, 200); self.assertFalse(r["complete"]); self.assertEqual(r["times"], {})
+        self.ocr.available = lambda: False
+        code, r = self.post(base)
+        self.assertEqual((code, r["error"]), (503, "ocr_unavailable"))
+        self.assertFalse(json.load(urllib.request.urlopen(base + "/api/config"))["photo_reading"])
+
+    def test_refuses_non_images_empty_and_huge_bodies(self):
+        base = self.server(MAX_PHOTO_BYTES="1000")
+        self.assertEqual(self.post(base, data=b"%PDF-1.4 not an image")[1]["error"], "bad_image")   # the content type is not trusted
+        self.assertEqual(self.post(base, data=b"")[1]["error"], "bad_image")
+        self.assertEqual(self.post(base, data=self.JPEG + b"0" * 2000)[0], 413)
+        for ok in (b"\x89PNG\r\n\x1a\n" + b"0" * 20, b"RIFF0000WEBP" + b"0" * 20):                   # PNG and WebP are fine
+            self.assertEqual(self.post(base, data=ok)[0], 200)
+
+    def test_rate_limit_per_device_and_busy_reader(self):
+        base = self.server(PHOTO_PER_HOUR="2")
+        self.assertEqual([self.post(base, device="devicephoto01")[0] for _ in range(3)], [200, 200, 429])
+        self.assertEqual(self.post(base, device="devicephoto02")[0], 200)                               # another device is not affected
+        # the reader handles OCR_CONCURRENCY photos at once; the rest are told to retry (never queued without bound)
+        gate, started = threading.Event(), threading.Semaphore(0)
+        def slow(data):
+            started.release()
+            gate.wait(10)
+            return self.TEXT
+        self.ocr.read_texts = slow
+        base2 = self.server(OCR_CONCURRENCY="1", PHOTO_PER_HOUR="100")
+        first = []
+        t = threading.Thread(target=lambda: first.append(self.post(base2, device="devicephoto03")))
+        t.start()
+        self.assertTrue(started.acquire(timeout=5))
+        code, r = self.post(base2, device="devicephoto04")
+        self.assertEqual((code, r["error"]), (503, "busy"))
+        gate.set(); t.join(10)
+        self.assertEqual(first[0][0], 200)
+        self.assertEqual(self.post(base2, device="devicephoto05")[0], 200)                               # the slot is free again
+
+
 class TelegramIdentity(unittest.TestCase):
     TOKEN = "123456:TEST-TOKEN"
 

@@ -22,6 +22,8 @@ from pathlib import Path
 from urllib.parse import parse_qsl, unquote, urlparse
 
 import botdb
+import ocr
+import timetable
 import translit
 import psycopg
 from psycopg.rows import dict_row
@@ -74,6 +76,9 @@ class Config:
         self.admin_local_only = env("ADMIN_LOCAL_ONLY", "0") == "1"
         self.trust_proxy = env("TRUST_PROXY", "0") == "1"
         self.rate_limit = int(env("WRITE_RATE_PER_MIN", "30"))
+        self.photo_per_hour = int(env("PHOTO_PER_HOUR", "30"))           # timetable photos one device may send per hour (the same IP: 4x)
+        self.ocr_concurrency = max(1, int(env("OCR_CONCURRENCY", "2")))   # photos read at the same time; the rest are asked to retry
+        self.max_photo_bytes = int(env("MAX_PHOTO_BYTES", str(8 * 1024 * 1024)))
         self.tile_style_url = env("TILE_STYLE_URL", "https://tiles.openfreemap.org/styles/liberty")
         self.host = env("HOST", "127.0.0.1")
         self.port = int(env("PORT", "8080"))
@@ -507,14 +512,19 @@ def verify_telegram(init_data, bot_token, max_age=86400):
         return None
 
 
+def looks_like_image(data):
+    """JPEG, PNG or WebP by the first bytes (the declared content type is not trusted)."""
+    return data[:3] == b"\xff\xd8\xff" or data[:8] == b"\x89PNG\r\n\x1a\n" or (data[:4] == b"RIFF" and data[8:12] == b"WEBP")
+
+
 class RateLimiter:
-    def __init__(self, per_min):
-        self.per_min, self.hits, self.lock = per_min, {}, threading.Lock()
+    def __init__(self, per_min, window=60):
+        self.per_min, self.window, self.hits, self.lock = per_min, window, {}, threading.Lock()
 
     def allow(self, key, count=True):
         t = time.time()
         with self.lock:
-            q = [x for x in self.hits.get(key, []) if t - x < 60]
+            q = [x for x in self.hits.get(key, []) if t - x < self.window]
             ok = len(q) < self.per_min
             if ok and count:
                 q.append(t)
@@ -532,6 +542,9 @@ def make_handler(cfg, store):
     limiter = RateLimiter(cfg.rate_limit)
     bdb = botdb.BotDB(store)
     admin_limiter = RateLimiter(10)      # failed admin logins per minute per client
+    photo_limiter = RateLimiter(cfg.photo_per_hour, 3600)          # timetable photos per device per hour
+    photo_ip_limiter = RateLimiter(cfg.photo_per_hour * 4, 3600)   # ... and per address (several people may share one)
+    ocr_slots = threading.BoundedSemaphore(cfg.ocr_concurrency)    # photo reading is CPU-heavy: only a few at a time
 
     class H(BaseHTTPRequestHandler):
         server_version = "masjid-uz"
@@ -566,6 +579,35 @@ def make_handler(cfg, store):
                              "connect-src 'self' https://tiles.openfreemap.org; worker-src 'self' blob:; "
                              "style-src 'self' 'unsafe-inline'; script-src 'self' https://telegram.org; "
                              "frame-ancestors 'self' https://web.telegram.org https://*.telegram.org")
+
+        def read_timetable(self):
+            """Reads the five congregation times from a photographed timetable (raw image bytes in the body). The photo is processed
+            in memory and never stored; nothing is saved either: the client shows the result and saves it with a normal PATCH."""
+            self.close_connection = True                       # the body may be left unread on an early refusal
+            if not ocr.available():
+                raise ApiError(503, "ocr_unavailable", "photo reading is not available on this server")
+            try:
+                n = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                n = 0
+            if n <= 0:
+                raise ApiError(400, "bad_image", "an image is required")
+            if n > cfg.max_photo_bytes:
+                raise ApiError(413, "too_large", "image too large")
+            actor, _ = self.identity()
+            if not photo_ip_limiter.allow(self.client_ip()) or not photo_limiter.allow(actor or self.client_ip()):
+                raise ApiError(429, "rate_limited", "too many photos; try again later")
+            data = self.rfile.read(n)
+            if not looks_like_image(data):
+                raise ApiError(400, "bad_image", "not a supported image (JPEG, PNG or WebP)")
+            if not ocr_slots.acquire(blocking=False):
+                raise ApiError(503, "busy", "the reader is busy, retry in a moment")
+            try:
+                texts = ocr.read_texts(data)
+            finally:
+                ocr_slots.release()
+            r = timetable.best_of(texts)
+            return {"times": r["times"], "alt": r["alt"], "complete": r["complete"], "warnings": r["warnings"]}
 
         def body_json(self):
             try:
@@ -684,7 +726,10 @@ def make_handler(cfg, store):
                                             "show_tile_mosques": cfg.show_tile_mosques,
                                             "prayer": cfg.prayer,
                                             "admin_token_login": cfg.allow_admin_token,
+                                            "photo_reading": ocr.available(),
                                             "bot_username": cfg.bot_username})
+            if path == "/api/timetable/read" and method == "POST":
+                return self.send_json(200, self.read_timetable())
             if path == "/api/me" and method == "GET":
                 return self.send_json(200, {"lang": self.me_lang()})
             if path == "/api/me/lang" and method == "POST":
