@@ -154,8 +154,8 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--g500);bo
 :root[data-theme=dark] .dup{background:var(--warn-bg);border-color:#6b4e0f}
 
 /* ---------- strip: one "⋮" button instead of many ---------- */
-.more-btn{flex:none;display:inline-grid;place-items:center;width:34px;height:34px;padding:0;border-radius:12px;border:0;background:rgba(255,255,255,.14);color:#fff;transition:background .15s,transform .12s}
-.more-btn:hover{background:rgba(255,255,255,.26)}.more-btn:active{transform:scale(.92)}
+.more-btn{flex:none;display:inline-grid;place-items:center;width:40px;height:40px;padding:0;border-radius:50%;border:0;background:none;color:#fff;transition:transform .12s}
+.more-btn:active{transform:scale(.88)}
 .strip{display:flex;align-items:center;gap:8px}
 #list-page .strip,header.strip{color:#fff}
 #list-page>.strip{position:absolute;left:0;right:0;top:0;z-index:20;height:calc(var(--strip) + env(safe-area-inset-top));padding:env(safe-area-inset-top) 10px 0 16px;
