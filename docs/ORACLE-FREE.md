@@ -1,7 +1,9 @@
 # Bepul va ishonchli: Oracle Cloud "Always Free" + Docker
 
 Bepul, uxlamaydigan, doimiy ishlaydigan VM. Loyihaning Docker Compose'i (Postgres, web, bot, osm-sync, Caddy HTTPS) shu yerda
-o'zgarishsiz ishlaydi. Tafsilotlar o'zgarib turadi: ro'yxatdan o'tishdan oldin https://www.oracle.com/cloud/free/ ni tekshiring.
+o'zgarishsiz ishlaydi. Rasmiy manba: https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm
+("for the life of the account": hisob mavjud ekan bepul, ammo shartlar o'zgarishi mumkin; ro'yxatdan o'tishdan oldin qayta o'qing).
+Resurslar **home region**da yaratilishi shart.
 
 ## 1. Hisob
 - https://signup.cloud.oracle.com — email + **bank kartasi** (faqat shaxsni tasdiqlash uchun, "Always Free" resurslar uchun pul olinmaydi).
@@ -10,8 +12,8 @@ o'zgarishsiz ishlaydi. Tafsilotlar o'zgarib turadi: ro'yxatdan o'tishdan oldin h
 
 ## 2. VM yaratish
 Compute → Instances → Create:
-- Image: **Ubuntu 24.04** (yoki 22.04), Shape: **VM.Standard.A1.Flex (ARM)**, **2 OCPU / 12 GB** (bepul chegara jami 4 OCPU / 24 GB).
-  Ovozdan o'qish modeli uchun RAM kerak, shuning uchun 12 GB qulay.
+- Image: **Ubuntu 24.04** (yoki 22.04), Shape: **VM.Standard.A1.Flex (ARM)**, **2 OCPU / 12 GB** (rasmiy hujjat: Always Free tenancy uchun jami shu, bitta VM hammasini olishi mumkin).
+  Ovozdan o'qish modeli uchun RAM kerak, shuning uchun 12 GB qulay. Boshqa variant: 2 ta AMD `VM.Standard.E2.1.Micro` (1 GB RAM) — ovoz modeliga yetmaydi.
 - "Out of capacity" xatosi chiqsa: boshqa availability domain, yoki bir necha soatdan keyin qayta urinib ko'ring.
 - SSH kalit: kompyuteringizdagi `~/.ssh/id_ed25519.pub` ni yuklang. Boot volume 50–100 GB.
 - Public IP: **Reserved public IP** oling (Networking → Reserved public IPs) va VM'ga biriktiring: IP o'zgarmaydi.
@@ -42,8 +44,10 @@ Image serverning o'zida (ARM uchun) quriladi (`--build`), birinchi marta 5–10 
 avtomatik ko'tarilish `bootstrap.sh` tomonidan o'rnatiladi. Ovozdan o'qish uchun `WITH_VOICE=1` (standart) qoladi.
 
 ## 6. Ishonchlilik
-- **Idle VM'ni o'chirish:** Oracle uzoq vaqt (taxminan 7 kun) juda kam ishlatilgan Always Free VM'ni to'xtatishi mumkin. Bot, osm-sync va
-  foydalanuvchilar yetarli yuk beradi; baribir `docker compose ps` ni ora-sira ko'ring va zaxirani saqlang.
+- **Idle VM'ni tortib olish (rasmiy):** 7 kun davomida CPU (95-persentil), tarmoq va xotira (A1 uchun) hammasi **20% dan past** bo'lsa,
+  VM "idle" hisoblanadi va Oracle uni tortib olishi mumkin. Bu loyiha (Postgres + bot + osm-sync) kam yuk berishi mumkin, shuning
+  uchun xavf real. Hujjat to'xtatish yoki o'chirish qaysi biri ekanini va Pay As You Go ga o'tganlarga qoida tegmasligini aytmaydi.
+  Upgrade qilsangiz Always Free resurslar uchun pul olinmaydi, faqat limitdan oshganiga olinadi (rasmiy hujjat). Zaxirani doim saqlang.
 - **Zaxira:** kunlik 03:15, 14 kun (`./deploy/backup-docker.sh`). Haftada bir `backups/` ni kompyuteringizga ko'chiring:
   `rsync -az ubuntu@IP:~/masjid-uz/backups/ ./backups/`. Faqat VM'dagi zaxiraga ishonmang.
 - **Yangilash:** kompyuterda `./deploy/push.sh ubuntu@IP --run`.
