@@ -237,6 +237,7 @@ UZ = {
     "adm.kind_app": "Ilova: MapKit kaliti",
     "adm.key_kind": "Kalit turi",
     "err.invalid_kind": "Kalit turi notoʻgʻri",
+    "err.offline_demo": "Bu oflayn nusxada maʼlumotni oʻzgartirib boʻlmaydi.",
 }
 
 RU = {
@@ -461,6 +462,7 @@ RU = {
     "adm.kind_app": "Приложение: ключ MapKit",
     "adm.key_kind": "Тип ключа",
     "err.invalid_kind": "Неверный тип ключа",
+    "err.offline_demo": "В офлайн-версии данные изменить нельзя.",
 }
 
 EN = {
@@ -685,6 +687,7 @@ EN = {
     "adm.kind_app": "App: MapKit key",
     "adm.key_kind": "Key type",
     "err.invalid_kind": "Unknown key type",
+    "err.offline_demo": "Data cannot be changed in the offline copy.",
 }
 
 # Hand-written Cyrillic where plain transliteration would be wrong (loan words that need ь/ц etc.).
