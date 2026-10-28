@@ -54,3 +54,15 @@ input:focus{outline:none;border-color:var(--g500);box-shadow:0 0 0 4px rgba(16,1
 @media(max-width:560px){.top{padding:8px 12px}.brand b{font-size:15px}#tabs{order:3;flex:1 1 100%}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important}}
 
+/* map settings */
+.seg{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
+.seg .btn.on{background:var(--g600);color:#fff;border-color:var(--g600)}
+.now{margin:8px 0 0;font-weight:600;color:var(--g700)}.now.warn{color:var(--warn)}
+.keyrow{padding:12px 0;border-top:1px solid var(--line)}
+.keyhead{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.keyhead code{color:var(--muted);font-size:13px}
+.meter{height:6px;border-radius:6px;background:var(--g50);overflow:hidden;margin:8px 0 4px}
+.meter i{display:block;height:100%;background:var(--g600);border-radius:6px}
+.keyadd{display:grid;grid-template-columns:1fr;gap:8px;margin-top:14px}
+.keyadd select{height:42px;padding:0 12px;border-radius:12px;border:1px solid var(--line);background:#fff}
+@media(min-width:700px){.keyadd{grid-template-columns:2fr 1.4fr 1fr 1fr auto}}

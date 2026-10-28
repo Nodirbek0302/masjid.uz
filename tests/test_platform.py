@@ -641,6 +641,11 @@ class Migrations(unittest.TestCase):
         self.assertEqual([r[0] for r in rows], list(range(1, len(self.names) + 1)))
         self.assertEqual(rows[0][2], hashlib.sha256((self.tmp / self.names[0]).read_bytes()).hexdigest())
         self.assertEqual(db("SELECT to_regclass('masjiduz.mosques') IS NOT NULL, to_regclass('masjiduz.schema_history') IS NOT NULL"), [(True, True)])
+        for t in ("map_settings", "map_keys", "map_key_users", "map_key_reports", "ai_calls", "ai_cooldown", "bot_users"):
+            self.assertEqual(db("SELECT to_regclass(%s) IS NOT NULL", "masjiduz." + t), [(True,)], t)
+        self.assertGreaterEqual(len(self.names), 3)
+        self.assertEqual([n[:5] for n in self.names][:3], ["V0001", "V0002", "V0003"])
+        self.assertEqual(db("SELECT provider FROM map_settings"), [("osm",)])                            # the baseline row: OpenStreetMap
 
     def test_a_new_file_is_applied_alone_and_in_a_transaction(self):
         migrate.migrate(self.cfg)

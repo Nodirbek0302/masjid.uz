@@ -475,6 +475,140 @@ class Store:
             rows = c.execute(sql + " ORDER BY last_seen DESC LIMIT %s", args + [limit]).fetchall()
         return [dict(r, first_seen=iso(r["first_seen"]), last_seen=iso(r["last_seen"])) for r in rows]
 
+    # -- map provider: OpenStreetMap or Yandex with a pool of keys (see migrations/009_map_keys.sql)
+    MAP_DAY = "(now() AT TIME ZONE 'Europe/Moscow')::date"          # Yandex counts its day in Moscow time
+    MAP_REPORTS_TO_EXHAUST = 3                                         # distinct devices that must say "Yandex refused this key"
+
+    def map_choice(self, client, kind="web"):
+        """What a client should draw today -> {"provider": "osm"} or {"provider": "yandex", "yandex_key": ..., "key_id": ...}.
+        The first enabled key with room (distinct users today < its limit, not refused by Yandex today) is handed out and remembered
+        for the day, so one user counts once. Only keys of the client's kind (web = JavaScript API key, app = MapKit key) are considered.
+        No key left -> OpenStreetMap, whatever the setting says."""
+        osm = {"provider": "osm"}
+        with self.pool.connection() as c:
+            if c.execute("SELECT provider FROM map_settings").fetchone()["provider"] != "yandex":
+                return osm
+            c.execute("SELECT pg_advisory_xact_lock(727002)")
+            day = c.execute("SELECT " + self.MAP_DAY + " AS d").fetchone()["d"]
+            # a key this very client already reported as refused today is never handed to it again (the others may still work for it)
+            not_refused = " AND NOT EXISTS (SELECT 1 FROM map_key_reports r WHERE r.day=%s AND r.key_id=k.id AND r.client_id=%s)"
+            usable = ("SELECT k.id, k.api_key FROM map_keys k WHERE k.kind=%s AND k.enabled AND k.exhausted_on IS DISTINCT FROM %s"
+                      " AND (SELECT COUNT(*) FROM map_key_users u WHERE u.day=%s AND u.key_id=k.id) < k.daily_limit" + not_refused + " ORDER BY k.id LIMIT 1")
+            row = None
+            if client:
+                row = c.execute("SELECT k.id, k.api_key FROM map_key_users u JOIN map_keys k ON k.id=u.key_id WHERE u.day=%s AND u.client_id=%s"
+                                " AND k.kind=%s AND k.enabled AND k.exhausted_on IS DISTINCT FROM %s" + not_refused, (day, client, kind, day, day, client)).fetchone()
+            if not row:
+                row = c.execute(usable, (kind, day, day, day, client or "")).fetchone()
+                if row and client:
+                    c.execute("INSERT INTO map_key_users (day, client_id, key_id) VALUES (%s,%s,%s)"
+                              " ON CONFLICT (day, client_id) DO UPDATE SET key_id=EXCLUDED.key_id", (day, client, row["id"]))
+                    c.execute("DELETE FROM map_key_users WHERE day < %s - 2", (day,))
+                    c.execute("DELETE FROM map_key_reports WHERE day < %s - 2", (day,))
+        return {"provider": "yandex", "yandex_key": row["api_key"], "key_id": row["id"]} if row else osm
+
+    def map_report_failure(self, key_id, client):
+        """A client says Yandex refused this key. Enough different devices saying so switch the key off for the rest of the day."""
+        if not client:
+            return False
+        with self.pool.connection() as c:
+            day = c.execute("SELECT " + self.MAP_DAY + " AS d").fetchone()["d"]
+            if not c.execute("SELECT 1 FROM map_keys WHERE id=%s", (key_id,)).fetchone():
+                return False
+            c.execute("INSERT INTO map_key_reports (day, key_id, client_id) VALUES (%s,%s,%s) ON CONFLICT DO NOTHING", (day, key_id, client))
+            n = c.execute("SELECT COUNT(*) AS n FROM map_key_reports WHERE day=%s AND key_id=%s", (day, key_id)).fetchone()["n"]
+            if n >= self.MAP_REPORTS_TO_EXHAUST:
+                c.execute("UPDATE map_keys SET exhausted_on=%s WHERE id=%s", (day, key_id))
+                return True
+        return False
+
+    _map_flag = None                      # (when asked, answer); None = ask again
+
+    def map_uses_yandex(self):
+        """True while the admin has chosen Yandex (asked at most every 10 s: this runs for every response)."""
+        flag = self._map_flag
+        t, v = flag if flag else (0.0, False)
+        if flag is None or time.monotonic() - t > 10:
+            try:
+                with self.pool.connection() as c:
+                    v = c.execute("SELECT provider FROM map_settings").fetchone()["provider"] == "yandex"
+            except Exception:
+                v = False
+            self._map_flag = (time.monotonic(), v)
+        return v
+
+    @staticmethod
+    def _mask(k):
+        return k[:4] + "…" + k[-4:] if len(k) > 10 else "…"
+
+    def map_admin(self):
+        with self.pool.connection() as c:
+            provider = c.execute("SELECT provider FROM map_settings").fetchone()["provider"]
+            day = c.execute("SELECT " + self.MAP_DAY + " AS d").fetchone()["d"]
+            keys = [{"id": r["id"], "label": r["label"], "kind": r["kind"], "key": self._mask(r["api_key"]), "daily_limit": r["daily_limit"], "enabled": r["enabled"],
+                     "exhausted": r["exhausted_on"] == day, "users_today": r["users"]} for r in c.execute(
+                "SELECT k.*, (SELECT COUNT(*) FROM map_key_users u WHERE u.day=%s AND u.key_id=k.id) AS users FROM map_keys k ORDER BY k.id", (day,))]
+        def effective(kind):
+            usable = [k for k in keys if k["kind"] == kind and k["enabled"] and not k["exhausted"] and k["users_today"] < k["daily_limit"]]
+            return "yandex" if provider == "yandex" and usable else "osm"
+        return {"provider": provider, "keys": keys, "effective": {"web": effective("web"), "app": effective("app")}}
+
+    def map_set_provider(self, provider):
+        if provider not in ("osm", "yandex"):
+            raise ApiError(400, "invalid_provider", "provider must be osm or yandex", reason="provider")
+        with self.pool.connection() as c:
+            c.execute("UPDATE map_settings SET provider=%s, updated_at=now()", (provider,))
+        self._map_flag = None                 # the page headers follow the new choice at once
+
+    def map_add_key(self, body):
+        key = str(body.get("key") or "").strip()
+        if not re.fullmatch(r"[0-9A-Za-z._-]{10,200}", key):
+            raise ApiError(400, "invalid_key", "the key looks wrong (10-200 letters, digits, dots, dashes)", reason="key")
+        label = str(body.get("label") or "").strip()[:60]
+        kind = body.get("kind", "web")
+        if kind not in ("web", "app"):
+            raise ApiError(400, "invalid_kind", "kind must be web or app", reason="kind")
+        limit = self._limit(body.get("daily_limit", 25000))
+        with self.pool.connection() as c:
+            try:
+                r = c.execute("INSERT INTO map_keys (label, api_key, daily_limit, kind) VALUES (%s,%s,%s,%s) RETURNING id", (label, key, limit, kind)).fetchone()
+            except psycopg.errors.UniqueViolation:
+                raise ApiError(409, "key_exists", "this key is already added") from None
+        return {"id": r["id"]}
+
+    @staticmethod
+    def _limit(v):
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            n = 0
+        if not 1 <= n <= 10_000_000:
+            raise ApiError(400, "invalid_limit", "the daily limit must be a whole number from 1 up", reason="dailyLimit")
+        return n
+
+    def map_update_key(self, key_id, body):
+        sets, args = [], []
+        if "enabled" in body:
+            sets.append("enabled=%s"); args.append(bool(body["enabled"]))
+        if "daily_limit" in body:
+            sets.append("daily_limit=%s"); args.append(self._limit(body["daily_limit"]))
+        if "label" in body:
+            sets.append("label=%s"); args.append(str(body["label"]).strip()[:60])
+        if body.get("reset"):
+            sets.append("exhausted_on=NULL")
+        if not sets:
+            raise ApiError(400, "validation", "nothing to change")
+        with self.pool.connection() as c:
+            if not c.execute("UPDATE map_keys SET " + ",".join(sets) + " WHERE id=%s RETURNING id", args + [key_id]).fetchone():
+                raise ApiError(404, "not_found", "no such key")
+            if body.get("reset"):
+                c.execute("DELETE FROM map_key_reports WHERE key_id=%s", (key_id,))
+
+    def map_delete_key(self, key_id):
+        with self.pool.connection() as c:
+            if not c.execute("DELETE FROM map_keys WHERE id=%s RETURNING id", (key_id,)).fetchone():
+                raise ApiError(404, "not_found", "no such key")
+
     def history(self, m_id, limit=20, before=None):
         """Public audit trail: no personal identifiers. `actor` is only a role: user | moderator | osm | system.
         Newest first; `before` is the seq of the last row already seen. -> (items, more)"""
@@ -644,15 +778,19 @@ CORS_HEADERS = "Content-Type, Authorization, X-Request-Id, X-Client-Id, X-Device
 UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
 
-def csp(cfg):
+def csp(cfg, yandex=False):
+    """The strict policy; while the admin has chosen Yandex (and only then) its scripts, tiles and 'unsafe-eval' (its vector engine needs it) are allowed too."""
+    ya, nets, ev = ("", "", "")
+    if yandex:
+        ya, nets, ev = " https://api-maps.yandex.ru https://*.api-maps.yandex.ru https://yastatic.net", " https://*.maps.yandex.net", " 'unsafe-eval'"
     tiles = {"https://tiles.openfreemap.org"}
     u = urlparse(cfg.tile_style_url)
     if u.scheme == "https" and u.netloc:
         tiles.add("https://" + u.netloc)
     t = " ".join(sorted(tiles))
-    return ("default-src 'self'; img-src 'self' data: blob: %s https://upload.wikimedia.org; connect-src 'self' %s; worker-src 'self' blob:; "
-            "style-src 'self' 'unsafe-inline'; script-src 'self' https://telegram.org; "
-            "frame-ancestors 'self' https://web.telegram.org https://*.telegram.org" % (t, t))
+    return ("default-src 'self'; img-src 'self' data: blob: %s https://upload.wikimedia.org%s; connect-src 'self' %s%s; worker-src 'self' blob:%s; "
+            "style-src 'self' 'unsafe-inline'%s; script-src 'self' https://telegram.org%s%s; "
+            "frame-ancestors 'self' https://web.telegram.org https://*.telegram.org" % (t, ya + nets, t, ya + nets, (ya + " data:") if ya else "", ya, ya, ev))
 
 
 def file_hash(raw):
@@ -957,6 +1095,12 @@ class Request(BaseHTTPRequestHandler):
             ("GET", r"/me", self.r_me),
             ("POST", r"/me/lang", self.r_me_lang),
             ("GET", r"/export/osm-derived", self.r_export),
+            ("POST", r"/map/yandex-failed", self.r_map_failed),
+            ("GET", r"/admin/map", self.a_map),
+            ("POST", r"/admin/map/provider", self.a_map_provider),
+            ("POST", r"/admin/map/keys", self.a_map_add),
+            ("PATCH", r"/admin/map/keys/(\d{1,9})", self.a_map_update),
+            ("POST", r"/admin/map/keys/(\d{1,9})/delete", self.a_map_delete),
             ("GET", r"/admin/overview", self.a_overview),
             ("GET", r"/admin/actors", self.a_actors),
             ("GET", r"/admin/mosques", self.a_mosques),
@@ -1013,7 +1157,20 @@ class Request(BaseHTTPRequestHandler):
         c = self.cfg
         self.send_ok({"style_url": c.tile_style_url, "duplicate_radius_m": c.dup_radius_m, "show_tile_mosques": c.show_tile_mosques,
                       "prayer": c.prayer, "admin_token_login": bool(c.admin_token), "bot_username": c.bot_username,
-                      "photo_reading": gemini.available(c), "voice_reading": gemini.available(c)})
+                      "photo_reading": gemini.available(c), "voice_reading": gemini.available(c),
+                      "map": self.store.map_choice(self.identity()[0], self.map_kind())})
+
+    def map_kind(self):
+        """Which kind of Yandex key this client can use: the app (device id) a MapKit key, the browser and Telegram a JavaScript API key."""
+        return "app" if self.identity()[1].get("kind") == "mobile" else "web"
+
+    def r_map_failed(self, q):
+        kid = pick(self.body_json(), {"keyId": "key_id"}).get("key_id")
+        if isinstance(kid, bool) or not isinstance(kid, int):
+            raise ApiError(400, "validation", "keyId must be a whole number", reason="keyId")
+        client = self.identity()[0]
+        exhausted = self.store.map_report_failure(kid, client)
+        self.send_ok({"exhausted": exhausted, "map": self.store.map_choice(client, self.map_kind())})       # the next key (or OSM) right away: no gap
 
     def r_mosques(self, q):
         if q.get("bbox"):
@@ -1146,6 +1303,25 @@ class Request(BaseHTTPRequestHandler):
         self.send_envelope(200, ok_body(200, data))        # GeoJSON keys are fixed by its standard: not camelized
 
     # -- moderation
+    def a_map(self, q):
+        self.send_ok(self.store.map_admin())
+
+    def a_map_provider(self, q):
+        self.store.map_set_provider(pick(self.body_json(), {"provider": "provider"}).get("provider"))
+        self.send_ok(self.store.map_admin())
+
+    def a_map_add(self, q):
+        self.store.map_add_key(pick(self.body_json(), {"key": "key", "label": "label", "kind": "kind", "dailyLimit": "daily_limit"}))
+        self.send_ok(self.store.map_admin(), 201)
+
+    def a_map_update(self, q, key_id):
+        self.store.map_update_key(int(key_id), pick(self.body_json(), {"enabled": "enabled", "dailyLimit": "daily_limit", "label": "label", "reset": "reset"}))
+        self.send_ok(self.store.map_admin())
+
+    def a_map_delete(self, q, key_id):
+        self.store.map_delete_key(int(key_id))
+        self.send_ok(self.store.map_admin())
+
     def a_overview(self, q):
         self.send_ok(self.store.overview())
 
@@ -1168,7 +1344,7 @@ class Request(BaseHTTPRequestHandler):
 
     # -- the web client (`/masjiduz/web/...`)
     def web_headers(self):
-        self.send_header("Content-Security-Policy", self.state.csp)
+        self.send_header("Content-Security-Policy", csp(self.cfg, self.store.map_uses_yandex()))
         self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
         self.send_header("Permissions-Policy", "geolocation=(self)")
 
@@ -1257,7 +1433,6 @@ class State:
         self.read_ip_limiter = RateLimiter(120, 3600)                  # ... and per address (several people may share one)
         self.read_slots = threading.BoundedSemaphore(4)                # readings in flight at the same time
         self.admin_limiter = RateLimiter(10, 600)                      # failed admin logins per address per 10 minutes
-        self.csp = csp(cfg)
         self.active, self.lock, self.idle = 0, threading.Lock(), threading.Condition()
 
     def busy(self):

@@ -67,6 +67,8 @@ else `X-Client-Id` (browser id). Only a verified Telegram profile is recorded.
 ### `GET /masjiduz/v1/config`
 `data`: `{"styleUrl": str, "duplicateRadiusM": number, "showTileMosques": bool, "prayer": {"fajrAngle": n, "ishaAngle": n, "asrFactor": 1|2, "dhuhrOffsetMin": n}, "botUsername": str, "adminTokenLogin": bool, "photoReading": bool, "voiceReading": bool}` (the last two are true only when the Gemini key is configured)
 
+`config.map` (per client kind: browser/Telegram get a JavaScript API key, the mobile app a MapKit key) is `{"provider": "osm"}` (the default) or `{"provider": "yandex", "yandexKey": str, "keyId": int}`.
+### `POST /masjiduz/v1/map/yandex-failed` body `{"keyId": int}` → `{"exhausted": bool, "map": <config.map>}`: a client reports that Yandex refused its key; three different clients exhaust the key for the (Moscow) day; the reply already carries the next key or `osm`, so the client switches without a gap.
 ### `GET /masjiduz/v1/mosques?bbox=minLon,minLat,maxLon,maxLat` (map list — exception to cursor lists)
 `data = {"items": [{"id": uuid, "lat": n, "lon": n, "name": str|null, "status": "unverified"|"reported"|"verified"}], "truncated": bool}`.
 Up to 3000 items, no cursor, archived records omitted. `Cache-Control: public, max-age=60`, `ETag` (`If-None-Match` → `304`).
@@ -103,13 +105,16 @@ Failure → `401 UNAUTHORIZED`; 10 failures / 10 min / IP → `429`. Every actio
 * `GET /admin/actors?q&limit` → list of actor records (personal data: moderators only).
 * `GET /admin/mosques?status=unverified|reported|verified|archived&limit&cursor` → list (+ `total`), objects include `creatorId`.
 * `GET /admin/reports?all=1` → `{groups: [...]}`
+* `GET /admin/map` → `{"provider": "osm"|"yandex", "keys": [{"id","label","kind": "web"|"app","key": "ABCD…WXYZ" (masked),"dailyLimit","enabled","exhausted","usersToday"}], "effective": {"web": "osm"|"yandex", "app": "osm"|"yandex"}}`
+* `POST /admin/map/provider` body `{"provider": "osm"|"yandex"}` → the same as `GET /admin/map`
+* `POST /admin/map/keys` body `{"key", "label", "kind": "web"|"app", "dailyLimit": 25000}` → 201 (`error.invalidKey`, `error.keyExists`, `error.invalidKind`, `error.invalidLimit`); `PATCH /admin/map/keys/{id}` body any of `enabled`, `dailyLimit`, `label`, `reset: true`; `POST /admin/map/keys/{id}/delete`
 * `POST /admin/mosques/{id}/archive|restore|verify|dismiss` body `{"note"}` (`verify` requires a note) → mosque object.
 
 ## 5. Web client
 
 `/masjiduz/web/` serves the map and the Telegram Mini App. `/masjiduz/web/config.js` is generated at request time:
 `window.MASJIDUZ_API_BASE = "<TIMUS_APP_MASJIDUZ_API_BASE>"` (default `/masjiduz/v1`). Asset names are content-hashed (`app.1a2b3c4d.js`, 1 year immutable); `index.html` is `no-cache`. MapLibre is bundled (`vendor/`).
-Headers: `Content-Security-Policy: default-src 'self'; img-src 'self' data: blob: https://tiles.openfreemap.org https://upload.wikimedia.org; connect-src 'self' https://tiles.openfreemap.org; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; script-src 'self' https://telegram.org; frame-ancestors 'self' https://web.telegram.org https://*.telegram.org`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, `Permissions-Policy: geolocation=(self)`. No `unsafe-eval`.
+Headers (while the admin has chosen Yandex, and only then, the CSP also allows `https://api-maps.yandex.ru https://*.api-maps.yandex.ru https://yastatic.net https://*.maps.yandex.net` and `'unsafe-eval'` for its vector engine; the default is OpenStreetMap and the strict CSP below): `Content-Security-Policy: default-src 'self'; img-src 'self' data: blob: https://tiles.openfreemap.org https://upload.wikimedia.org; connect-src 'self' https://tiles.openfreemap.org; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; script-src 'self' https://telegram.org; frame-ancestors 'self' https://web.telegram.org https://*.telegram.org`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, `Permissions-Policy: geolocation=(self)`. No `unsafe-eval`.
 `/masjiduz/web/admin.html` is the moderator page (Telegram signature or bearer token).
 
 ## 6. Rate limits
@@ -135,6 +140,7 @@ One image, `python server/cli.py <command>` (entrypoint, default `serve`):
 * `mosque_history`: append-only audit rows: action, actor id, changes, note, non-personal client snapshot (kind, platform, OS/app version, device model, user agent).
 * `reports`: kind, reason (free text from the reporter), reporter id, client snapshot.
 * `actors`: id (`tg:<id>` | `device:<id>` | `client:<id>`), Telegram profile fields **only when signature-verified**, device/app info, `ip_hash` (salted HMAC of the /24 (IPv4) or /48 (IPv6) network, never the address; cleared after 30 days), counters, first/last seen.
+* `map_settings`, `map_keys`, `map_key_users`, `map_key_reports`: the map provider choice, the Yandex keys (secrets held in the database, masked in the admin listing), and per-day counters (client id + key id) that keep a key within its daily limit; removed after 2 days.
 * `ai_calls`, `ai_cooldown`: only counters (which model slot was called when) that keep the readers inside their provider limits; no file or user data.
 * `bot_users`, `bot_subs`, `bot_sent`: Telegram id, chosen language/region/reminder settings, subscriptions, a send ledger. `/stop` removes every row of the user.
 * No full IP addresses are stored anywhere. Logs never contain tokens, `Authorization`, `initData`, IPs or free text.
@@ -147,9 +153,10 @@ One image, `python server/cli.py <command>` (entrypoint, default `serve`):
 | OpenStreetMap Overpass | `overpass-api.de` (or `TIMUS_APP_MASJIDUZ_OVERPASS_URL`) | `import-osm` only | nightly sync, `User-Agent` contains `info@timus.uz` |
 | Wikimedia Commons | `upload.wikimedia.org` | the **browser** only (CSP `img-src`) | mosque photos; the server never calls it (thumbnail address is derived from the file name) |
 | Google Gemini API | `generativelanguage.googleapis.com` | `serve`, `bot` (only when `GEMINI_API_KEY` is set; off otherwise) | reading a timetable photo / spoken times; the file is sent, never stored. **Needs Eldor's written approval before the key is set.** |
+| Yandex Maps | `api-maps.yandex.ru`, `*.maps.yandex.net`, `yastatic.net` | the **browser** only, and only while the admin has chosen Yandex | optional map provider (JavaScript API v3; the mobile app uses the MapKit SDK). **Off by default; needs Eldor's written approval (it needs `unsafe-eval` and a runtime script).** |
 | Map tile server | `tiles.openfreemap.org` | the **browser** only (CSP `img-src`, `connect-src`) | vector map tiles, style, glyphs |
 
-Nothing else: no telemetry, analytics or CDNs. (`telegram.org/js/telegram-web-app.js` is loaded by the browser inside Telegram only; CSP `script-src https://telegram.org`.)
+Nothing else: no telemetry or analytics. (`telegram.org/js/telegram-web-app.js` is loaded by the browser inside Telegram only; CSP `script-src https://telegram.org`.)
 
 ## 10. Environment variables
 

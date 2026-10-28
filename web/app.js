@@ -77,10 +77,10 @@
     return null;                                    // plain unverified record: no badge (it never claims to be verified)
   }
 
-  // ---- navigation: a plain link that opens an external app/site; nothing is requested by this page
+  // ---- navigation: opens an external app/site; nothing is requested from or stored by Yandex
   function routeLinks(m) {
     return [el("a", { class: "btn ghost", target: "_blank", rel: "noopener noreferrer",
-      href: "https://www.openstreetmap.org/?mlat=" + m.lat + "&mlon=" + m.lon + "#map=17/" + m.lat + "/" + m.lon, text: "🧭 " + T("link.route") })];
+      href: "https://yandex.com/maps/?rtext=~" + m.lat + "," + m.lon + "&rtt=auto", text: "🧭 " + T("link.route") })];
   }
 
   // ---- own mosque icon (drawn here; no third-party artwork): green badge with dome and minaret
@@ -129,7 +129,7 @@
   var loadedBox = null, mosqueSeq = 0, moveTimer = null, userMoved = false, lastFC = emptyFC();
   function applyMosques() {
     var src = map && map.getSource("mosques");
-    if (src) src.setData(lastFC); else if (map) map.once("styledata", applyMosques);
+    if (src) src.setData(lastFC); else if (map && map.engine !== "yandex") map.once("styledata", applyMosques);
   }
   function fetchMosques(box) {                      // box = [west, south, east, north]
     var seq = ++mosqueSeq;
@@ -200,7 +200,8 @@
   function applyTheme() {
     document.documentElement.dataset.theme = isDark() ? "dark" : "light";
     var m = document.querySelector('meta[name="theme-color"]'); if (m) m.content = isDark() ? "#12211e" : "#047857";
-    if (map && rawStyle) map.setStyle(buildStyle());                       // the map is recoloured at the same view
+    if (map && map.engine === "yandex") map.setDark(isDark());
+    else if (map && rawStyle) map.setStyle(buildStyle());                       // the map is recoloured at the same view
   }
   function toggleTheme() { theme = isDark() ? "light" : "dark"; try { localStorage.setItem("theme", theme); } catch (e) {} applyTheme(); }
   if (darkMQ && darkMQ.addEventListener) darkMQ.addEventListener("change", function () { if (!theme) applyTheme(); });
@@ -433,7 +434,11 @@
 
   // The first mosque query and the map itself are only started when the map page is opened (the home page needs neither).
   var mapCreated = false;
-  function afterMap(start) {                                                // what follows once the map exists
+  function mosqueDataUrl(color) {                                          // the pin as a picture for the Yandex engine's DOM markers
+    var im = mosqueIcon(color), c = document.createElement("canvas"); c.width = c.height = im.width; c.getContext("2d").putImageData(im, 0, 0);
+    return c.toDataURL("image/png");
+  }
+  function afterMap(start) {                                                // what follows once a map of either engine exists
     var q = mapQuery, hasDeep = !!pendingMap.length;
     var fns = pendingMap; pendingMap = []; fns.forEach(function (fn) { fn(); });
     if (!q && !hasDeep) locate(start);
@@ -444,7 +449,11 @@
     map.on("click", onMapClick);
     ensureMosques();
   }
-  function startMap(c, start) {
+  function startYandex(m, start) {                                          // rejects on any trouble: the caller reports the key and falls back
+    return YandexMap.create({ key: m.yandexKey, container: "map", center: start.center, zoom: start.zoom, bounds: REGION, dark: isDark(), lang: I18N.lang(), icon: mosqueDataUrl })
+      .then(function (ym) { map = ym; afterMap(start); });
+  }
+  function startOsm(c, start) {
     var sp2 = c.styleUrl && c.styleUrl !== DEFAULT_STYLE ? fetch(c.styleUrl).then(function (r) { return r.json(); }) : stylePromise;
     return sp2.then(function (style) { rawStyle = style; return buildStyle(); }).then(function (style) {
       map = new maplibregl.Map({ container: "map", style: style, center: start.center, zoom: start.zoom, locale: mapLocale(),
@@ -468,13 +477,35 @@
       setTimeout(function () { if (!map.loaded()) mapProblem(T("map.err_slow")); }, 20000);
     });
   }
+  // Yandex refused the key (or did not load): tell the server (it hands out the next key, or says OpenStreetMap) and carry on without a gap.
+  function yandexFailed(m) {
+    return api("POST", "/map/yandex-failed", { keyId: m.keyId }).then(function (r) { return r.map; }).catch(function () { return { provider: "osm" }; });
+  }
   function createMap() {
     if (mapCreated) return;
     mapCreated = true;
     var start = mapStart;
     var d = 0.1;                                                              // first mosque query right away, around the start position (~11 km window)
     fetchMosques([start.center[0] - d, start.center[1] - d, start.center[0] + d, start.center[1] + d]);
-    configPromise.then(function (c) { cfg = c; return startMap(c, start); }).catch(function () {
+    configPromise.then(function (c) {
+      cfg = c;
+      function osm() { return startOsm(c, start); }
+      function yandex(m, tries) {
+        return startYandex(m, start).catch(function () {
+          document.getElementById("map").textContent = "";
+          if (tries >= 2) return yandexFailed(m).then(function () { return osm(); });
+          return yandexFailed(m).then(function (next) {
+            // the Yandex script cannot take a second key in the same page: the next key needs a fresh page, OpenStreetMap does not
+            if (next && next.provider === "yandex" && next.yandexKey && next.keyId !== m.keyId) { try { sessionStorage.setItem("ytry", String(tries + 1)); } catch (e) {} location.reload(); return null; }
+            return osm();
+          });
+        });
+      }
+      var tries = 0;
+      try { tries = +sessionStorage.getItem("ytry") || 0; } catch (e) {}
+      if (c.map && c.map.provider === "yandex" && c.map.yandexKey && window.YandexMap) return yandex(c.map, tries);
+      return osm();
+    }).catch(function () {
       mapProblem(T("map.err_style"));
     });
   }
@@ -1044,7 +1075,7 @@
   document.addEventListener("click", function (e) { if (!$("search").contains(e.target)) hideResults(); });
 
   // ---- add mosque
-  function newMarker(o) { return new maplibregl.Marker(o); }
+  function newMarker(o) { return map.engine === "yandex" ? new map.Marker(o) : new maplibregl.Marker(o); }
   function clearPick() { if (pickMarker) { pickMarker.remove(); pickMarker = null; } }
   function setPicked(ll) {
     if (pickDone) { var f = pickDone; pickDone = null; f(ll); return; }

@@ -391,7 +391,7 @@ class Api(ServerCase):
 
     def test_config_and_me_for_anonymous(self):
         c = self.call("GET", "/config")[1]["data"]
-        self.assertEqual(set(c), {"styleUrl", "duplicateRadiusM", "showTileMosques", "prayer", "botUsername", "adminTokenLogin", "photoReading", "voiceReading"})
+        self.assertEqual(set(c), {"styleUrl", "duplicateRadiusM", "showTileMosques", "prayer", "botUsername", "adminTokenLogin", "photoReading", "voiceReading", "map"})
         self.assertEqual(set(c["prayer"]), {"fajrAngle", "ishaAngle", "asrFactor", "dhuhrOffsetMin"})
         self.assertEqual((c["adminTokenLogin"], c["photoReading"], c["voiceReading"]), (False, False, False))      # no admin token, no Gemini key here
         self.assertEqual(c["duplicateRadiusM"], 50)
