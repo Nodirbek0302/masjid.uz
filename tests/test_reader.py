@@ -77,7 +77,26 @@ class Pool(ReaderCase):
         r = gemini.read_photo(reader_cfg(), photo(), "image/jpeg")
         self.assertEqual(r, {"times": GOOD, "alt": [], "complete": True, "warnings": []})
         self.assertEqual(fake.slots(), ["gemini:m1#0"])
-        self.assertEqual(db("SELECT slot, count(*) FROM ai_calls GROUP BY slot"), [("gemini:m1#0", 1)])
+        self.assertEqual(db("SELECT slot, count(*) FROM ai_calls WHERE slot<>'reading' GROUP BY slot"), [("gemini:m1#0", 1)])
+
+    def test_daily_reading_limit_is_kept_for_everybody_together(self):
+        fake = self.use(Provider())
+        cfg = reader_cfg(AI_DAILY_LIMIT="2")
+        self.assertEqual(cfg.ai_daily_limit, 2)
+        self.assertEqual(make_cfg().ai_daily_limit, 300)
+        first, second, third = photo(), photo(), photo()
+        for data in (first, second):
+            gemini.read_photo(cfg, data, "image/jpeg")
+        self.assertEqual(len(fake.calls), 2)
+        gemini.read_photo(cfg, first, "image/jpeg")                             # the same file: from the cache, not counted
+        with self.assertRaises(gemini.Unavailable) as cm:
+            gemini.read_photo(cfg, third, "image/jpeg")                      # the third new reading of the day: refused before any request to Google
+        self.assertTrue(0 < cm.exception.retry_after <= 86400)
+        self.assertEqual(len(fake.calls), 2)
+        self.assertEqual(db("SELECT count(*) FROM ai_calls WHERE slot='reading'"), [(2,)])
+        db("UPDATE ai_calls SET at = at - interval '2 days'")                   # a new day: reading is possible again
+        gemini.read_photo(cfg, third, "image/jpeg")
+        self.assertEqual(len(fake.calls), 3)
 
     def test_no_key_is_unavailable_and_calls_nothing(self):
         fake = self.use(Provider())
@@ -154,7 +173,7 @@ class Pool(ReaderCase):
             gemini.read_photo(cfg, photo(), "image/jpeg")
         self.assertGreaterEqual(e.exception.retry_after, 1); self.assertLessEqual(e.exception.retry_after, 61)
         self.assertEqual(len(fake.calls), 4)                                  # the fifth never reached the provider
-        self.assertEqual(db("SELECT count(*) FROM ai_calls")[0][0], 4)
+        self.assertEqual(db("SELECT count(*) FROM ai_calls WHERE slot<>'reading'")[0][0], 4)
         db("UPDATE ai_calls SET at = now() - interval '61 seconds'")          # the minute has passed
         self.assertTrue(gemini.read_photo(cfg, photo(), "image/jpeg")["complete"])
 
@@ -198,7 +217,7 @@ class Pool(ReaderCase):
         a = gemini.read_photo(cfg, data, "image/jpeg")
         b = gemini.read_photo(cfg, data, "image/jpeg")
         self.assertEqual(a, b); self.assertEqual(len(fake.calls), 1)
-        self.assertEqual(db("SELECT count(*) FROM ai_calls")[0][0], 1)
+        self.assertEqual(db("SELECT count(*) FROM ai_calls WHERE slot<>'reading'")[0][0], 1)
         gemini.read_photo(cfg, data + b"x", "image/jpeg")                    # other content: asked again
         self.assertEqual(len(fake.calls), 2)
         gemini.read_voice(cfg, data, "audio/ogg")                            # same bytes as audio is another question
@@ -411,7 +430,7 @@ class Provider_HTTP(ReaderCase):
                 gemini.read_voice(cfg, b"OggS" + photo(), "audio/ogg")
             self.assertEqual(e.exception.code, "bad_audio")
         self.assertEqual(db("SELECT count(*) FROM ai_cooldown"), [(0,)])                   # nothing rested
-        self.assertEqual(db("SELECT slot FROM ai_calls ORDER BY id"), [("gemini:m1#0",)] * 2)   # and the other model was never asked (one call each)
+        self.assertEqual(db("SELECT slot FROM ai_calls WHERE slot<>'reading' ORDER BY id"), [("gemini:m1#0",)] * 2)   # the other model was never asked
 
     def test_http_failure_end_to_end_is_unavailable_and_rests_the_slot(self):
         def boom(req, timeout=None):
@@ -576,13 +595,13 @@ class Routes(ServerCase):
         self.assertEqual(self.fake.calls[0][0], "gemini:m1#0")
         self.assertEqual(len(self.fake.calls), 1)
 
-    def test_default_limits_are_8_mib_and_2_mib(self):
+    def test_default_limits_are_5_mib_and_2_mib(self):
         cfg = make_cfg()
-        self.assertEqual((cfg.max_photo_bytes, cfg.max_voice_bytes), (8 * 1024 * 1024, 2 * 1024 * 1024))
+        self.assertEqual((cfg.max_photo_bytes, cfg.max_voice_bytes), (5 * 1024 * 1024, 2 * 1024 * 1024))
         self.reader()
         r = helpers.headers_only(self.addr, "POST", helpers.API + "/timetable/voice", 2 * 1024 * 1024 + 1, {"Content-Type": "audio/mp4"})
         self.assertEqual(r.status, 413)                                       # decided from Content-Length, the body is never read
-        r = helpers.headers_only(self.addr, "POST", helpers.API + "/timetable/photo", 8 * 1024 * 1024 + 1, {"Content-Type": "image/jpeg"})
+        r = helpers.headers_only(self.addr, "POST", helpers.API + "/timetable/photo", 5 * 1024 * 1024 + 1, {"Content-Type": "image/jpeg"})
         self.assertEqual(r.status, 413)
 
     def test_per_device_rate_limit_30_an_hour(self):

@@ -39,7 +39,7 @@ WEBAPP_URL = ""
 ADMIN_IDS = set()
 API = ""
 NEAR_M = 200.0
-MAX_PHOTO_BYTES = 8 * 1024 * 1024
+MAX_PHOTO_BYTES = 5 * 1024 * 1024
 PHOTOS_PER_HOUR = 30
 SESSION_S = 1800
 MSGS_PER_MIN = 40
@@ -398,7 +398,7 @@ class Bot:
             except app.ApiError:
                 return self.say(chat, tx["error"])
             self.state[uid] = {"step": "await_times", "mosque_id": m["id"], "name": m["name"] or tx["noname"], "ts": time.time()}
-            return self.say(chat, tx["send_photo"].format(name=self.state[uid]["name"]))
+            return self.say(chat, self.ask_times(tx, self.state[uid]["name"]))
         if cmd in ("/start", "/help"):
             if self.webapp_url.startswith("https://"):
                 self.say(chat, tx["hello"], [[{"text": tx["open"], "web_app": {"url": self.web(tx)}}]])
@@ -474,7 +474,7 @@ class Bot:
             elif kind == "pick":
                 m = self.store.get(arg)
                 self.state[uid] = {"step": "await_times", "mosque_id": m["id"], "name": m["name"] or tx["noname"], "ts": time.time()}
-                self.say(chat, tx["send_photo"].format(name=self.state[uid]["name"]))
+                self.say(chat, self.ask_times(tx, self.state[uid]["name"]))
             elif kind == "new":
                 lat, lon = (float(x) for x in arg.split(","))
                 self.state[uid] = {"step": "await_name", "lat": lat, "lon": lon, "ts": time.time()}
@@ -515,7 +515,7 @@ class Bot:
         m = self.store.create({"lat": st["lat"], "lon": st["lon"], "name": name, "force": True}, actor, info)   # the user chose "new" explicitly
         self.state[user["id"]] = {"step": "await_times", "mosque_id": m["id"], "name": m["name"] or tx["noname"], "ts": time.time()}
         self.say(chat, tx["created"])
-        self.say(chat, tx["send_photo"].format(name=self.state[user["id"]]["name"]))
+        self.say(chat, self.ask_times(tx, self.state[user["id"]]["name"]))
 
     # ---- text: a name for a new mosque, or typed times
     def on_text(self, chat, user, tx, text):
@@ -532,6 +532,11 @@ class Bot:
             return self.say(chat, tx["bad_times"])
         st.update(step="confirm", times=r["times"], alt=None, ts=time.time())
         self.preview(chat, tx, st)
+
+    def ask_times(self, tx, name):
+        """The request for a photo/voice message; where reading is on, it says before anything is sent that Google reads the file."""
+        text = tx["send_photo"].format(name=name)
+        return text + "\n\n" + tx["ai_notice"] if (self.ocr_read or self.stt_read) and tx.get("ai_notice") else text
 
     # ---- photo -> OCR -> preview
     def on_photo(self, chat, user, tx, photos):

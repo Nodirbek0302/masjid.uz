@@ -479,12 +479,15 @@ class Store:
     MAP_DAY = "(now() AT TIME ZONE 'Europe/Moscow')::date"          # Yandex counts its day in Moscow time
     MAP_REPORTS_TO_EXHAUST = 3                                         # distinct devices that must say "Yandex refused this key"
 
-    def map_choice(self, client, kind="web"):
+    def map_choice(self, client, kind="app"):
         """What a client should draw today -> {"provider": "osm"} or {"provider": "yandex", "yandex_key": ..., "key_id": ...}.
+        Yandex is for the mobile app only (MapKit): the web client and the server never contact Yandex, a non-app client always gets OSM.
         The first enabled key with room (distinct users today < its limit, not refused by Yandex today) is handed out and remembered
-        for the day, so one user counts once. Only keys of the client's kind (web = JavaScript API key, app = MapKit key) are considered.
+        for the day, so one user counts once. Only MapKit keys (kind app) are considered.
         No key left -> OpenStreetMap, whatever the setting says."""
         osm = {"provider": "osm"}
+        if kind != "app":
+            return osm
         with self.pool.connection() as c:
             if c.execute("SELECT provider FROM map_settings").fetchone()["provider"] != "yandex":
                 return osm
@@ -522,21 +525,6 @@ class Store:
                 return True
         return False
 
-    _map_flag = None                      # (when asked, answer); None = ask again
-
-    def map_uses_yandex(self):
-        """True while the admin has chosen Yandex (asked at most every 10 s: this runs for every response)."""
-        flag = self._map_flag
-        t, v = flag if flag else (0.0, False)
-        if flag is None or time.monotonic() - t > 10:
-            try:
-                with self.pool.connection() as c:
-                    v = c.execute("SELECT provider FROM map_settings").fetchone()["provider"] == "yandex"
-            except Exception:
-                v = False
-            self._map_flag = (time.monotonic(), v)
-        return v
-
     @staticmethod
     def _mask(k):
         return k[:4] + "…" + k[-4:] if len(k) > 10 else "…"
@@ -548,26 +536,23 @@ class Store:
             keys = [{"id": r["id"], "label": r["label"], "kind": r["kind"], "key": self._mask(r["api_key"]), "daily_limit": r["daily_limit"], "enabled": r["enabled"],
                      "exhausted": r["exhausted_on"] == day, "users_today": r["users"]} for r in c.execute(
                 "SELECT k.*, (SELECT COUNT(*) FROM map_key_users u WHERE u.day=%s AND u.key_id=k.id) AS users FROM map_keys k ORDER BY k.id", (day,))]
-        def effective(kind):
-            usable = [k for k in keys if k["kind"] == kind and k["enabled"] and not k["exhausted"] and k["users_today"] < k["daily_limit"]]
-            return "yandex" if provider == "yandex" and usable else "osm"
-        return {"provider": provider, "keys": keys, "effective": {"web": effective("web"), "app": effective("app")}}
+        usable = [k for k in keys if k["enabled"] and not k["exhausted"] and k["users_today"] < k["daily_limit"]]
+        return {"provider": provider, "keys": keys, "effective": {"app": "yandex" if provider == "yandex" and usable else "osm"}}
 
     def map_set_provider(self, provider):
         if provider not in ("osm", "yandex"):
             raise ApiError(400, "invalid_provider", "provider must be osm or yandex", reason="provider")
         with self.pool.connection() as c:
             c.execute("UPDATE map_settings SET provider=%s, updated_at=now()", (provider,))
-        self._map_flag = None                 # the page headers follow the new choice at once
 
     def map_add_key(self, body):
         key = str(body.get("key") or "").strip()
         if not re.fullmatch(r"[0-9A-Za-z._-]{10,200}", key):
             raise ApiError(400, "invalid_key", "the key looks wrong (10-200 letters, digits, dots, dashes)", reason="key")
         label = str(body.get("label") or "").strip()[:60]
-        kind = body.get("kind", "web")
-        if kind not in ("web", "app"):
-            raise ApiError(400, "invalid_kind", "kind must be web or app", reason="kind")
+        kind = body.get("kind", "app")
+        if kind != "app":
+            raise ApiError(400, "invalid_kind", "kind must be app (Yandex is used by the mobile app only)", reason="kind")
         limit = self._limit(body.get("daily_limit", 25000))
         with self.pool.connection() as c:
             try:
@@ -789,19 +774,16 @@ CORS_HEADERS = "Content-Type, Authorization, X-Request-Id, X-Client-Id, X-Device
 UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
 
-def csp(cfg, yandex=False):
-    """The strict policy; while the admin has chosen Yandex (and only then) its scripts, tiles and 'unsafe-eval' (its vector engine needs it) are allowed too."""
-    ya, nets, ev = ("", "", "")
-    if yandex:
-        ya, nets, ev = " https://api-maps.yandex.ru https://*.api-maps.yandex.ru https://yastatic.net", " https://*.maps.yandex.net", " 'unsafe-eval'"
+def csp(cfg):
+    """The strict policy: no 'unsafe-eval', no scripts but our own (and Telegram's on the Mini App page), no Yandex of any kind."""
     tiles = {"https://tiles.openfreemap.org"}
     u = urlparse(cfg.tile_style_url)
     if u.scheme == "https" and u.netloc:
         tiles.add("https://" + u.netloc)
     t = " ".join(sorted(tiles))
-    return ("default-src 'self'; img-src 'self' data: blob: %s https://upload.wikimedia.org%s; connect-src 'self' %s%s; worker-src 'self' blob:%s; "
-            "style-src 'self' 'unsafe-inline'%s; script-src 'self' https://telegram.org%s%s; "
-            "frame-ancestors 'self' https://web.telegram.org https://*.telegram.org" % (t, ya + nets, t, ya + nets, (ya + " data:") if ya else "", ya, ya, ev))
+    return ("default-src 'self'; img-src 'self' data: blob: %s https://upload.wikimedia.org; connect-src 'self' %s; worker-src 'self' blob:; "
+            "style-src 'self' 'unsafe-inline'; script-src 'self' https://telegram.org; "
+            "frame-ancestors 'self' https://web.telegram.org https://*.telegram.org" % (t, t))
 
 
 def etag_matches(header, etag):
@@ -1177,7 +1159,7 @@ class Request(BaseHTTPRequestHandler):
                       "map": self.store.map_choice(self.identity()[0], self.map_kind())})
 
     def map_kind(self):
-        """Which kind of Yandex key this client can use: the app (device id) a MapKit key, the browser and Telegram a JavaScript API key."""
+        """Only the mobile app may be handed a Yandex (MapKit) key; the browser and Telegram always draw OpenStreetMap."""
         return "app" if self.identity()[1].get("kind") == "mobile" else "web"
 
     def r_map_failed(self, q):
@@ -1362,7 +1344,7 @@ class Request(BaseHTTPRequestHandler):
 
     # -- the web client (`/masjiduz/web/...`)
     def web_headers(self):
-        self.send_header("Content-Security-Policy", csp(self.cfg, self.store.map_uses_yandex()))
+        self.send_header("Content-Security-Policy", csp(self.cfg))
         self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
         self.send_header("Permissions-Policy", "geolocation=(self)")
 

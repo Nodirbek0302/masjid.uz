@@ -128,8 +128,9 @@ class Config:
         self.webapp_url = e("WEBAPP_URL")
         # model:requests-per-minute:requests-per-day, in the order they are tried (the limits of the free tier; edit when Google changes them)
         self.gemini_models = _models(e("GEMINI_MODELS", "gemini-3.5-flash-lite:15:500,gemini-3.1-flash-lite:15:500,gemini-3.6-flash:5:20"))
-        self.max_photo_bytes = _int(P + "MAX_PHOTO_BYTES", 8 * 1024 * 1024, 1024)
+        self.max_photo_bytes = _int(P + "MAX_PHOTO_BYTES", 5 * 1024 * 1024, 1024)
         self.max_voice_bytes = _int(P + "MAX_VOICE_BYTES", 2 * 1024 * 1024, 1024)
+        self.ai_daily_limit = _int(P + "AI_DAILY_LIMIT", 300, 1)          # photo/voice readings per day for everybody together (cache hits are free)
         self.overpass_url = e("OVERPASS_URL", "https://overpass-api.de/api/interpreter")
         self.prayer = {"fajr_angle": _float(P + "PRAYER_FAJR_ANGLE", 15.0), "isha_angle": _float(P + "PRAYER_ISHA_ANGLE", 15.0),
                        "asr_factor": _int(P + "PRAYER_ASR_FACTOR", 2, 1, 2),

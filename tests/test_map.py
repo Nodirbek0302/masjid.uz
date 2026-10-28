@@ -1,4 +1,4 @@
-"""The map provider: OpenStreetMap by default, optionally Yandex with a pool of keys (web = JavaScript API key, app = MapKit key)."""
+"""The map provider: OpenStreetMap by default, optionally Yandex for the mobile app only (a pool of MapKit keys); the web never gets Yandex."""
 import json
 import os
 import sys
@@ -16,6 +16,14 @@ class MapCase(ServerCase):
     def setUp(self):
         reset_db()
         self.use()
+
+    def call(self, method, path, body=None, web=False, **kw):
+        """Clients here are the mobile app (a device id) unless web=True: Yandex is handed to the app only."""
+        if not web and not kw.get("admin"):
+            h = dict(kw.get("headers") or {})
+            h.setdefault("X-Device-Id", kw.get("client", "aaaaaaaa-1"))
+            kw["headers"] = h
+        return super().call(method, path, body, **kw)
 
     def cfg_map(self, client="a0000001-1", **kw):
         s, r = self.call("GET", "/config", client=client, **kw)
@@ -44,7 +52,7 @@ class Defaults(MapCase):
         self.assertNotIn("yandex", c)
         self.assertIn("script-src 'self' https://telegram.org;", c)
         d = self.adm("GET", "")[1]["data"]
-        self.assertEqual(d, {"provider": "osm", "keys": [], "effective": {"web": "osm", "app": "osm"}})
+        self.assertEqual(d, {"provider": "osm", "keys": [], "effective": {"app": "osm"}})
         self.assertEqual(db("SELECT provider FROM map_settings"), [("osm",)])
 
     def test_the_four_map_tables_exist(self):
@@ -54,7 +62,7 @@ class Defaults(MapCase):
 
     def test_yandex_chosen_but_no_key_is_still_osm_and_csp_still_opens(self):
         d = self.adm("POST", "/provider", {"provider": "yandex"})[1]["data"]
-        self.assertEqual((d["provider"], d["effective"]), ("yandex", {"web": "osm", "app": "osm"}))
+        self.assertEqual((d["provider"], d["effective"]), ("yandex", {"app": "osm"}))
         self.assertEqual(self.cfg_map(), {"provider": "osm"})
 
 
@@ -76,15 +84,15 @@ class Admin(MapCase):
         self.assertEqual((s, r["data"]["provider"]), (200, "yandex"))
 
     def test_keys_are_masked_in_the_listing_and_everything_is_camel_case(self):
-        d = self.yandex_on({"key": K1, "label": "one", "dailyLimit": 2, "kind": "web"})
+        d = self.yandex_on({"key": K1, "label": "one", "dailyLimit": 2, "kind": "app"})
         k = d["keys"][0]
         self.assertEqual(set(k), {"id", "label", "kind", "key", "dailyLimit", "enabled", "exhausted", "usersToday"})
-        self.assertEqual((k["label"], k["kind"], k["dailyLimit"], k["enabled"], k["exhausted"], k["usersToday"]), ("one", "web", 2, True, False, 0))
+        self.assertEqual((k["label"], k["kind"], k["dailyLimit"], k["enabled"], k["exhausted"], k["usersToday"]), ("one", "app", 2, True, False, 0))
         self.assertEqual(k["key"], "KEY-…7890")
         self.assertNotIn(K1, json.dumps(d))
         self.assertNotIn(K1, json.dumps(self.adm("GET", "")[1]))
         self.assertEqual(set(d), {"provider", "keys", "effective"})
-        self.assertEqual(d["effective"], {"web": "yandex", "app": "osm"})
+        self.assertEqual(d["effective"], {"app": "yandex"})
 
     def test_add_validation(self):
         add = lambda body: self.adm("POST", "/keys", body)       # noqa: E731
@@ -102,19 +110,19 @@ class Admin(MapCase):
         self.assertEqual((s, r["message"]["reason"]), (400, "extra"))
         self.assertEqual(db("SELECT count(*) FROM map_keys"), [(0,)])
         self.assertEqual(add({"key": K1, "label": "l" * 100})[0], 201)
-        self.assertEqual(db("SELECT char_length(label), kind, daily_limit FROM map_keys"), [(60, "web", 25000)])        # label clipped, defaults
+        self.assertEqual(db("SELECT char_length(label), kind, daily_limit FROM map_keys"), [(60, "app", 25000)])        # label clipped, defaults
         s, r = add({"key": K1})
         self.assertEqual((s, r["code"], r["message"]["code"]), (409, "CONFLICT", "error.keyExists"))
         self.assertEqual(db("SELECT count(*) FROM map_keys"), [(1,)])
 
     def test_update_and_delete(self):
-        self.yandex_on({"key": K1, "label": "one"}, {"key": K2, "label": "two", "kind": "app"})
+        self.yandex_on({"key": K1, "label": "one"}, {"key": K2, "label": "two"})
         ids = [k["id"] for k in self.adm("GET", "")[1]["data"]["keys"]]
         s, r = self.adm("PATCH", "/keys/%d" % ids[0], {"enabled": False, "dailyLimit": 7, "label": "renamed"})
         k = r["data"]["keys"][0]
         self.assertEqual((s, k["enabled"], k["dailyLimit"], k["label"]), (200, False, 7, "renamed"))
-        self.assertEqual(r["data"]["effective"], {"web": "osm", "app": "yandex"})              # the only web key is off
-        self.assertEqual(self.cfg_map(), {"provider": "osm"})
+        self.assertEqual(r["data"]["effective"], {"app": "yandex"})              # key two is still on
+        self.assertEqual(self.cfg_map()["yandexKey"], K2)
         for body, reason in (({"dailyLimit": 0}, "dailyLimit"), ({"dailyLimit": "x"}, "dailyLimit"), ({"bogus": 1}, "bogus"),
                              ({"daily_limit": 3}, "daily_limit"), ({"key": K2}, "key")):
             s, r = self.adm("PATCH", "/keys/%d" % ids[0], body)
@@ -144,13 +152,13 @@ class Pool(MapCase):
     def test_pool_rotation_and_fallback(self):
         self.assertEqual(self.cfg_map("a0000001-1"), {"provider": "osm"})                   # the default: OpenStreetMap
         s, a = self.adm("POST", "/provider", {"provider": "yandex"})
-        self.assertEqual((s, a["data"]["provider"], a["data"]["effective"]), (200, "yandex", {"web": "osm", "app": "osm"}))   # chosen, no key yet: OSM
+        self.assertEqual((s, a["data"]["provider"], a["data"]["effective"]), (200, "yandex", {"app": "osm"}))   # chosen, no key yet: OSM
         self.assertEqual(self.cfg_map("a0000001-1")["provider"], "osm")
         self.assertEqual(self.adm("POST", "/keys", {"key": "short"})[0], 400)
         self.assertEqual(self.adm("POST", "/keys", {"key": K1, "label": "one", "dailyLimit": 2})[0], 201)
         self.assertEqual(self.adm("POST", "/keys", {"key": K1})[0], 409)
         a = self.adm("POST", "/keys", {"key": K2, "label": "two", "dailyLimit": 1})[1]["data"]
-        self.assertEqual(a["effective"], {"web": "yandex", "app": "osm"})                   # web keys only: the app has none
+        self.assertEqual(a["effective"], {"app": "yandex"})                   # web keys only: the app has none
         self.assertNotIn(K1, json.dumps(a))
         # two users fill key one (limit 2), the third gets key two (limit 1), the fourth finds nothing left -> OSM
         c1, c2, c3, c4 = (self.cfg_map("a000000%d-1" % i) for i in (1, 2, 3, 4))
@@ -277,34 +285,9 @@ class Pool(MapCase):
         self.assertEqual((s, r["code"]), (400, "VALIDATION_ERROR"))
         s, r = self.call("POST", "/map/yandex-failed", {"keyId": 424242})                    # unknown key: nothing happens
         self.assertEqual((s, r["data"]["exhausted"]), (200, False))
-        s, r = self.call("POST", "/map/yandex-failed", {"keyId": 1}, headers={"X-Client-Id": ""})   # no identity: nothing to count
+        s, r = self.call("POST", "/map/yandex-failed", {"keyId": 1}, web=True, headers={"X-Client-Id": ""})   # no identity: nothing to count
         self.assertEqual((s, r["data"]["exhausted"]), (200, False))
         self.assertEqual(db("SELECT count(*) FROM map_key_reports"), [(0,)])
-
-    def test_web_and_app_keys_are_not_mixed(self):
-        self.adm("POST", "/provider", {"provider": "yandex"})
-        self.adm("POST", "/keys", {"key": "WEB-KEY-1234567890", "kind": "web"})
-        a = self.adm("POST", "/keys", {"key": "APP-KEY-1234567890", "kind": "app"})[1]["data"]
-        self.assertEqual(a["effective"], {"web": "yandex", "app": "yandex"})
-        self.assertEqual([k["kind"] for k in a["keys"]], ["web", "app"])
-        phone = {"X-Device-Id": PHONE}
-        self.assertEqual(self.cfg_map("d0000001-1", headers=phone)["yandexKey"], "APP-KEY-1234567890")      # a mobile client: the MapKit key
-        self.assertEqual(self.cfg_map("d0000002-1")["yandexKey"], "WEB-KEY-1234567890")                      # a browser never gets the app's key
-        tg = {"X-Telegram-Init-Data": sign_init_data({"id": 5150, "first_name": "T"})}
-        self.assertEqual(self.cfg_map("d0000003-1", headers=tg)["yandexKey"], "WEB-KEY-1234567890")          # Telegram Mini App: web key
-        # the app's only key is refused: the app falls back to OSM, the web keeps its own key
-        kid = a["keys"][1]["id"]
-        for who in ("devicedevice0002", "devicedevice0003", "devicedevice0004"):
-            self.assertEqual(self.cfg_map("d0000009-1", headers={"X-Device-Id": who})["yandexKey"], "APP-KEY-1234567890")
-            r = self.call("POST", "/map/yandex-failed", {"keyId": kid}, client="d0000009-1", headers={"X-Device-Id": who})[1]["data"]
-        self.assertEqual(r["map"], {"provider": "osm"})
-        self.assertEqual(self.cfg_map("d0000002-1")["yandexKey"], "WEB-KEY-1234567890")
-        self.assertEqual(self.cfg_map("d0000001-1", headers=phone), {"provider": "osm"})
-        # only an app key: a browser gets OSM
-        self.adm("POST", "/keys/%d/delete" % a["keys"][0]["id"], {})
-        self.adm("PATCH", "/keys/%d" % kid, {"reset": True})
-        self.assertEqual(self.cfg_map("d0000011-1"), {"provider": "osm"})
-        self.assertEqual(self.cfg_map("d0000012-1", headers={"X-Device-Id": "devicedevice0012"})["yandexKey"], "APP-KEY-1234567890")
 
     def test_a_daily_limit_counts_distinct_users_once(self):
         self.yandex_on({"key": K1, "dailyLimit": 2})
@@ -313,9 +296,9 @@ class Pool(MapCase):
         self.assertEqual(self.cfg_map("e0000002-1")["yandexKey"], K1)
         self.assertEqual(self.cfg_map("e0000003-1"), {"provider": "osm"})
         self.assertEqual(self.adm("GET", "")[1]["data"]["keys"][0]["usersToday"], 2)
-        self.assertEqual(self.adm("GET", "")[1]["data"]["effective"]["web"], "osm")        # full for today
+        self.assertEqual(self.adm("GET", "")[1]["data"]["effective"]["app"], "osm")        # full for today
         self.assertEqual(self.cfg_map("e0000001-1")["yandexKey"], K1)                       # the sticky ones still draw
-        self.assertEqual(self.cfg_map(headers={"X-Client-Id": ""})["provider"], "osm")           # no identity: cannot be counted, so no key is handed out
+        self.assertEqual(self.cfg_map(web=True, headers={"X-Client-Id": ""})["provider"], "osm")           # no identity: cannot be counted, so no key is handed out
 
     def test_deleting_a_key_cleans_its_counters(self):
         self.yandex_on({"key": K1})
@@ -328,52 +311,30 @@ class Pool(MapCase):
         self.assertEqual(self.cfg_map("f0000001-1"), {"provider": "osm"})
 
 
-class CspFollowsTheChoice(MapCase):
-    def test_csp_opens_for_yandex_only_while_it_is_chosen(self):
-        for path in ("/", "/app.js", "/admin.html", "/config.js"):
-            c = self.req("GET", helpers.WEB + path).header("Content-Security-Policy")
-            self.assertNotIn("yandex", c, path)
-            self.assertNotIn("unsafe-eval", c, path)
-        self.adm("POST", "/provider", {"provider": "yandex"})                              # the flag is reset at once, not after 10 s
-        self.adm("POST", "/keys", {"key": K1})
-        for path in ("/", "/app.js", "/admin.html"):
-            c = self.req("GET", helpers.WEB + path).header("Content-Security-Policy")
-            for host in ("https://api-maps.yandex.ru", "https://*.api-maps.yandex.ru", "https://yastatic.net", "https://*.maps.yandex.net"):
-                self.assertIn(host, c, (path, host))
-            self.assertIn("'unsafe-eval'", c)
-            self.assertRegex(c, r"script-src 'self' https://telegram.org [^;]*https://api-maps.yandex.ru")
-            self.assertIn("https://tiles.openfreemap.org", c)                              # the OSM hosts stay
-            self.assertIn("frame-ancestors 'self' https://web.telegram.org", c)
-            self.assertEqual(self.req("GET", helpers.WEB + path).header("Referrer-Policy"), "strict-origin-when-cross-origin")
-        self.adm("POST", "/provider", {"provider": "osm"})
-        c = self.csp()
-        self.assertNotIn("yandex", c)
-        self.assertNotIn("unsafe-eval", c)
-        self.assertEqual(c, helpers.app.csp(self.srv.store.cfg))                           # exactly the strict policy again
+class CspIsAlwaysStrict(MapCase):
+    def test_no_yandex_and_no_unsafe_eval_whatever_the_admin_chose(self):
+        strict = helpers.app.csp(self.srv.store.cfg)
+        for provider in ("osm", "yandex"):
+            self.adm("POST", "/provider", {"provider": provider})
+            self.adm("POST", "/keys", {"key": K1 if provider == "yandex" else K2})
+            for path in ("/", "/app.js", "/admin.html", "/config.js"):
+                c = self.req("GET", helpers.WEB + path).header("Content-Security-Policy")
+                self.assertEqual(c, strict, (provider, path))
+                self.assertNotIn("yandex", c)
+                self.assertNotIn("unsafe-eval", c)
+        self.assertIn("script-src 'self' https://telegram.org;", strict)
+        self.assertIn("https://tiles.openfreemap.org", strict)
+        self.assertIn("frame-ancestors 'self' https://web.telegram.org", strict)
 
-    def test_the_flag_is_cached_for_ten_seconds_but_a_provider_change_resets_it(self):
-        self.assertFalse(self.srv.store.map_uses_yandex())
-        db("UPDATE map_settings SET provider='yandex'")                                    # behind the server's back: the cache still says no
-        self.assertFalse(self.srv.store.map_uses_yandex())
-        self.assertNotIn("yandex", self.csp())
-        self.srv.store._map_flag = None
-        self.assertTrue(self.srv.store.map_uses_yandex())
-        self.assertIn("yandex", self.csp())
-        self.adm("POST", "/provider", {"provider": "osm"})
-        self.assertFalse(self.srv.store.map_uses_yandex())
+    def test_the_web_never_gets_a_yandex_key(self):
+        self.yandex_on({"key": K1})
+        self.assertEqual(self.cfg_map("d0000002-1", web=True), {"provider": "osm"})              # a browser
+        tg = {"X-Telegram-Init-Data": sign_init_data({"id": 5150, "first_name": "T"})}
+        self.assertEqual(self.cfg_map("d0000003-1", web=True, headers=tg), {"provider": "osm"})  # the Telegram Mini App
+        self.assertEqual(self.cfg_map("d0000004-1")["yandexKey"], K1)                            # the mobile app does
+        s, r = self.adm("POST", "/keys", {"key": K2, "kind": "web"})
+        self.assertEqual((s, r["message"]["reason"]), (400, "kind"))                             # a web key cannot even be added
 
-    def test_a_database_error_never_opens_the_csp(self):
-        from unittest import mock
-        self.srv.store._map_flag = None
-        with mock.patch.object(self.srv.store, "pool", mock.Mock(connection=mock.Mock(side_effect=RuntimeError("db")))):
-            self.assertFalse(self.srv.store.map_uses_yandex())
-
-    def test_the_default_csp_helper_is_strict(self):
-        c = helpers.app.csp(self.srv.store.cfg)
-        self.assertNotIn("unsafe-eval", c)
-        self.assertNotIn("yandex", c)
-        y = helpers.app.csp(self.srv.store.cfg, True)
-        self.assertIn("'unsafe-eval'", y)
 
 
 class ConfigShape(MapCase):

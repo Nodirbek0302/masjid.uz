@@ -33,7 +33,7 @@ CI (GitHub Actions) runs lint, the tests against an ephemeral PostgreSQL 17, `pi
 - **Concurrency.** Edits never fail because somebody else saved first: the row is locked, the fields a user changed are applied on top of the latest
   state (prayer times key by key; the same field: last write wins) and the history records what really changed. The HTTP server accepts bursts
   (backlog 256) and answers `503 SERVICE_UNAVAILABLE` instead of crashing if the database pool is exhausted.
-- **Photo/voice timetable reading** uses Google Gemini and is off unless `TIMUS_APP_MASJIDUZ_GEMINI_API_KEY` is set (needs Eldor's written approval; see `docs/CONTRACT.md` §9).
+- **Photo/voice timetable reading** uses Google Gemini and is off unless `TIMUS_APP_MASJIDUZ_GEMINI_API_KEY` is set (approved by Eldor with conditions, see `docs/CONTRACT.md` §9: the user is told before sending, nothing is stored, `AI_DAILY_LIMIT`, photo ≤ 5 MB, voice ≤ 60 s).
 
 ## Licence
 No open-source licence is granted: all rights reserved by the owner until they decide otherwise.

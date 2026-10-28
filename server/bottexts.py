@@ -11,7 +11,7 @@ REGION_NAMES = {
 
 MORE = {
     "uz": {
-        "m": "m", "km": "km", "no_times": "Jamoat vaqtlari hali kiritilmagan.", "updated": "🕒 Yangilangan: {d}",
+        "ai_notice": "🔒 Yuborgan rasm yoki ovozingiz oʻqish uchun Google (Gemini) ga joʻnatiladi va oʻqilgach saqlanmaydi.", "m": "m", "km": "km", "no_times": "Jamoat vaqtlari hali kiritilmagan.", "updated": "🕒 Yangilangan: {d}",
         "route": "🧭 Yoʻnalish", "upd_btn": "✏️ Vaqtlarni yangilash", "sub_btn": "🔔 Obuna boʻlish", "unsub_btn": "🔕 Obunani bekor qilish",
         "card_head": "Eng yaqin masjid:", "near_ask": "Eng yaqin masjidni topish uchun joylashuvingizni yuboring 👇",
         "near_none": "Yaqin atrofda masjid topilmadi.",
@@ -30,7 +30,7 @@ MORE = {
         "sub_offer": "🔔 Bu masjid vaqtlari oʻzgarsa, xabar olish",
     },
     "ru": {
-        "m": "м", "km": "км", "no_times": "Время джамаата ещё не указано.", "updated": "🕒 Обновлено: {d}",
+        "ai_notice": "🔒 Отправленные фото или голос передаются в Google (Gemini) для распознавания и после обработки не сохраняются.", "m": "м", "km": "км", "no_times": "Время джамаата ещё не указано.", "updated": "🕒 Обновлено: {d}",
         "route": "🧭 Маршрут", "upd_btn": "✏️ Обновить время", "sub_btn": "🔔 Подписаться", "unsub_btn": "🔕 Отписаться",
         "card_head": "Ближайшая мечеть:", "near_ask": "Чтобы найти ближайшую мечеть, отправьте свою геопозицию 👇",
         "near_none": "Поблизости мечетей не найдено.",
@@ -49,7 +49,7 @@ MORE = {
         "sub_offer": "🔔 Получать сообщения, если время этой мечети изменится",
     },
     "en": {
-        "m": "m", "km": "km", "no_times": "Congregation times have not been entered yet.", "updated": "🕒 Updated: {d}",
+        "ai_notice": "🔒 A photo or voice message you send is passed to Google (Gemini) to be read and is not kept afterwards.", "m": "m", "km": "km", "no_times": "Congregation times have not been entered yet.", "updated": "🕒 Updated: {d}",
         "route": "🧭 Directions", "upd_btn": "✏️ Update the times", "sub_btn": "🔔 Subscribe", "unsub_btn": "🔕 Unsubscribe",
         "card_head": "Nearest mosque:", "near_ask": "Share your location to find the nearest mosque 👇",
         "near_none": "No mosque found nearby.",

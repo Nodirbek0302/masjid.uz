@@ -111,6 +111,17 @@ def reserve(cfg, candidates):
     return None, soonest
 
 
+def reserve_reading(cfg):
+    """Books one reading against AI_DAILY_LIMIT (all users together, Tashkent day); -> seconds until the day ends when it is used up, else None."""
+    with _connect(cfg) as c:
+        c.execute("SELECT pg_advisory_xact_lock(%s)", (LOCK_ID,))
+        day = "(date_trunc('day', now() AT TIME ZONE 'Asia/Tashkent') AT TIME ZONE 'Asia/Tashkent')"
+        if c.execute("SELECT count(*) FROM ai_calls WHERE slot='reading' AND at >= " + day).fetchone()[0] >= cfg.ai_daily_limit:
+            return int(c.execute("SELECT extract(epoch FROM " + day + " + interval '1 day' - now())").fetchone()[0]) + 1
+        c.execute("INSERT INTO ai_calls(slot) VALUES ('reading')")
+    return None
+
+
 def rest(cfg, slot, seconds):
     with _connect(cfg) as c:
         c.execute("INSERT INTO ai_cooldown(slot, until) VALUES (%s, now() + make_interval(secs => %s)) "
@@ -293,6 +304,9 @@ def read(cfg, kind, data, mime):
     hit = _cached(key)
     if hit:
         return hit
+    left = reserve_reading(cfg)
+    if left:
+        raise Unavailable(left)                                  # the daily limit (AI_DAILY_LIMIT) is used up: no request goes to Google
     try:
         raw, slot = _one_reading(cfg, kind, data, mime, frozenset())
     except BadInput:

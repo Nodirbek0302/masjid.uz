@@ -139,7 +139,7 @@
     });
   }
 
-  function viewMap(v) {                              // which map everybody gets, and the pool of Yandex keys
+  function viewMap(v) {                              // which map the mobile app draws, and its pool of Yandex (MapKit) keys
     function call(method, path, body) { return api(method, path, body).then(function () { toast(T("adm.done")); render(); }).catch(fail); }
     api("GET", "/admin/map").then(function (m) {
       v.textContent = "";
@@ -148,9 +148,9 @@
           if (m.provider !== o[0]) call("POST", "/admin/map/provider", { provider: o[0] });
         } });
       }));
-      function stateOf(kind) { var e = m.effective[kind]; return e === "yandex" ? T("adm.map_state_yandex") : m.provider === "yandex" ? T("adm.map_state_fallback") : T("adm.map_state_osm"); }
-      var warn = m.provider === "yandex" && (m.effective.web !== "yandex" || m.effective.app !== "yandex");
-      var now = T("adm.map_web") + ": " + stateOf("web") + "  ·  " + T("adm.map_app") + ": " + stateOf("app");
+      var e = m.effective.app;
+      var warn = m.provider === "yandex" && e !== "yandex";
+      var now = T("adm.map_app") + ": " + (e === "yandex" ? T("adm.map_state_yandex") : m.provider === "yandex" ? T("adm.map_state_fallback") : T("adm.map_state_osm"));
       v.appendChild(el("div", { class: "card" }, [
         el("h3", { text: T("adm.map_title") }), el("p", { class: "muted", text: T("adm.map_hint") }), seg,
         el("p", { class: "now" + (warn ? " warn" : ""), text: now })
@@ -162,7 +162,7 @@
         var state = !k.enabled ? [T("adm.key_off"), "neutral"] : k.exhausted ? [T("adm.key_exhausted"), "warn"] : full ? [T("adm.key_full"), "warn"] : [T("adm.key_ok"), ""];
         var pct = Math.min(100, Math.round(100 * k.usersToday / k.dailyLimit));
         list.appendChild(el("div", { class: "keyrow" }, [
-          el("div", { class: "keyhead" }, [el("b", { text: k.label || ("#" + k.id) }), el("span", { class: "chip neutral", text: T(k.kind === "app" ? "adm.map_app" : "adm.map_web") }), el("code", { text: k.key }), el("span", { class: "chip " + state[1], text: state[0] })]),
+          el("div", { class: "keyhead" }, [el("b", { text: k.label || ("#" + k.id) }), el("code", { text: k.key }), el("span", { class: "chip " + state[1], text: state[0] })]),
           el("div", { class: "meter" }, [el("i", { style: "width:" + pct + "%" })]),
           el("div", { class: "muted", text: T("adm.key_users", { n: k.usersToday, max: k.dailyLimit }) }),
           el("div", { class: "actions" }, [
@@ -180,13 +180,12 @@
       });
       var key = el("input", { type: "password", placeholder: T("adm.key_ph"), autocomplete: "off", spellcheck: "false", maxlength: 200 });
       var label = el("input", { placeholder: T("adm.key_label_ph"), maxlength: 60 });
-      var kind = el("select", { "aria-label": T("adm.key_kind") }, [el("option", { value: "web", text: T("adm.kind_web") }), el("option", { value: "app", text: T("adm.kind_app") })]);
       var limit = el("input", { type: "number", min: 1, value: 25000, placeholder: T("adm.key_limit_ph") });
       list.appendChild(el("form", { class: "keyadd", onsubmit: function (e) {
         e.preventDefault();
         if (!key.value.trim()) return;
-        call("POST", "/admin/map/keys", { key: key.value.trim(), label: label.value, dailyLimit: +limit.value, kind: kind.value });
-      } }, [key, kind, label, limit, el("button", { class: "btn", text: T("adm.key_add") })]));
+        call("POST", "/admin/map/keys", { key: key.value.trim(), label: label.value, dailyLimit: +limit.value, kind: "app" });
+      } }, [key, label, limit, el("button", { class: "btn", text: T("adm.key_add") })]));
       v.appendChild(list);
     }).catch(fail);
   }

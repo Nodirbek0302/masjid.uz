@@ -14,6 +14,9 @@ birga saqlash. Ommaviy API shaxsiy ma'lumotni **ko'rsatmaydi**, faqat moderator 
 Telegram profili va IP bevosita o'zgarmas tarixga yozilmaydi: shaxsiy ma'lumotni so'rov bo'yicha tuzatish/o'chirish `actors`
 jadvalida bajariladi, tarix butunligi buzilmaydi.
 
+## Google (Gemini): rasm va ovozdan vaqt o'qish
+Foydalanuvchi jadval rasmini yoki ovozli xabarni yuborsa, fayl o'qish uchun **Google (Gemini API, generativelanguage.googleapis.com)** ga jo'natiladi. Bot va ilovalar buni yuborishdan oldin aytadi. Server faylni diskka, bazaga va loglarga yozmaydi; qayta ishlangach xotiradan o'chadi (faqat bir soatlik xotira keshi, fayl xeshi bo'yicha). Maxfiylik matnida Google ko'rsatilishi shart. Kunlik chegara: `TIMUS_APP_MASJIDUZ_AI_DAILY_LIMIT`.
+
 ## Ommaviy API
 - `creator_id` hech qachon qaytarilmaydi.
 - `/masjiduz/v1/mosques/{id}/history`: `actor` faqat rol (`user`, `moderator`, `osm`), qurilma ma'lumoti yo'q.
