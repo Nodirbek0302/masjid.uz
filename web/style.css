@@ -292,3 +292,11 @@ body.panel-open #view-fab{bottom:calc(var(--nav-h) + var(--panel-h,0px) + 14px)}
 @keyframes sp-y{from{opacity:0;transform:scaleY(0)}to{opacity:1;transform:none}}
 @keyframes sp-out{to{opacity:0;visibility:hidden}}
 @media(prefers-reduced-motion:reduce){#splash{display:none}}
+
+/* Yandex engine: DOM pins (names from zoom 13), the draggable chosen spot */
+#map .ym-pin{position:absolute;width:0;height:0;cursor:pointer}
+#map .ym-pin img{position:absolute;left:-18px;top:-18px;width:36px;height:36px}
+#map .ym-pin .ym-name{display:none;position:absolute;left:0;top:20px;transform:translateX(-50%);white-space:nowrap;font-size:12px;font-weight:600;color:#064e3b;text-shadow:0 0 3px #fff,0 0 3px #fff,0 0 3px #fff;pointer-events:none}
+:root[data-theme=dark] #map .ym-pin .ym-name{color:#d1fae5;text-shadow:0 0 3px #101416,0 0 3px #101416,0 0 3px #101416}
+#map.ym-labels .ym-pin .ym-name{display:block}
+#map .ym-pick{width:22px;height:22px;margin:-22px 0 0 -11px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);background:#059669;border:3px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.35)}

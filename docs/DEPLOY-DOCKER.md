@@ -139,3 +139,12 @@ Moderator paneli (`/admin.html`, faqat Telegram orqali) → **Xarita** yorlig'i:
 - **Yandex rad etsa:** klient `POST /api/map/yandex-failed {"key_id": N}` yuboradi; 3 ta turli qurilma xabar bersa kalit shu kunga to'xtatiladi
   (panelda «Yandex rad etdi», «Qayta urinish» tugmasi bilan qaytariladi).
 - Kalitlar panelda faqat qisman ko'rinadi (`ABCD…WXYZ`). Masjid ma'lumotlari va koordinatalar har doim OpenStreetMap'dan.
+
+### Klientlar Yandex'ni qanday chizadi
+- **Veb:** Yandex Maps JavaScript API v3 (`web/yandex-map.js`). Kalit sahifa yuklanganda `/api/config` dan olinadi. Yandex skripti yuklanmasa yoki
+  kalitni rad etsa, veb `POST /api/map/yandex-failed` yuboradi, javobda keyingi kalit (yangi sahifa bilan) yoki OpenStreetMap keladi, xarita bo'sh qolmaydi.
+  Yandex tanlangan paytdagina sahifa sarlavhalariga (CSP) Yandex manzillari va `'unsafe-eval'` qo'shiladi (uning vektor dvigateli talab qiladi);
+  OpenStreetMap tanlanganda CSP avvalgidek qattiq.
+- **Ilova:** Yandex MapKit. SDK kalitni jarayon boshida bir marta oladi, shuning uchun ilova serverdan olingan kalitni saqlaydi va keyingi ishga tushirishda
+  ishlatadi; o'sha vaqtgacha (yoki kalit almashganda) OpenStreetMap chiziladi. MapKit Flutter plaginida kalit rad etilishi Dart'ga bildirilmaydi, shuning uchun
+  ilovada almashtirish serverdagi kunlik limit (foydalanuvchi soni) va panelning "To'xtatish" tugmasi orqali ishlaydi; veb xabarlari ham kalitni to'xtatadi.

@@ -451,6 +451,20 @@ class Store:
                 return True
         return False
 
+    _map_flag = (0.0, False)
+
+    def map_uses_yandex(self):
+        """True while the admin has chosen Yandex (asked at most every 10 s: this runs for every response)."""
+        t, v = self._map_flag
+        if time.monotonic() - t > 10:
+            try:
+                with self.pool.connection() as c:
+                    v = c.execute("SELECT provider FROM map_settings").fetchone()["provider"] == "yandex"
+            except Exception:
+                v = False
+            self._map_flag = (time.monotonic(), v)
+        return v
+
     @staticmethod
     def _mask(k):
         return k[:4] + "…" + k[-4:] if len(k) > 10 else "…"
@@ -470,6 +484,7 @@ class Store:
             raise ApiError(400, "invalid_provider", "provider must be osm or yandex")
         with self.pool.connection() as c:
             c.execute("UPDATE map_settings SET provider=%s, updated_at=now()", (provider,))
+        self._map_flag = (0.0, False)         # the page headers follow the new choice at once
 
     def map_add_key(self, body):
         key = str(body.get("key") or "").strip()
@@ -694,10 +709,16 @@ def make_handler(cfg, store):
         def security_headers(self):
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "no-referrer")
+            ya, nets, ev = ("", "", "")
+            if store.map_uses_yandex():           # Yandex's scripts, tiles and 'unsafe-eval' (its vector engine needs it) are allowed only while it is the chosen map
+                ya, nets, ev = (" https://api-maps.yandex.ru https://*.api-maps.yandex.ru https://yastatic.net", " https://*.maps.yandex.net", " 'unsafe-eval'")
             self.send_header("Content-Security-Policy",
-                             "default-src 'self'; img-src 'self' data: blob: https://tiles.openfreemap.org https://upload.wikimedia.org https://thumb.wikimedia.org; "
-                             "connect-src 'self' https://tiles.openfreemap.org; worker-src 'self' blob:; "
-                             "style-src 'self' 'unsafe-inline'; script-src 'self' https://telegram.org; "
+                             "default-src 'self'; "
+                             "img-src 'self' data: blob: https://tiles.openfreemap.org https://upload.wikimedia.org https://thumb.wikimedia.org" + ya + nets + "; "
+                             "connect-src 'self' https://tiles.openfreemap.org" + ya + nets + "; "
+                             "worker-src 'self' blob:" + (ya + " data:" if ya else "") + "; "
+                             "style-src 'self' 'unsafe-inline'" + ya + "; "
+                             "script-src 'self' https://telegram.org" + ya + ev + "; "
                              "frame-ancestors 'self' https://web.telegram.org https://*.telegram.org")
 
         def read_timetable(self):

@@ -116,7 +116,7 @@
   var loadedBox = null, mosqueSeq = 0, moveTimer = null, userMoved = false, lastFC = emptyFC();
   function applyMosques() {
     var src = map && map.getSource("mosques");
-    if (src) src.setData(lastFC); else if (map) map.once("styledata", applyMosques);
+    if (src) src.setData(lastFC); else if (map && map.engine !== "yandex") map.once("styledata", applyMosques);
   }
   function fetchMosques(box) {                      // box = [west, south, east, north]
     var seq = ++mosqueSeq;
@@ -187,7 +187,8 @@
   function applyTheme() {
     document.documentElement.dataset.theme = isDark() ? "dark" : "light";
     var m = document.querySelector('meta[name="theme-color"]'); if (m) m.content = isDark() ? "#12211e" : "#047857";
-    if (map && rawStyle) map.setStyle(buildStyle());                       // the map is recoloured at the same view
+    if (map && map.engine === "yandex") map.setDark(isDark());
+    else if (map && rawStyle) map.setStyle(buildStyle());                       // the map is recoloured at the same view
   }
   function toggleTheme() { theme = isDark() ? "light" : "dark"; try { localStorage.setItem("theme", theme); } catch (e) {} applyTheme(); }
   if (darkMQ && darkMQ.addEventListener) darkMQ.addEventListener("change", function () { if (!theme) applyTheme(); });
@@ -420,17 +421,28 @@
 
   // The first mosque query and the map itself are only started when the map page is opened (the home page needs neither).
   var mapCreated = false;
-  function createMap() {
-    if (mapCreated) return;
-    mapCreated = true;
-    var start = mapStart;
-    var d = 0.1;                                                              // first mosque query right away, around the start position (~11 km window)
-    fetchMosques([start.center[0] - d, start.center[1] - d, start.center[0] + d, start.center[1] + d]);
-    configPromise.then(function (c) {
-      cfg = c;
-      var sp2 = c.style_url && c.style_url !== DEFAULT_STYLE ? fetch(c.style_url).then(function (r) { return r.json(); }) : stylePromise;
-      return sp2.then(function (style) { rawStyle = style; return buildStyle(); });
-    }).then(function (style) {
+  function mosqueDataUrl(color) {                                          // the pin as a picture for the Yandex engine's DOM markers
+    var im = mosqueIcon(color), c = document.createElement("canvas"); c.width = c.height = im.width; c.getContext("2d").putImageData(im, 0, 0);
+    return c.toDataURL("image/png");
+  }
+  function afterMap(start) {                                                // what follows once a map of either engine exists
+    var q = mapQuery, hasDeep = !!pendingMap.length;
+    var fns = pendingMap; pendingMap = []; fns.forEach(function (fn) { fn(); });
+    if (!q && !hasDeep) locate(start);
+    applyMosques();
+    map.on("dragstart", function () { userMoved = true; });
+    map.on("zoomstart", function (e) { if (e.originalEvent) userMoved = true; });
+    map.on("moveend", function () { clearTimeout(moveTimer); moveTimer = setTimeout(ensureMosques, 250); });
+    map.on("click", onMapClick);
+    ensureMosques();
+  }
+  function startYandex(m, start) {                                          // rejects on any trouble: the caller reports the key and falls back
+    return YandexMap.create({ key: m.yandex_key, container: "map", center: start.center, zoom: start.zoom, bounds: REGION, dark: isDark(), lang: I18N.lang(), icon: mosqueDataUrl })
+      .then(function (ym) { map = ym; afterMap(start); });
+  }
+  function startOsm(c, start) {
+    var sp2 = c.style_url && c.style_url !== DEFAULT_STYLE ? fetch(c.style_url).then(function (r) { return r.json(); }) : stylePromise;
+    return sp2.then(function (style) { rawStyle = style; return buildStyle(); }).then(function (style) {
       map = new maplibregl.Map({ container: "map", style: style, center: start.center, zoom: start.zoom, locale: mapLocale(),
         minZoom: 5, maxBounds: REGION, fadeDuration: 0, pixelRatio: Math.min(window.devicePixelRatio || 1, 2),
         attributionControl: { compact: true } });
@@ -441,21 +453,45 @@
       map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
       map.addControl(new maplibregl.GeolocateControl({ trackUserLocation: false }), "top-right");
       map.once("load", function () { map.resize(); });
-      map.on("dragstart", function () { userMoved = true; });
-      map.on("zoomstart", function (e) { if (e.originalEvent) userMoved = true; });
-      map.on("moveend", function () { clearTimeout(moveTimer); moveTimer = setTimeout(ensureMosques, 250); });
       map.on("mouseenter", "mosques", function () { map.getCanvas().style.cursor = "pointer"; });
       map.on("mouseleave", "mosques", function () { map.getCanvas().style.cursor = ""; });
-      map.on("click", onMapClick);
-      var q = mapQuery, hasDeep = !!pendingMap.length;
-      var fns = pendingMap; pendingMap = []; fns.forEach(function (fn) { fn(); });
-      if (!q && !hasDeep) locate(start);
+      afterMap(start);
       var errs = 0;
       map.on("error", function () {                   // tile/style/sprite request failures: say so instead of a silent blank map
         if (++errs >= 3 && !map.loaded()) mapProblem(T("map.err_tiles"));
       });
       map.on("idle", function () { if (map.loaded()) $("maperr").hidden = true; });
       setTimeout(function () { if (!map.loaded()) mapProblem(T("map.err_slow")); }, 20000);
+    });
+  }
+  // Yandex refused the key (or did not load): tell the server (it hands out the next key, or says OpenStreetMap) and carry on without a gap.
+  function yandexFailed(m) {
+    return api("POST", "/api/map/yandex-failed", { key_id: m.key_id }).then(function (r) { return r.map; }).catch(function () { return { provider: "osm" }; });
+  }
+  function createMap() {
+    if (mapCreated) return;
+    mapCreated = true;
+    var start = mapStart;
+    var d = 0.1;                                                              // first mosque query right away, around the start position (~11 km window)
+    fetchMosques([start.center[0] - d, start.center[1] - d, start.center[0] + d, start.center[1] + d]);
+    configPromise.then(function (c) {
+      cfg = c;
+      function osm() { return startOsm(c, start); }
+      function yandex(m, tries) {
+        return startYandex(m, start).catch(function () {
+          document.getElementById("map").textContent = "";
+          if (tries >= 2) return yandexFailed(m).then(function () { return osm(); });
+          return yandexFailed(m).then(function (next) {
+            // the Yandex script cannot take a second key in the same page: the next key needs a fresh page, OpenStreetMap does not
+            if (next && next.provider === "yandex" && next.yandex_key && next.key_id !== m.key_id) { try { sessionStorage.setItem("ytry", String(tries + 1)); } catch (e) {} location.reload(); return null; }
+            return osm();
+          });
+        });
+      }
+      var tries = 0;
+      try { tries = +sessionStorage.getItem("ytry") || 0; } catch (e) {}
+      if (c.map && c.map.provider === "yandex" && c.map.yandex_key && window.YandexMap) return yandex(c.map, tries);
+      return osm();
     }).catch(function () {
       mapProblem(T("map.err_style"));
     });
@@ -983,7 +1019,7 @@
         if (!r.items.length) { toast(T("nearest.none")); return; }
         var m = r.items[0];
         if (meMarker) meMarker.remove();
-        meMarker = new maplibregl.Marker({ element: el("div", { class: "me-dot" }) }).setLngLat([lon, lat]).addTo(map);
+        meMarker = newMarker({ element: el("div", { class: "me-dot" }) }).setLngLat([lon, lat]).addTo(map);
         toast(fromMap ? T("nearest.from_map") : T("nearest.btn") + ": " + (m.name || T("m.name_unknown")));
         openMosque(m.id, { dist: m.distance_m, fit: [[Math.min(lon, m.lon), Math.min(lat, m.lat)], [Math.max(lon, m.lon), Math.max(lat, m.lat)]] });
       }).catch(function (e) { done(); toast(errText(e)); });
@@ -1025,12 +1061,13 @@
   document.addEventListener("click", function (e) { if (!$("search").contains(e.target)) hideResults(); });
 
   // ---- add mosque
+  function newMarker(o) { return map.engine === "yandex" ? new map.Marker(o) : new maplibregl.Marker(o); }
   function clearPick() { if (pickMarker) { pickMarker.remove(); pickMarker = null; } }
   function setPicked(ll) {
     if (pickDone) { var f = pickDone; pickDone = null; f(ll); return; }
     picked = { lat: +ll.lat.toFixed(6), lng: +ll.lng.toFixed(6) };
     clearPick();
-    pickMarker = new maplibregl.Marker({ color: "#059669", draggable: true }).setLngLat([picked.lng, picked.lat]).addTo(map);
+    pickMarker = newMarker({ color: "#059669", draggable: true }).setLngLat([picked.lng, picked.lat]).addTo(map);
     pickMarker.on("dragend", function () { var p = pickMarker.getLngLat(); picked = { lat: +p.lat.toFixed(6), lng: +p.lng.toFixed(6) }; showAddForm(); });
     showAddForm();
     revealPoint(picked.lng, picked.lat);          // keep the chosen point above the sheet
