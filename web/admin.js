@@ -58,8 +58,10 @@
   };
   document.querySelectorAll("#tabs button").forEach(function (b) { b.onclick = function () { tab = b.getAttribute("data-tab"); render(); }; });
 
-  function act(id, action, note) {
-    return api("POST", "/admin/mosques/" + id + "/" + action, { note: note || "" })
+  function act(id, action, note, kind) {
+    var body = { note: note || "" };
+    if (kind) body.kind = kind;                       // dismiss: reject only this kind of report
+    return api("POST", "/admin/mosques/" + id + "/" + action, body)
       .then(function () { toast(T("adm.done")); render(); }).catch(fail);
   }
   function actionRow(m, actions) {
@@ -67,7 +69,7 @@
     var btns = actions.map(function (a) {
       return el("button", { class: "btn " + (a.cls || ""), type: "button", text: a.label, onclick: function () {
         if (a.confirm && !window.confirm(a.confirm)) return;
-        act(m.id || m.mosqueId, a.action, note.value);
+        act(m.id || m.mosqueId, a.action, note.value, a.action === "dismiss" ? m.kind : null);
       } });
     });
     return el("div", { class: "actions-wrap" }, [note, el("div", { class: "actions" }, btns)]);
@@ -83,7 +85,7 @@
           el("h3", { text: (g.mosqueName || T("adm.no_name")) + " · " + T("rk." + g.kind) + " × " + g.count }),
           el("div", { class: "muted" }, [statusChip(g.mosqueStatus), " ", mapLink(g, T("adm.on_map"))]),
           el("ul", {}, g.reports.map(function (x) { return el("li", { text: x.reason + "  (" + I18N.fmtDate(x.createdAt) + ")" }); })),
-          actionRow({ id: g.mosqueId }, [
+          actionRow({ id: g.mosqueId, kind: g.kind }, [
             { label: T("adm.archive"), action: "archive", cls: "danger", confirm: T("adm.confirm_archive") },
             { label: T("adm.dismiss"), action: "dismiss", cls: "ghost" },
             { label: T("adm.verify"), action: "verify", cls: "ghost" }
@@ -93,22 +95,31 @@
     }).catch(fail);
   }
   function viewList(v, status, actions) {
-    api("GET", "/admin/mosques?status=" + status).then(function (r) {
-      v.textContent = "";
-      v.appendChild(el("p", { class: "muted", text: T("adm.total", { n: r.total }) }));
-      r.items.forEach(function (m) {
-        v.appendChild(el("div", { class: "card" }, [
-          el("h3", { text: m.name || T("adm.no_name") }),
-          el("div", { class: "muted" }, [m.origin + " · v" + m.version + " · " + I18N.fmtDate(m.updatedAt) + " · ", mapLink(m, T("adm.on_map"))]),
-          m.verificationNote ? el("div", { class: "muted", text: T("adm.evidence", { note: m.verificationNote }) }) : null,
-          actionRow(m, actions)
-        ]));
+    var head = el("p", { class: "muted" }), rows = el("div", {}), more = el("div", {});
+    function page(cursor) {
+      return api("GET", "/admin/mosques?status=" + status + "&limit=50" + (cursor ? "&cursor=" + encodeURIComponent(cursor) : "")).then(function (r) {
+        head.textContent = T("adm.total", { n: r.total });
+        r.items.forEach(function (m) {
+          rows.appendChild(el("div", { class: "card" }, [
+            el("h3", { text: m.name || T("adm.no_name") }),
+            el("div", { class: "muted" }, [m.origin + " · v" + m.version + " · " + I18N.fmtDate(m.updatedAt) + " · ", mapLink(m, T("adm.on_map"))]),
+            m.verificationNote ? el("div", { class: "muted", text: T("adm.evidence", { note: m.verificationNote }) }) : null,
+            actionRow(m, actions)
+          ]));
+        });
+        more.textContent = "";
+        if (r.nextCursor) more.appendChild(el("button", { class: "btn ghost", type: "button", text: T("act.more"), onclick: function (ev) {
+          var b = ev.currentTarget; b.disabled = true;
+          page(r.nextCursor).catch(function (e) { b.disabled = false; fail(e); });
+        } }));
       });
-    }).catch(fail);
+    }
+    page(null).then(function () { v.textContent = ""; v.appendChild(head); v.appendChild(rows); v.appendChild(more); }).catch(fail);
   }
   function who(h) {                                   // moderator-only detail: Telegram name / device / app version
-    if (h.actor === "admin" || (h.actor || "").indexOf("admin:") === 0) return T("adm.who_moderator");
-    if (!h.actor) return T("adm.who_system");
+    if (h.actor === "moderator" || h.actor === "admin" || (h.actor || "").indexOf("admin:") === 0) return T("adm.who_moderator");
+    if (!h.actor || h.actor === "system") return T("adm.who_system");
+    if (h.actor === "osm") return T("role.osm");
     var parts = [h.actorKind === "telegram" ? T("adm.who_telegram") + (h.tgUsername ? " @" + h.tgUsername : h.tgFirstName ? " " + h.tgFirstName : "")
       : h.actorKind === "mobile" ? T("adm.who_mobile") : T("adm.who_web")];
     if (h.platform && h.platform !== "web") parts.push(h.platform);

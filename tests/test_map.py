@@ -163,7 +163,9 @@ class Pool(MapCase):
         self.assertEqual([k["usersToday"] for k in a["keys"]], [2, 1])
         # clients tell that Yandex refused key two: three different devices switch it off for the day
         kid = a["keys"][1]["id"]
+        self.adm("PATCH", "/keys/%d" % kid, {"dailyLimit": 10})                              # room for the reporting clients (key one is full)
         for i, who in enumerate(("b0000001-1", "b0000002-1", "b0000003-1")):
+            self.assertEqual(self.cfg_map(who)["yandexKey"], K2)                             # only a client that was handed the key can report it
             s, r = self.call("POST", "/map/yandex-failed", {"keyId": kid}, client=who)
             self.assertEqual((s, r["data"]["exhausted"]), (200, i == 2))
             self.assertEqual(set(r["data"]), {"exhausted", "map"})
@@ -204,6 +206,8 @@ class Pool(MapCase):
     def test_three_distinct_clients_exhaust_a_key_but_one_client_repeating_does_not(self):
         self.yandex_on({"key": K1}, {"key": K2})
         kid = self.adm("GET", "")[1]["data"]["keys"][0]["id"]
+        for who in ("d0000001-1", "d0000002-1", "d0000003-1"):
+            self.assertEqual(self.cfg_map(who)["yandexKey"], K1)
         for _ in range(5):
             r = self.call("POST", "/map/yandex-failed", {"keyId": kid}, client="d0000001-1")[1]["data"]
         self.assertFalse(r["exhausted"])
@@ -213,6 +217,56 @@ class Pool(MapCase):
         self.assertTrue(r["exhausted"])
         self.assertEqual(r["map"]["yandexKey"], K2)                                         # the next key at once
         self.assertEqual(self.cfg_map("d0000009-1")["yandexKey"], K2)                       # everybody now gets key two
+
+    def test_made_up_clients_cannot_exhaust_a_key(self):
+        self.yandex_on({"key": K1}, {"key": K2})
+        a = self.adm("GET", "")[1]["data"]["keys"]
+        kid = a[0]["id"]
+        for who in ("e10000001-1", "e10000002-1", "e10000003-1", "e10000004-1", "e10000005-1"):      # never handed a key: their reports count for nothing
+            r = self.call("POST", "/map/yandex-failed", {"keyId": kid}, client=who)[1]["data"]
+            self.assertFalse(r["exhausted"])
+        self.assertEqual(db("SELECT count(*) FROM map_key_reports"), [(0,)])
+        self.assertFalse(self.adm("GET", "")[1]["data"]["keys"][0]["exhausted"])
+        self.assertEqual(self.cfg_map("e20000001-1")["yandexKey"], K1)                           # the pool is untouched
+        # a client that holds key ONE cannot report key TWO either, and a device client cannot report a web key
+        for who in ("e20000001-1", "e20000002-1", "e20000003-1"):
+            self.cfg_map(who)
+            r = self.call("POST", "/map/yandex-failed", {"keyId": a[1]["id"]}, client=who)[1]["data"]
+            self.assertFalse(r["exhausted"])
+        self.assertEqual(db("SELECT count(*) FROM map_key_reports"), [(0,)])
+        for dev in ("devicedevice0021", "devicedevice0022", "devicedevice0023"):
+            r = self.call("POST", "/map/yandex-failed", {"keyId": kid}, headers={"X-Device-Id": dev})[1]["data"]
+            self.assertFalse(r["exhausted"])
+        self.assertEqual(db("SELECT count(*) FROM map_key_reports"), [(0,)])
+        # the genuine three do exhaust it
+        for who in ("e20000001-1", "e20000002-1", "e20000003-1"):
+            r = self.call("POST", "/map/yandex-failed", {"keyId": kid}, client=who)[1]["data"]
+        self.assertTrue(r["exhausted"])
+
+    def test_map_choice_uses_its_own_advisory_lock(self):
+        import inspect
+        src = inspect.getsource(helpers.app.Store.map_choice)
+        self.assertIn("727005", src)
+        self.assertNotIn("727002", src)                                                          # that one serialises duplicate checks of new mosques
+        self.yandex_on({"key": K1})
+        import threading
+        with helpers.psycopg.connect(helpers.TEST_URL, autocommit=True) as c:
+            c.execute("SELECT pg_advisory_lock(727002)")                                          # a mosque being added holds this
+            out = []
+            t = threading.Thread(target=lambda: out.append(self.cfg_map("e30000001-1")))
+            t.start(); t.join(5)
+            self.assertFalse(t.is_alive())
+            self.assertEqual(out[0]["yandexKey"], K1)                                             # not blocked by it
+            c.execute("SELECT pg_advisory_unlock(727002)")
+        with helpers.psycopg.connect(helpers.TEST_URL, autocommit=True) as c:
+            c.execute("SELECT pg_advisory_lock(727005)")
+            out = []
+            t = threading.Thread(target=lambda: out.append(self.cfg_map("e30000002-1")))
+            t.start(); t.join(1)
+            self.assertTrue(t.is_alive())                                                         # but it does wait for its own lock
+            c.execute("SELECT pg_advisory_unlock(727005)")
+            t.join(5)
+            self.assertFalse(t.is_alive())
 
     def test_failed_report_validation(self):
         self.yandex_on({"key": K1})
@@ -241,6 +295,7 @@ class Pool(MapCase):
         # the app's only key is refused: the app falls back to OSM, the web keeps its own key
         kid = a["keys"][1]["id"]
         for who in ("devicedevice0002", "devicedevice0003", "devicedevice0004"):
+            self.assertEqual(self.cfg_map("d0000009-1", headers={"X-Device-Id": who})["yandexKey"], "APP-KEY-1234567890")
             r = self.call("POST", "/map/yandex-failed", {"keyId": kid}, client="d0000009-1", headers={"X-Device-Id": who})[1]["data"]
         self.assertEqual(r["map"], {"provider": "osm"})
         self.assertEqual(self.cfg_map("d0000002-1")["yandexKey"], "WEB-KEY-1234567890")

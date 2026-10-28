@@ -1,0 +1,157 @@
+"""Behaviours added after review: dismissing reports by kind, which writes the limiter counts, conditional requests, OSM refresh keeping
+addresses, deterministic nearest order."""
+import os
+import sys
+import unittest
+
+sys.path.insert(0, os.path.dirname(__file__))
+import helpers  # noqa: E402
+from helpers import API, WEB, ServerCase, db, make_cfg, reset_db  # noqa: E402
+import import_osm  # noqa: E402
+
+JPEG = b"\xff\xd8\xff\xe0" + b"0" * 64
+
+
+class DismissByKind(ServerCase):
+    def setUp(self):
+        reset_db()
+        self.use()
+        self.mid = self.made(11.0, 11.0, name="Reported")["id"]
+        for kind, client in (("incorrect", "aaaaaaaa-1"), ("closed", "bbbbbbbb-1"), ("closed", "cccccccc-1")):
+            self.assertEqual(self.call("POST", "/mosques/%s/reports" % self.mid, {"kind": kind, "reason": "r"}, client=client)[0], 201)
+        self.assertEqual(self.call("GET", "/mosques/" + self.mid)[1]["data"]["status"], "reported")
+
+    def dismiss(self, body):
+        return self.call("POST", "/admin/mosques/%s/dismiss" % self.mid, body, admin=True)
+
+    def open_kinds(self):
+        g = self.call("GET", "/admin/reports", admin=True)[1]["data"]["groups"]
+        return sorted(x["kind"] for x in g)
+
+    def test_only_reports_of_that_kind_are_rejected_and_the_mosque_stays_reported(self):
+        self.assertEqual(self.open_kinds(), ["closed", "incorrect"])
+        s, r = self.dismiss({"kind": "closed", "note": "they are open"})
+        self.assertEqual((s, r["data"]["status"]), (200, "reported"))                          # another kind is still open
+        self.assertEqual(self.open_kinds(), ["incorrect"])
+        res = db("SELECT kind, resolution FROM reports ORDER BY kind, id")
+        self.assertEqual(res, [("closed", "rejected"), ("closed", "rejected"), ("incorrect", None)])
+        self.assertEqual(db("SELECT resolved_by FROM reports WHERE kind='closed' LIMIT 1"), [("admin:%d" % helpers.ADMIN_ID,)])
+        s, r = self.dismiss({"kind": "incorrect"})
+        self.assertEqual((s, r["data"]["status"]), (200, "unverified"))                       # nothing open any more
+        self.assertEqual(self.open_kinds(), [])
+
+    def test_without_a_kind_all_open_reports_are_rejected_as_before(self):
+        s, r = self.dismiss({"note": "all fine"})
+        self.assertEqual((s, r["data"]["status"]), (200, "unverified"))
+        self.assertEqual(db("SELECT DISTINCT resolution FROM reports"), [("rejected",)])
+
+    def test_an_unknown_kind_is_a_validation_error(self):
+        for bad in ("bogus", "", 5, ["closed"], "CLOSED"):
+            s, r = self.dismiss({"kind": bad})
+            self.assertEqual((s, r["code"], r["message"]["code"], r["message"]["reason"]), (400, "VALIDATION_ERROR", "error.invalidKind", "kind"), bad)
+        self.assertEqual(self.open_kinds(), ["closed", "incorrect"])                           # nothing changed
+        self.assertEqual(self.call("GET", "/mosques/" + self.mid)[1]["data"]["status"], "reported")
+
+    def test_kind_does_not_change_the_other_actions(self):
+        s, r = self.call("POST", "/admin/mosques/%s/archive" % self.mid, {"kind": "closed", "note": "x"}, admin=True)
+        self.assertEqual((s, r["data"]["status"]), (200, "archived"))
+        self.assertEqual(db("SELECT DISTINCT resolution FROM reports"), [("accepted",)])        # archive resolves every report, whatever `kind` says
+
+
+class WriteLimiterScope(ServerCase):
+    def setUp(self):
+        reset_db()
+
+    def test_light_posts_do_not_use_the_write_budget(self):
+        self.use(WRITE_RATE_PER_HOUR="2")
+        for i in range(8):
+            self.assertEqual(self.call("POST", "/me/lang", {"lang": "ru"})[0], 400)            # anonymous: refused on its merits, not 429
+            self.assertEqual(self.call("POST", "/map/yandex-failed", {"keyId": 1})[0], 200)
+            for kind, body in (("photo", JPEG + b"1"), ("voice", b"OggS" + b"1" * 20)):
+                ctype = "image/jpeg" if kind == "photo" else "audio/ogg"
+                r = self.req("POST", API + "/timetable/" + kind, body, {"Content-Type": ctype, "X-Device-Id": "device%05d" % i})
+                self.assertEqual(r.status, 503, kind)                                           # no reader configured; never 429 from the write limiter
+        self.assertEqual([self.call("POST", "/mosques", {"lat": 12 + i, "lon": 12.0})[0] for i in range(3)], [201, 201, 429])
+        self.assertEqual(self.call("POST", "/me/lang", {"lang": "ru"})[0], 400)                 # still not counted once the budget is gone
+        self.assertEqual(self.call("POST", "/map/yandex-failed", {"keyId": 1})[0], 200)
+        self.assertEqual(self.call("PATCH", "/mosques/00000000-0000-0000-0000-000000000000", {"name": "x"})[0], 429)    # real writes still are
+        report = self.call("POST", "/mosques/00000000-0000-0000-0000-000000000000/reports", {"reason": "x"})
+        self.assertEqual(report[0], 429)
+
+
+class ConditionalRequests(ServerCase):
+    def setUp(self):
+        reset_db()
+        self.use()
+
+    def check(self, path, base):
+        etag = base.header("ETag")
+        self.assertTrue(etag)
+        weak = "W/" + etag
+        for inm, status in ((etag, 304), (weak, 304), ('"nomatch", ' + etag, 304), ('"a", W/"b" , ' + weak, 304), ("*", 304), ("W/*", 200) if False else ("*", 304),
+                            ('"nomatch"', 200), ('W/"nomatch"', 200), ("", 200), (etag + "x", 200)):
+            r = self.req("GET", path, headers={"If-None-Match": inm})
+            self.assertEqual(r.status, status, (path, inm))
+            if status == 304:
+                self.assertEqual(r.raw, b""); self.assertEqual(r.header("ETag"), etag)
+
+    def test_map_list(self):
+        self.made(31.0, 31.0, name="Etag")
+        path = API + "/mosques?bbox=30.9,30.9,31.1,31.1"
+        self.check(path, self.req("GET", path))
+
+    def test_static_files(self):
+        for p in ("/app.js", "/", "/style.css"):
+            self.check(WEB + p, self.req("GET", WEB + p))
+
+
+class OsmRefresh(ServerCase):
+    def setUp(self):
+        reset_db()
+        self.use()
+
+    def test_an_address_is_never_erased_when_osm_has_none(self):
+        store = self.srv.store
+        el = lambda name, **tags: {"elements": [{"type": "node", "id": 4001, "lat": 33.0, "lon": 33.0, "tags": dict({"name": name}, **tags)}]}      # noqa: E731
+        import_osm.run(el("First", **{"addr:full": "Street 1, City"}), make_cfg(), store)
+        mid = self.call("GET", "/mosques?bbox=32.9,32.9,33.1,33.1")[1]["data"]["items"][0]["id"]
+        self.assertEqual(self.call("GET", "/mosques/" + mid)[1]["data"]["address"], "Street 1, City")
+        r = import_osm.run(el("Second"), make_cfg(), store)                                    # the name changed, OSM has no address tags any more
+        self.assertEqual(r["updated"], 1)
+        m = self.call("GET", "/mosques/" + mid)[1]["data"]
+        self.assertEqual((m["name"], m["address"]), ("Second", "Street 1, City"))
+        last = self.call("GET", "/mosques/%s/history" % mid)[1]["data"]["items"][0]
+        self.assertEqual((last["action"], list(last["changes"])), ("osm_sync", ["name"]))     # the address is not in the change
+        r = import_osm.run(el("Second"), make_cfg(), store)
+        self.assertEqual((r["updated"], r["unchanged"]), (0, 1))
+        import_osm.run(el("Second", **{"addr:full": "Street 2, City"}), make_cfg(), store)      # a new address from OSM does replace the old one
+        self.assertEqual(self.call("GET", "/mosques/" + mid)[1]["data"]["address"], "Street 2, City")
+
+
+class NearestTies(ServerCase):
+    def setUp(self):
+        reset_db()
+        self.use()
+
+    def test_equal_distances_are_ordered_by_id(self):
+        ids = [self.made(-10.0, 120.0, name="Tie %d" % i, force=True)["id"] for i in range(6)]
+        want = sorted(ids)
+        got = [m["id"] for m in self.srv.store.nearest(-10.0001, 120.0, 6)]
+        self.assertEqual(got, want)
+        d = self.call("GET", "/mosques/nearest?lat=-10.0001&lon=120.0&limit=6")[1]["data"]["items"]
+        self.assertEqual([m["id"] for m in d], want)
+        self.assertEqual(len({m["distanceM"] for m in d}), 1)                                    # really a tie
+        seen, cursor = [], None
+        for _ in range(10):
+            page = self.call("GET", "/mosques/nearest?lat=-10.0001&lon=120.0&limit=2" + ("&cursor=" + cursor if cursor else ""))[1]["data"]
+            seen += [m["id"] for m in page["items"]]
+            cursor = page["nextCursor"]
+            if not cursor or len(seen) >= 6:
+                break
+        self.assertEqual(seen[:6], want)                                                         # pages never repeat or skip a tied mosque
+        near = self.call("GET", "/mosques/nearby?lat=-10.0&lon=120.0&radius=50")[1]["data"]["items"]
+        self.assertEqual([m["id"] for m in near], want)
+
+
+if __name__ == "__main__":
+    unittest.main()

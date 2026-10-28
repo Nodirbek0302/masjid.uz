@@ -107,7 +107,7 @@ def run(data, cfg, store=None):
                     unchanged += 1
                     continue
                 version = row["version"] + 1
-                cur.execute("UPDATE mosques SET lat=%s, lon=%s, name=%s, address=%s, name_search=%s, version=%s, updated_at=now() WHERE id=%s",
+                cur.execute("UPDATE mosques SET lat=%s, lon=%s, name=%s, address=COALESCE(%s, address), name_search=%s, version=%s, updated_at=now() WHERE id=%s",
                             (lat, lon, name, addr, translit.search_key(name), version, row["id"]))
                 store._history(cur, str(row["id"]), version, "osm_sync", "import:osm", changes, "Refreshed from OpenStreetMap " + ref)
                 updated += 1

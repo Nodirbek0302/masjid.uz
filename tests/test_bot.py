@@ -419,6 +419,83 @@ class BotFlow(unittest.TestCase):
         n3.tick(local(tt["maghrib"] - 0.2) + timedelta(days=3))
         self.assertIsNone(self.bot.db.user(555)); self.assertTrue(self.bot.db.user(556)); self.assertEqual(len(sent_to(556)), 1)
 
+    def test_a_passing_send_failure_gives_the_claim_back_and_the_next_tick_retries(self):
+        import prayertimes as P
+        from datetime import datetime, timedelta, timezone
+        tt = P.times(2026, 10, 26, *P.REGIONS[0])
+        local = lambda h: datetime(2026, 10, 26, tzinfo=timezone.utc) + timedelta(hours=h - 5)      # noqa: E731
+        self.bot.db.set_user(555, region=0, daily=True, before_prayer=True, lang="uz")
+        state = {"fail": True}
+        def api(method, **kw):
+            if state["fail"]:
+                raise self.botmod.TelegramError(method, 429, "Too Many Requests")
+            self.sent.append((method, kw))
+        n = self.botmod.Notifier(api, self.bot.db); n.pause = 0
+        n.tick(local(tt["fajr"] - 0.4))                                                             # the daily message fails for a passing reason
+        self.assertEqual(self.sent, [])
+        self.assertEqual(raw_db("SELECT count(*) FROM bot_sent"), [(0,)])                           # the claim was given back
+        self.assertTrue(self.bot.db.user(555))
+        state["fail"] = False
+        n.tick(local(tt["fajr"] - 0.35))                                                            # the same Notifier retries at the next tick
+        self.assertEqual(len([1 for m, kw in self.sent if "Bugungi" in kw["text"]]), 1)
+        n.tick(local(tt["fajr"] - 0.3)); n.tick(local(tt["fajr"] - 0.3))
+        self.assertEqual(len([1 for m, kw in self.sent if "Bugungi" in kw["text"]]), 1)             # and then exactly once
+        # the same for a before-prayer reminder
+        self.sent.clear(); state["fail"] = True
+        n.tick(local(tt["asr"] - 0.2))
+        self.assertEqual(self.sent, [])
+        self.assertEqual(raw_db("SELECT count(*) FROM bot_sent WHERE key LIKE 'pre:%%'"), [(0,)])
+        state["fail"] = False
+        n.tick(local(tt["asr"] - 0.15))
+        self.assertEqual(len([1 for m, kw in self.sent if "Asr" in kw["text"]]), 1)
+        n.tick(local(tt["asr"] - 0.1))
+        self.assertEqual(len([1 for m, kw in self.sent if "Asr" in kw["text"]]), 1)
+        # a restarted bot (fresh Notifier) also finds nothing left to claim twice
+        n2 = self.notifier(); total = len(self.sent)
+        n2.tick(local(tt["asr"] - 0.12)); self.assertEqual(len(self.sent), total)
+
+    def test_a_blocked_user_is_forgotten_not_retried(self):
+        import prayertimes as P
+        from datetime import datetime, timedelta, timezone
+        tt = P.times(2026, 10, 26, *P.REGIONS[0])
+        self.bot.db.set_user(555, region=0, daily=True, lang="uz")
+        def api(method, **kw):
+            raise self.botmod.TelegramError(method, 403, "Forbidden: bot was blocked by the user")
+        n = self.botmod.Notifier(api, self.bot.db); n.pause = 0
+        n.tick(datetime(2026, 10, 26, tzinfo=timezone.utc) + timedelta(hours=tt["fajr"] - 0.4 - 5))
+        self.assertIsNone(self.bot.db.user(555))
+        self.assertEqual(raw_db("SELECT count(*) FROM bot_sent"), [(0,)])
+
+    def test_unclaim_gives_exactly_that_claim_back(self):
+        db_ = self.bot.db
+        self.assertTrue(db_.claim(555, "daily", "2026-10-26"))
+        self.assertFalse(db_.claim(555, "daily", "2026-10-26"))
+        self.assertTrue(db_.claim(555, "pre:asr", "2026-10-26"))
+        db_.unclaim(555, "daily", "2026-10-26")
+        self.assertTrue(db_.claim(555, "daily", "2026-10-26"))                                       # claimable again
+        self.assertFalse(db_.claim(555, "pre:asr", "2026-10-26"))                                    # the other claim is untouched
+        db_.unclaim(555, "nothing", "2026-10-26")                                                    # no claim: no error
+
+    def test_purge_survives_concurrent_changes_to_its_dictionaries(self):
+        import collections
+        import time
+        stop = threading.Event()
+        def churn():
+            i = 0
+            while not stop.is_set():
+                i += 1
+                self.bot.state[i] = {"step": "await_times", "ts": 0}
+                self.bot.msg_log[i] = collections.deque([0])
+                self.bot.photo_log[i] = collections.deque([0])
+                self.bot.state.pop(i - 50, None); self.bot.msg_log.pop(i - 50, None); self.bot.photo_log.pop(i - 50, None)
+        t = threading.Thread(target=churn); t.start()
+        try:
+            end = time.time() + 1.0
+            while time.time() < end:
+                self.bot.purge()
+        finally:
+            stop.set(); t.join()
+
     def test_idle_tick_with_many_users_is_fast(self):
         import time
         from datetime import datetime, timezone

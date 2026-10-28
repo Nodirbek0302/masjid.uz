@@ -108,7 +108,7 @@ Failure → `401 UNAUTHORIZED`; 10 failures / 10 min / IP → `429`. Every actio
 * `GET /admin/map` → `{"provider": "osm"|"yandex", "keys": [{"id","label","kind": "web"|"app","key": "ABCD…WXYZ" (masked),"dailyLimit","enabled","exhausted","usersToday"}], "effective": {"web": "osm"|"yandex", "app": "osm"|"yandex"}}`
 * `POST /admin/map/provider` body `{"provider": "osm"|"yandex"}` → the same as `GET /admin/map`
 * `POST /admin/map/keys` body `{"key", "label", "kind": "web"|"app", "dailyLimit": 25000}` → 201 (`error.invalidKey`, `error.keyExists`, `error.invalidKind`, `error.invalidLimit`); `PATCH /admin/map/keys/{id}` body any of `enabled`, `dailyLimit`, `label`, `reset: true`; `POST /admin/map/keys/{id}/delete`
-* `POST /admin/mosques/{id}/archive|restore|verify|dismiss` body `{"note"}` (`verify` requires a note) → mosque object.
+* `POST /admin/mosques/{id}/archive|restore|verify|dismiss` body `{"note", "kind"}` (`verify` requires a note; `kind` only for `dismiss`: only the open reports of that kind are rejected, others keep the mosque `reported`) → mosque object.
 
 ## 5. Web client
 

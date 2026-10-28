@@ -122,14 +122,28 @@ class Pool(ReaderCase):
             gemini.read_photo(two_models(), photo(), "image/jpeg")
         self.assertEqual(fake.slots(), ["gemini:m1#0", "gemini:m2#0"])
 
-    def test_several_keys_add_their_limits_up_and_a_model_goes_through_all_its_keys_first(self):
+    def test_several_keys_add_their_limits_up_and_the_second_opinion_comes_from_another_model(self):
         cfg = make_cfg(GEMINI_API_KEY="k1, k2", GEMINI_MODELS="m1:5:100,m2:5:100")
         self.assertEqual([s["id"] for s in aipool.slots(cfg, "image")], ["gemini:m1#0", "gemini:m1#1", "gemini:m2#0", "gemini:m2#1"])
         fake = self.use(Provider())
         for _ in range(4):
-            gemini.read_photo(cfg, photo(), "image/jpeg")          # the first reading is cross-checked on the OTHER key of the same model
-        self.assertEqual(fake.slots(), ["gemini:m1#0", "gemini:m1#1"] * 4)
-        self.assertEqual(db("SELECT slot, count(*) FROM ai_calls GROUP BY slot ORDER BY slot"), [("gemini:m1#0", 4), ("gemini:m1#1", 4)])
+            gemini.read_photo(cfg, photo(), "image/jpeg")          # first reading on m1 (key 0), cross-check on ANOTHER model, never another key of m1
+        self.assertEqual(fake.slots(), ["gemini:m1#0", "gemini:m2#0"] * 4)
+        fake.calls.clear()
+        gemini.read_photo(cfg, photo(), "image/jpeg")              # key 0 of both models is at its 80 %: the second keys take over
+        self.assertEqual(fake.slots(), ["gemini:m1#1", "gemini:m2#1"])
+
+    def test_another_key_of_the_same_model_is_used_only_when_no_other_model_exists(self):
+        cfg = make_cfg(GEMINI_API_KEY="k1,k2", GEMINI_MODELS="m1:5:100")
+        fake = self.use(Provider())
+        gemini.read_photo(cfg, photo(), "image/jpeg")
+        self.assertEqual(fake.slots(), ["gemini:m1#0", "gemini:m1#1"])
+        # with a second model that is resting, the other key of m1 is NOT used for the cross-check... it is the only one left, so it is
+        cfg2 = make_cfg(GEMINI_API_KEY="k1,k2", GEMINI_MODELS="m1:15:500,m2:15:500")
+        db("INSERT INTO ai_cooldown(slot, until) VALUES ('gemini:m2#0', now() + interval '1 hour'), ('gemini:m2#1', now() + interval '1 hour')")
+        fake.calls.clear()
+        gemini.read_photo(cfg2, photo(), "image/jpeg")
+        self.assertEqual(fake.slots(), ["gemini:m1#0", "gemini:m1#1"])
 
     def test_per_minute_limit_is_respected_at_80_percent(self):
         fake = self.use(Provider())
@@ -267,7 +281,8 @@ class SecondOpinion(ReaderCase):
         fake = self.use(Provider(lambda s, k, n: answers[s["model"]]))
         r = gemini.read_photo(self.cfg(), photo(), "image/jpeg")
         self.assertEqual(fake.slots(), ["gemini:m1#0", "gemini:m2#0"])        # the second opinion comes from ANOTHER slot
-        self.assertEqual((r["times"], r["complete"], r["warnings"], r["alt"]), (GOOD, True, [], []))
+        self.assertEqual((r["times"], r["complete"], r["alt"]), (GOOD, False, []))        # only one model could read it: the user checks
+        self.assertTrue(any("only one model" in w for w in r["warnings"]))
 
     def test_first_misses_one_time_second_has_all_five_marked_not_complete(self):
         answers = {"m1": dict(GOOD, isha=None, unclear=["isha"]), "m2": dict(GOOD)}
@@ -373,11 +388,30 @@ class Provider_HTTP(ReaderCase):
         self.assertEqual(refusal(raising(429, b'{"details":[{"retryDelay":"17s"}]}')).cooldown_s, 17)
         self.assertGreaterEqual(refusal(raising(429)).cooldown_s, 5)
         self.assertEqual(refusal(raising(429, b"GenerateRequestsPerDayPerProjectPerModel")).cooldown_s, 6 * 3600)
-        for code in (400, 401, 403, 404):
+        for code in (401, 403, 404):
             self.assertEqual(refusal(raising(code)).cooldown_s, 600, code)
+        for body in (b'{"error": {"message": "API key not valid. Please pass a valid API key."}}', b"models/zzz is not found", b"PERMISSION_DENIED",
+                     b"model is not supported for generateContent", b"invalid model name"):
+            self.assertEqual(refusal(raising(400, body)).cooldown_s, 600, body)           # a 400 about the key or the model rests the slot
         self.assertEqual(refusal(raising(500)).cooldown_s, 15)
         self.assertEqual(refusal(lambda req, timeout=None: (_ for _ in ()).throw(urllib.error.URLError("down"))).cooldown_s, 15)
         self.assertEqual(refusal(lambda req, timeout=None: (_ for _ in ()).throw(TimeoutError())).cooldown_s, 15)
+
+    def test_a_400_about_the_input_is_bad_input_not_a_broken_slot(self):
+        def bad(req, timeout=None):
+            raise urllib.error.HTTPError(req.full_url, 400, "x", {}, io.BytesIO(b'{"error": {"message": "Unable to process input image."}}'))
+        cfg = make_cfg(GEMINI_API_KEY="k", GEMINI_MODELS="m1:15:500,m2:15:500")
+        with mock.patch("urllib.request.urlopen", bad):
+            with self.assertRaises(aipool.BadInput):
+                aipool.call_provider(cfg, self.slot(), "image", b"x", "image/jpeg")
+            with self.assertRaises(gemini.Unreadable) as e:
+                gemini.read_photo(cfg, photo(), "image/jpeg")
+            self.assertEqual(e.exception.code, "bad_image")
+            with self.assertRaises(gemini.Unreadable) as e:
+                gemini.read_voice(cfg, b"OggS" + photo(), "audio/ogg")
+            self.assertEqual(e.exception.code, "bad_audio")
+        self.assertEqual(db("SELECT count(*) FROM ai_cooldown"), [(0,)])                   # nothing rested
+        self.assertEqual(db("SELECT slot FROM ai_calls ORDER BY id"), [("gemini:m1#0",)] * 2)   # and the other model was never asked (one call each)
 
     def test_http_failure_end_to_end_is_unavailable_and_rests_the_slot(self):
         def boom(req, timeout=None):
@@ -408,7 +442,7 @@ class Routes(ServerCase):
 
     def post(self, kind="photo", data=None, ctype=None, device="devicephoto01", addr=None, **kw):
         ctype = ctype or ("image/jpeg" if kind == "photo" else "audio/mp4")
-        data = (photo() if kind == "photo" else b"audio" + photo()) if data is None else data
+        data = (photo() if kind == "photo" else b"OggS" + photo()) if data is None else data
         h = {"Content-Type": ctype, "X-Device-Id": device}
         r = self.req("POST", helpers.API + "/timetable/" + kind, data, h, addr)
         return r
@@ -485,6 +519,50 @@ class Routes(ServerCase):
         self.assertEqual(self.post(data=b"").json["message"]["code"], "error.badImage")
         self.assertEqual(self.post("voice", data=b"").json["message"]["code"], "error.badAudio")
         self.assertEqual(self.fake.calls, [])
+
+    def test_voice_bodies_must_be_real_audio_by_their_first_bytes(self):
+        self.reader()
+        real = {
+            "ogg": b"OggS" + b"\0" * 30,
+            "wav": b"RIFF\x24\x00\x00\x00WAVEfmt " + b"\0" * 20,
+            "mp3 id3": b"ID3\x03" + b"\0" * 30,
+            "mp3 frame": b"\xff\xfb\x90\x00" + b"\0" * 30,
+            "m4a": b"\x00\x00\x00\x20ftypM4A " + b"\0" * 20,
+            "mp4": b"\x00\x00\x00\x18ftypmp42" + b"\0" * 20,
+            "webm": b"\x1a\x45\xdf\xa3" + b"\0" * 30,
+            "aac": b"\xff\xf1\x50\x80" + b"\0" * 30,
+        }
+        for name, data in real.items():
+            self.assertEqual(self.post("voice", data=data + name.encode()).status, 200, name)
+        fake_audio = {"text": b"hello this is not audio", "pdf": b"%PDF-1.4 something", "jpeg": JPEG, "zeros": b"\0" * 100,
+                      "riff not wave": b"RIFF\0\0\0\0AVI " + b"\0" * 20, "html": b"<html><script>alert(1)</script>"}
+        for name, data in fake_audio.items():
+            r = self.post("voice", data=data, ctype="audio/mp4")
+            self.assertEqual((r.status, r.json["code"], r.json["message"]["code"]), (400, "BAD_REQUEST", "error.badAudio"), name)
+        self.assertEqual(len(self.fake.calls), len(real))                      # only the real recordings reached the provider
+        n = len(self.fake.calls)
+        self.post("voice", data=b"not audio at all")
+        self.assertEqual(len(self.fake.calls), n)                              # refused before any provider call
+
+    def test_input_the_model_cannot_use_is_400_and_asks_nobody_else(self):
+        def script(slot, kind, n):
+            raise aipool.BadInput()
+        self.reader(script, GEMINI_MODELS="m1:15:500,m2:15:500")
+        r = self.post()
+        self.assertEqual((r.status, r.json["code"], r.json["message"]["code"]), (400, "BAD_REQUEST", "error.badImage"))
+        r = self.post("voice")
+        self.assertEqual((r.status, r.json["message"]["code"]), (400, "error.badAudio"))
+        self.assertEqual(self.fake.slots(), ["gemini:m1#0", "gemini:m1#0"])
+        self.assertEqual(db("SELECT count(*) FROM ai_cooldown"), [(0,)])
+
+    def test_bad_input_on_the_second_opinion_leaves_the_first_reading(self):
+        def script(slot, kind, n):
+            if n == 2:
+                raise aipool.BadInput()
+            return dict(GOOD)
+        self.reader(script, GEMINI_MODELS="m1:15:500,m2:15:500")
+        d = self.post().json["data"]
+        self.assertEqual((d["times"], d["complete"]), (GOOD, True))
 
     def test_content_type_and_size_limits(self):
         self.reader(MAX_PHOTO_BYTES="2048", MAX_VOICE_BYTES="2048")

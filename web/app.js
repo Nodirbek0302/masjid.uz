@@ -17,14 +17,6 @@
   // Inside Telegram the language chosen in the bot decides: ask the server once per session (the bot's links also carry ?lang=)
   var tgData = "";
   try { tgData = new URLSearchParams(location.hash.slice(1)).get("tgWebAppData") || ""; } catch (e) {}
-  try {
-    if (tgData && !sessionStorage.getItem("langSync")) {
-      sessionStorage.setItem("langSync", "1");
-      api("GET", "/me").then(function (d) {
-        if (d && d.lang && d.lang !== I18N.lang()) { I18N.set(d.lang); location.reload(); }
-      }).catch(function () {});
-    }
-  } catch (e) {}
   if (location.hash.indexOf("tgWebAppData") >= 0) {         // load Telegram script only inside Telegram
     var sc = document.createElement("script");
     sc.src = "https://telegram.org/js/telegram-web-app.js";
@@ -41,8 +33,10 @@
     if (init) h["X-Telegram-Init-Data"] = init;
     return h;
   }
-  function send(method, path, type, body) {
-    return fetch(API + path, { method: method, headers: headers(type), body: body, keepalive: method !== "GET" && typeof body === "string" })
+  function send(method, path, type, body, opts) {
+    var init = { method: method, headers: headers(type), body: body, keepalive: method !== "GET" && typeof body === "string" };
+    if (opts && opts.cache) init.cache = opts.cache;        // "no-cache" = revalidate with the ETag (304 is cheap) instead of using a max-age copy
+    return fetch(API + path, init)
       .then(function (r) {
         return r.json().catch(function () { return null; }).then(function (j) {
           if (r.ok && j && j.success !== false) return j.data;
@@ -50,7 +44,17 @@
         });
       });
   }
-  function api(method, path, body) { return send(method, path, "application/json", body ? JSON.stringify(body) : undefined); }
+  function api(method, path, body, opts) { return send(method, path, "application/json", body ? JSON.stringify(body) : undefined, opts); }
+
+  // (placed after api() so the request really goes to the API base)
+  try {
+    if (tgData && !sessionStorage.getItem("langSync")) {
+      sessionStorage.setItem("langSync", "1");
+      api("GET", "/me").then(function (d) {
+        if (d && d.lang && d.lang !== I18N.lang()) { I18N.set(d.lang); location.reload(); }
+      }).catch(function () {});
+    }
+  } catch (e) {}
 
   function el(tag, props, children) {
     var n = document.createElement(tag);
@@ -131,9 +135,9 @@
     var src = map && map.getSource("mosques");
     if (src) src.setData(lastFC); else if (map && map.engine !== "yandex") map.once("styledata", applyMosques);
   }
-  function fetchMosques(box) {                      // box = [west, south, east, north]
+  function fetchMosques(box, fresh) {                      // box = [west, south, east, north]
     var seq = ++mosqueSeq;
-    return api("GET", "/mosques?bbox=" + box.join(",")).then(function (r) {
+    return api("GET", "/mosques?bbox=" + box.join(","), null, fresh ? { cache: "no-cache" } : undefined).then(function (r) {
       if (seq !== mosqueSeq) return;                // a newer request superseded this one
       loadedBox = box;
       lastFC = { type: "FeatureCollection", features: r.items.map(function (m) {
@@ -144,13 +148,13 @@
     }).catch(function () {});
   }
   function loadMosques() {                          // force-refresh the current window
-    loadedBox = null; ensureMosques();
+    ensureMosques(true);
   }
-  function ensureMosques() {
+  function ensureMosques(force) {
     var b = map.getBounds(), w = b.getWest(), s = b.getSouth(), e = b.getEast(), n = b.getNorth();
-    if (loadedBox && w >= loadedBox[0] && s >= loadedBox[1] && e <= loadedBox[2] && n <= loadedBox[3]) return;   // already covered
+    if (!force && loadedBox && w >= loadedBox[0] && s >= loadedBox[1] && e <= loadedBox[2] && n <= loadedBox[3]) return;   // already covered
     var px = (e - w) * 0.5, py = (n - s) * 0.5;      // fetch 50% extra on every side
-    fetchMosques([w - px, s - py, e + px, n + py].map(function (v) { return +v.toFixed(5); }));
+    fetchMosques([w - px, s - py, e + px, n + py].map(function (v) { return +v.toFixed(5); }), force);
   }
 
   // Map labels follow the interface language. The base style prints "latin + native"; we pick one name per language.
@@ -974,8 +978,10 @@
   function describeChange(field, pair) {                       // -> list of readable lines for one changed field
     var a = pair[0], b = pair[1];
     if (field === "prayer_times" || field === "prayerTimes") {
-      var keys = PRAYERS.filter(function (p) { return (a && a[p]) !== (b && b[p]); });
-      return keys.map(function (p) { return T("pn." + p) + ": " + fmtVal("", a && a[p]) + " → " + fmtVal("", b && b[p]); });
+      var seen = {}; Object.keys(a || {}).concat(Object.keys(b || {})).forEach(function (p) { seen[p] = 1; });
+      var keys = Object.keys(seen).sort(function (x, y) { var i = PRAYERS.indexOf(x), j = PRAYERS.indexOf(y); return (i < 0 ? 99 : i) - (j < 0 ? 99 : j); })
+        .filter(function (p) { return ((a && a[p]) || null) !== ((b && b[p]) || null); });
+      return keys.map(function (p) { return (T("pn." + p) === "pn." + p ? p : T("pn." + p)) + ": " + fmtVal("", a && a[p]) + " → " + fmtVal("", b && b[p]); });
     }
     var fl = T("fld." + field);
     return [(fl === "fld." + field ? field : fl) + ": " + fmtVal(field, a) + " → " + fmtVal(field, b)];
@@ -984,19 +990,32 @@
   function historyView(m) {
     var box = el("div", {}, [el("h2", { text: T("hist.title") }), skeleton()]);
     showPanel(box);
-    api("GET", "/mosques/" + m.id + "/history").then(function (r) {
+    var rows = el("div", {}), more = el("div", {});
+    function roleName(a) { if (!a) return ""; var k = "role." + String(a).replace(/^admin:.*/, "moderator"); var r = T(k); return r === k ? "" : r; }
+    function page(cursor) {
+      return api("GET", "/mosques/" + m.id + "/history?limit=20" + (cursor ? "&cursor=" + encodeURIComponent(cursor) : "")).then(function (r) {
+        r.items.forEach(function (h) {
+          var lines = [];
+          Object.keys(h.changes || {}).forEach(function (k) { lines = lines.concat(describeChange(k, h.changes[k])); });
+          var act = T("act." + h.action); if (act === "act." + h.action) act = h.action;
+          var role = roleName(h.actor);
+          rows.appendChild(el("div", { class: "hist stack" }, [
+            el("b", { text: act + " · v" + h.version }),
+            el("div", { class: "muted", text: I18N.fmtDate(h.at) + (role ? " · " + role : "") }),
+            lines.length ? el("div", { text: lines.join("; ") }) : null, h.note ? el("div", { class: "muted", text: h.note }) : null
+          ]));
+        });
+        more.textContent = "";
+        if (r.nextCursor) more.appendChild(btn("ghost", T("hist.more"), function (ev) {
+          ev.currentTarget.disabled = true;
+          page(r.nextCursor).catch(function (e) { toast(errText(e)); more.textContent = ""; more.appendChild(btn("ghost", T("hist.more"), function () { page(r.nextCursor); })); });
+        }));
+      });
+    }
+    page(null).then(function () {
       box.textContent = "";
       box.appendChild(el("h2", { text: T("hist.title") }));
-      r.items.forEach(function (h) {
-        var lines = [];
-        Object.keys(h.changes).forEach(function (k) { lines = lines.concat(describeChange(k, h.changes[k])); });
-        var act = T("act." + h.action); if (act === "act." + h.action) act = h.action;
-        box.appendChild(el("div", { class: "hist stack" }, [
-          el("b", { text: act + " · v" + h.version }),
-          el("div", { class: "muted", text: I18N.fmtDate(h.at) + (h.actor ? " · " + T("role." + h.actor) : "") }),
-          lines.length ? el("div", { text: lines.join("; ") }) : null, h.note ? el("div", { class: "muted", text: h.note }) : null
-        ]));
-      });
+      box.appendChild(rows); box.appendChild(more);
       box.appendChild(el("div", { class: "row" }, [btn("ghost", T("btn.back"), function () { openMosque(m.id); })]));
     }).catch(function (e) { toast(errText(e)); });
   }
@@ -1080,29 +1099,33 @@
   function setPicked(ll) {
     if (pickDone) { var f = pickDone; pickDone = null; f(ll); return; }
     picked = { lat: +ll.lat.toFixed(6), lng: +ll.lng.toFixed(6) };
+    addForm = null;
     clearPick();
     pickMarker = newMarker({ color: "#059669", draggable: true }).setLngLat([picked.lng, picked.lat]).addTo(map);
-    pickMarker.on("dragend", function () { var p = pickMarker.getLngLat(); picked = { lat: +p.lat.toFixed(6), lng: +p.lng.toFixed(6) }; showAddForm(); });
+    pickMarker.on("dragend", function () { var p = pickMarker.getLngLat(); picked = { lat: +p.lat.toFixed(6), lng: +p.lng.toFixed(6) }; showAddForm(true); });
     showAddForm();
     revealPoint(picked.lng, picked.lat);          // keep the chosen point above the sheet
   }
   function startAdd() {
-    mode = "pick"; picked = null; pickDone = null; clearPick(); closePopup();
+    mode = "pick"; picked = null; pickDone = null; addForm = null; clearPick(); closePopup();
     document.body.classList.add("picking"); $("add-bar").hidden = false; $("add-hint").textContent = T("add.pick"); hidePanel();
   }
   function endAdd() {
-    mode = "browse"; pickDone = null; picked = null; clearPick();
+    mode = "browse"; pickDone = null; picked = null; addForm = null; clearPick();
     document.body.classList.remove("picking"); $("add-bar").hidden = true; hidePanel();
   }
   $("add-cancel").onclick = endAdd;
 
-  function showAddForm() {
+  var addForm = null;                                 // the add form stays in the DOM (values kept) while the duplicate warning is shown
+  function showAddForm(keep) {
+    if (keep && addForm) { addForm.coords.textContent = T("add.selected", { c: fmtC(picked.lat, picked.lng) }); showPanel(addForm.node); return; }
     var name = el("input", { maxlength: 200, placeholder: T("f.optional"), autocomplete: "off" });
     var addr = el("input", { maxlength: 300, placeholder: T("f.optional"), autocomplete: "off" });
     var grid = timesInputs({});
+    var coords = el("div", { text: T("add.selected", { c: fmtC(picked.lat, picked.lng) }) });
     var kids = [
       el("h2", { text: T("add.title") }),
-      el("div", { class: "muted stack" }, [el("div", { text: T("add.selected", { c: fmtC(picked.lat, picked.lng) }) }), el("div", { text: T("add.notice") })]),
+      el("div", { class: "muted stack" }, [coords, el("div", { text: T("add.notice") })]),
       field(T("f.name"), name), field(T("f.addr"), addr), el("h3", { text: T("m.times_opt") }), grid
     ];
     function submit(force, b) {
@@ -1122,14 +1145,16 @@
             });
             box.appendChild(el("div", { class: "row" }, [
               btn("danger", T("dup.force"), function (ev) { submit(true, ev.currentTarget); }),
-              btn("ghost", T("btn.back"), function () { showAddForm(); })
+              btn("ghost", T("btn.back"), function () { showAddForm(true); })
             ]));
             showPanel(box);
           } else toast(errText(e));
         });
     }
     kids.push(el("div", { class: "row" }, [btn("", T("btn.save"), function (ev) { submit(false, ev.currentTarget); }), btn("ghost", T("btn.cancel"), endAdd)]));
-    showPanel(el("div", {}, kids));
+    var node = el("div", {}, kids);
+    addForm = { node: node, coords: coords };
+    showPanel(node);
   }
 
   init();

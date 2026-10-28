@@ -85,6 +85,11 @@ class BotDB:
         with self.pool.connection() as c:
             return c.execute("INSERT INTO bot_sent(telegram_id, key, day) VALUES (%s,%s,%s) ON CONFLICT DO NOTHING RETURNING 1", (tid, key, day)).fetchone() is not None
 
+    def unclaim(self, tid, key, day):
+        """Give the claim back after a send that failed for a passing reason: the reminder is tried again at the next tick."""
+        with self.pool.connection() as c:
+            c.execute("DELETE FROM bot_sent WHERE telegram_id=%s AND key=%s AND day=%s", (tid, key, day))
+
     def purge_sent(self):
         with self.pool.connection() as c:
             c.execute("DELETE FROM bot_sent WHERE day < current_date - 3")

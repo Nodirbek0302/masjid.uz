@@ -329,7 +329,7 @@ class Store:
                 item = self.row(r)
                 item["distance_m"] = round(d, 1)
                 out.append(item)
-        return sorted(out, key=lambda x: x["distance_m"])
+        return sorted(out, key=lambda x: (x["distance_m"], x["id"]))      # a fixed order for equal distances: pages never repeat or skip
 
     MAX_DEPTH = 500
 
@@ -488,7 +488,7 @@ class Store:
         with self.pool.connection() as c:
             if c.execute("SELECT provider FROM map_settings").fetchone()["provider"] != "yandex":
                 return osm
-            c.execute("SELECT pg_advisory_xact_lock(727002)")
+            c.execute("SELECT pg_advisory_xact_lock(727005)")      # its own lock: page loads never queue behind mosque creation
             day = c.execute("SELECT " + self.MAP_DAY + " AS d").fetchone()["d"]
             # a key this very client already reported as refused today is never handed to it again (the others may still work for it)
             not_refused = " AND NOT EXISTS (SELECT 1 FROM map_key_reports r WHERE r.day=%s AND r.key_id=k.id AND r.client_id=%s)"
@@ -513,8 +513,8 @@ class Store:
             return False
         with self.pool.connection() as c:
             day = c.execute("SELECT " + self.MAP_DAY + " AS d").fetchone()["d"]
-            if not c.execute("SELECT 1 FROM map_keys WHERE id=%s", (key_id,)).fetchone():
-                return False
+            if not c.execute("SELECT 1 FROM map_key_users WHERE day=%s AND client_id=%s AND key_id=%s", (day, client, key_id)).fetchone():
+                return False                      # only a client that was really handed this key today can report it (made-up ids count for nothing)
             c.execute("INSERT INTO map_key_reports (day, key_id, client_id) VALUES (%s,%s,%s) ON CONFLICT DO NOTHING", (day, key_id, client))
             n = c.execute("SELECT COUNT(*) AS n FROM map_key_reports WHERE day=%s AND key_id=%s", (day, key_id)).fetchone()["n"]
             if n >= self.MAP_REPORTS_TO_EXHAUST:
@@ -670,7 +670,7 @@ class Store:
                                      "created_at": iso(r["created_at"]), "resolution": r["resolution"]})
         return sorted(groups.values(), key=lambda g: -g["count"])
 
-    def moderate(self, m_id, action, actor, note):
+    def moderate(self, m_id, action, actor, note, kind=None):
         if action not in ("archive", "restore", "verify", "dismiss"):
             raise ApiError(400, "invalid_action", "unknown action")
         note = clean_text(note, "note", 500)
@@ -690,20 +690,30 @@ class Store:
                 if not note:
                     raise ApiError(400, "evidence_required", "verification requires an evidence note", reason="note")
                 new, vnote = "verified", note
-            else:  # dismiss reports
-                new, resolution = ("unverified" if st == "reported" else st), "rejected"
+            else:  # dismiss reports (all of them, or only those of one kind)
+                if kind is not None and kind not in REPORT_KINDS:
+                    raise ApiError(400, "invalid_kind", "kind must be one of " + ", ".join(REPORT_KINDS), reason="kind")
+                resolution = "rejected"
+                left = cur.execute("SELECT 1 FROM reports WHERE mosque_id=%s AND resolution IS NULL AND kind<>%s LIMIT 1", (m_id, kind)).fetchone() if kind else None
+                new = st if left else ("unverified" if st == "reported" else st)       # other open reports keep the mosque 'reported'
             v = m["version"] + 1
             cur.execute("UPDATE mosques SET status=%s, verification_note=%s, version=%s, updated_at=now() "
                         "WHERE id=%s RETURNING *", (new, vnote, v, m_id))
             out = self.row(cur.fetchone())
             if resolution:
                 cur.execute("UPDATE reports SET resolution=%s, resolved_by=%s, resolved_at=now() "
-                            "WHERE mosque_id=%s AND resolution IS NULL", (resolution, actor, m_id))
+                            "WHERE mosque_id=%s AND resolution IS NULL AND (%s::text IS NULL OR kind=%s)", (resolution, actor, m_id, kind, kind))
             self._history(cur, m_id, v, action, actor, {"status": [st, new]}, note)
             return out
 
 
 # ---------------------------------------------------------------- identity
+def looks_like_audio(data):
+    """A real recording by its first bytes: Ogg, WAV, MP3 (ID3 or frame), MP4/M4A, WebM/Matroska, ADTS AAC (the declared type is not trusted)."""
+    return (data[:4] in (b"OggS", b"\x1a\x45\xdf\xa3", b"ID3\x03", b"ID3\x04", b"ID3\x02") or (data[:4] == b"RIFF" and data[8:12] == b"WAVE")
+            or data[4:8] == b"ftyp" or data[:2] in (b"\xff\xfb", b"\xff\xf3", b"\xff\xf2", b"\xff\xf1", b"\xff\xf9"))
+
+
 def looks_like_image(data):
     """JPEG, PNG or WebP by the first bytes (the declared content type is not trusted)."""
     return data[:3] == b"\xff\xd8\xff" or data[:8] == b"\x89PNG\r\n\x1a\n" or (data[:4] == b"RIFF" and data[8:12] == b"WEBP")
@@ -770,6 +780,7 @@ class RateLimiter:
 
 # ---------------------------------------------------------------- http
 ID = r"([0-9a-f-]{36})"
+LIGHT_WRITES = ("/me/lang", "/map/yandex-failed", "/timetable/photo", "/timetable/voice")     # cheap or limited on their own: not counted as community writes
 STATIC_CACHE = {}
 COMPRESSIBLE = (".js", ".css", ".html", ".json", ".svg")
 HASHED = re.compile(r"^(.+)\.([0-9a-f]{8})\.(js|css)$")
@@ -791,6 +802,11 @@ def csp(cfg, yandex=False):
     return ("default-src 'self'; img-src 'self' data: blob: %s https://upload.wikimedia.org%s; connect-src 'self' %s%s; worker-src 'self' blob:%s; "
             "style-src 'self' 'unsafe-inline'%s; script-src 'self' https://telegram.org%s%s; "
             "frame-ancestors 'self' https://web.telegram.org https://*.telegram.org" % (t, ya + nets, t, ya + nets, (ya + " data:") if ya else "", ya, ya, ev))
+
+
+def etag_matches(header, etag):
+    """If-None-Match with one or several tags, weak (W/"...") ones too (a proxy that recompresses weakens them)."""
+    return bool(header) and (header.strip() == "*" or etag in [t.strip()[2:] if t.strip().startswith("W/") else t.strip() for t in header.split(",")])
 
 
 def file_hash(raw):
@@ -1119,7 +1135,7 @@ class Request(BaseHTTPRequestHandler):
                 continue
             if path.startswith("/admin/"):
                 self.admin = self.require_admin()
-            elif method in ("POST", "PATCH") and not self.state.write_limiter.allow(self.client_ip()):
+            elif method in ("POST", "PATCH") and path not in LIGHT_WRITES and not self.state.write_limiter.allow(self.client_ip()):
                 raise RateLimited(self.state.write_limiter.retry_after(self.client_ip()), "too many writes; slow down")
             return fn(q, *hit.groups())
         if allowed:
@@ -1184,7 +1200,7 @@ class Request(BaseHTTPRequestHandler):
             body = json.dumps(ok_body(200, {"items": items, "truncated": truncated}), ensure_ascii=False, separators=(",", ":"))
             etag = '"%s"' % hashlib.sha1(body.encode()).hexdigest()[:20]
             headers = {"Cache-Control": "public, max-age=60", "ETag": etag}
-            if self.headers.get("If-None-Match") == etag:
+            if etag_matches(self.headers.get("If-None-Match"), etag):
                 self.status = 304
                 self.send_response(304)
                 for k, v in headers.items():
@@ -1278,6 +1294,8 @@ class Request(BaseHTTPRequestHandler):
 
     def r_read_voice(self, q):
         data, mime = self.read_raw(gemini.AUDIO_TYPES, self.cfg.max_voice_bytes, "audio")
+        if not looks_like_audio(data):
+            raise ApiError(400, "bad_audio", "not a supported recording")
         self.send_ok(self.reading(gemini.read_voice, data, mime))
 
     def me_lang(self):
@@ -1339,8 +1357,8 @@ class Request(BaseHTTPRequestHandler):
         self.send_ok({"groups": self.store.reports(q.get("all") != "1")})
 
     def a_moderate(self, q, m_id, action):
-        body = pick(self.body_json(), {"note": "note"})
-        self.send_ok(self.store.moderate(m_id, action, self.admin, body.get("note")))
+        body = pick(self.body_json(), {"note": "note", "kind": "kind"})
+        self.send_ok(self.store.moderate(m_id, action, self.admin, body.get("note"), body.get("kind") if action == "dismiss" else None))
 
     # -- the web client (`/masjiduz/web/...`)
     def web_headers(self):
@@ -1400,7 +1418,7 @@ class Request(BaseHTTPRequestHandler):
         self.send_file(raw, gz, etag, ctype, cache, rel)
 
     def send_file(self, raw, gz, etag, ctype, cache, rel):
-        same = self.headers.get("If-None-Match") == etag
+        same = etag_matches(self.headers.get("If-None-Match"), etag)
         self.status = 304 if same else 200
         self.send_response(self.status)
         self.send_header("Cache-Control", cache)

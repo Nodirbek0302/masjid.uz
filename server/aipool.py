@@ -50,6 +50,10 @@ class Unreadable(Exception):
         self.code = code
 
 
+class BadInput(Exception):
+    """The provider says the FILE is bad (corrupt image, unsupported or too short audio): nobody else will read it either, and no slot is at fault."""
+
+
 class Refused(Exception):
     def __init__(self, cooldown_s, why):
         super().__init__(why)
@@ -159,6 +163,8 @@ def _http(req):
             if daily:                                           # the day's quota is gone: rest until the quota day turns over (at most 24 h)
                 raise Refused(6 * 3600, "daily limit") from None
             raise Refused(max(retry or 60, 5), "rate limit") from None
+        if e.code == 400 and not re.search(r"API[ _]KEY|api key|not found|not supported for|invalid.*model|PERMISSION", body, re.I):
+            raise BadInput() from None                          # an input problem, not a broken slot
         if e.code in (400, 401, 403, 404):                      # a wrong key or model name never fixes itself within minutes
             raise Refused(600, "HTTP %d" % e.code) from None
         raise Refused(15, "HTTP %d" % e.code) from None
@@ -287,16 +293,25 @@ def read(cfg, kind, data, mime):
     hit = _cached(key)
     if hit:
         return hit
-    raw, slot = _one_reading(cfg, kind, data, mime, frozenset())
+    try:
+        raw, slot = _one_reading(cfg, kind, data, mime, frozenset())
+    except BadInput:
+        raise Unreadable("bad_image" if kind == "image" else "bad_audio", "the file could not be read") from None
     raw = from_spoken(raw) if kind == "audio" else raw
     times, warnings = clean(raw)
     heard = str((raw or {}).get("heard") or "") if kind == "audio" else None
     # always cross-check with ANOTHER model: a clean-looking wrong time is the worst error
+    # the second opinion must come from ANOTHER model (the same model on another key would nearly always repeat itself); only when no other
+    # model exists is another key of the same model used
+    same_model = frozenset(s["id"] for s in slots(cfg, kind) if s["model"] == slot["model"])
+    wait = WAIT_MAX_S if not (len(times) == 5 and not warnings) else 0      # a complete reading is verified only if a slot is free right now
     try:
-        # a complete reading is only verified when another slot is free right now (no waiting); a doubtful one may wait a few seconds
-        raw2, _slot2 = _one_reading(cfg, kind, data, mime, frozenset({slot["id"]}), WAIT_MAX_S if not (len(times) == 5 and not warnings) else 0)
+        try:
+            raw2, _slot2 = _one_reading(cfg, kind, data, mime, same_model, wait)
+        except Unavailable:
+            raw2, _slot2 = _one_reading(cfg, kind, data, mime, frozenset({slot["id"]}), wait)
         times2, warnings2 = clean(from_spoken(raw2) if kind == "audio" else raw2)
-    except Unavailable:
+    except (Unavailable, BadInput):
         times2, warnings2 = None, []
     if times2 is None and len(times) == 5 and not warnings:     # nobody free to verify: the clean reading stands (the user confirms it anyway)
         result = _result(times, [], heard)
@@ -305,7 +320,7 @@ def read(cfg, kind, data, mime):
     elif len(times) == 5 and times == times2:
         result = _result(times, [], heard)
     elif len(times2) == 5 and not times and not warnings2:  # the first could not read it, the second read all five cleanly
-        result = _result(times2, [], heard)
+        result = _result(times2, ["only one model could read it; please check the times"], heard)
     elif len(times) == 5 and len(times2) == 5:              # two complete readings that differ: the user chooses
         result = _result(times, ["two readings differ; please choose"], heard, alt=times2)
     else:

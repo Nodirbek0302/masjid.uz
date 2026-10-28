@@ -286,10 +286,10 @@ class Bot:
     def purge(self):
         """Forget finished sessions and old counters so a long-running bot does not grow without bound."""
         now = time.time()
-        for uid in [u for u, st in self.state.items() if now - st["ts"] > SESSION_S]:
+        for uid in [u for u, st in list(self.state.items()) if now - st["ts"] > SESSION_S]:
             self.state.pop(uid, None)
         for log_ in (self.photo_log, self.msg_log):
-            for uid in [u for u, q in log_.items() if not q or now - max(q) > 3600]:
+            for uid in [u for u, q in list(log_.items()) if not q or now - max(list(q)) > 3600]:
                 log_.pop(uid, None)
 
     def allow_photo(self, uid):
@@ -722,13 +722,17 @@ class Notifier:
                 if self.db.claim(tid, "daily", day):
                     labels = [(tx["names"][0], "fajr"), (tx["sun"], "sunrise")] + list(zip(tx["names"][1:], timetable.ORDER[1:]))
                     rows = ["%s  %s" % (n, prayertimes.hm(tt[k])) for n, k in labels]
-                    self.send(tid, tx["daily_msg"].format(region=name, t="\n".join(rows)))
+                    if not self.send(tid, tx["daily_msg"].format(region=name, t="\n".join(rows))) and self.db.user(tid):
+                        self.db.unclaim(tid, "daily", day)             # a passing failure: try again at the next tick
+                        self.done.discard((tid, "daily"))
             if u["before_prayer"]:
                 for n, k in zip(tx["names"], timetable.ORDER):
                     if 0 < at[k] - mins <= REMIND_BEFORE_MIN and (tid, k) not in self.done:
                         self.done.add((tid, k))
                         if self.db.claim(tid, "pre:" + k, day):
-                            self.send(tid, tx["pre_msg"].format(prayer=n, time=prayertimes.hm(tt[k]), region=name))
+                            if not self.send(tid, tx["pre_msg"].format(prayer=n, time=prayertimes.hm(tt[k]), region=name)) and self.db.user(tid):
+                                self.db.unclaim(tid, "pre:" + k, day)
+                                self.done.discard((tid, k))
 
     def changes(self):
         for r in self.db.due_changes():
@@ -807,5 +811,9 @@ def main(cfg):
             backoff = min(backoff * 2, 60)
     log("SIGTERM: waiting for running handlers")
     pool.shutdown(wait=True)
+    try:
+        call("getUpdates", offset=offset, timeout=0)       # confirm what was handled, so the next start does not deliver it again
+    except Exception as e:  # noqa
+        log("could not confirm the last updates: %s" % type(e).__name__)
     store.close()
     return 0
