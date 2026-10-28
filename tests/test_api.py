@@ -457,13 +457,13 @@ class Api(unittest.TestCase):
         self.assertEqual(self.cfg_map("a0000001-1"), {"provider": "osm"})                       # the default: OpenStreetMap
         self.assertEqual(self.call("GET", "/api/admin/map")[0], 401)                           # admin only
         s, a = self.call("POST", "/api/admin/map/provider", {"provider": "yandex"}, admin=True)
-        self.assertEqual((s, a["provider"], a["effective"]), (200, "yandex", "osm"))           # yandex chosen but no key yet: OSM
+        self.assertEqual((s, a["provider"], a["effective"]), (200, "yandex", {"web": "osm", "app": "osm"}))   # yandex chosen but no key yet: OSM
         self.assertEqual(self.cfg_map("a0000001-1")["provider"], "osm")
         self.assertEqual(self.call("POST", "/api/admin/map/keys", {"key": "short"}, admin=True)[0], 400)
         self.assertEqual(self.call("POST", "/api/admin/map/keys", {"key": "KEY-ONE-1234567890", "label": "one", "daily_limit": 2}, admin=True)[0], 201)
         self.assertEqual(self.call("POST", "/api/admin/map/keys", {"key": "KEY-ONE-1234567890"}, admin=True)[0], 409)
         s, a = self.call("POST", "/api/admin/map/keys", {"key": "KEY-TWO-1234567890", "label": "two", "daily_limit": 1}, admin=True)
-        self.assertEqual(a["effective"], "yandex")
+        self.assertEqual(a["effective"], {"web": "yandex", "app": "osm"})                       # web keys only: the app has none
         self.assertNotIn("KEY-ONE-1234567890", json.dumps(a))                                  # the list never shows a whole key
         # two users fill key one (limit 2), the third gets key two (limit 1), the fourth finds nothing left -> OSM
         c1, c2, c3, c4 = (self.cfg_map("a000000%d-1" % i) for i in (1, 2, 3, 4))
@@ -532,6 +532,25 @@ class Api(unittest.TestCase):
         self.assertIn("'unsafe-eval'", c)
         self.call("POST", "/api/admin/map/provider", {"provider": "osm"}, admin=True)
         self.assertNotIn("yandex", csp())
+        self.reset()
+
+    def test_web_and_app_keys_are_not_mixed(self):
+        self.reset()
+        self.call("POST", "/api/admin/map/provider", {"provider": "yandex"}, admin=True)
+        self.assertEqual(self.call("POST", "/api/admin/map/keys", {"key": "WEB-KEY-1234567890", "kind": "tablet"}, admin=True)[0], 400)
+        self.call("POST", "/api/admin/map/keys", {"key": "WEB-KEY-1234567890", "kind": "web"}, admin=True)
+        a = self.call("POST", "/api/admin/map/keys", {"key": "APP-KEY-1234567890", "kind": "app"}, admin=True)[1]
+        self.assertEqual(a["effective"], {"web": "yandex", "app": "yandex"})
+        self.assertEqual([k["kind"] for k in a["keys"]], ["web", "app"])
+        phone = {"X-Device-Id": "devicedevice0001"}
+        self.assertEqual(self.call("GET", "/api/config", client="d0000001-1", headers=phone)[1]["map"]["yandex_key"], "APP-KEY-1234567890")
+        self.assertEqual(self.cfg_map("d0000002-1")["yandex_key"], "WEB-KEY-1234567890")      # a browser never gets the app's key
+        # the app's only key is refused: the app falls back to OSM, the web keeps its own key
+        kid = a["keys"][1]["id"]
+        for who in ("devicedevice0002", "devicedevice0003", "devicedevice0004"):
+            r = self.call("POST", "/api/map/yandex-failed", {"key_id": kid}, client="d0000009-1", headers={"X-Device-Id": who})[1]
+        self.assertEqual(r["map"], {"provider": "osm"})
+        self.assertEqual(self.cfg_map("d0000002-1")["yandex_key"], "WEB-KEY-1234567890")
         self.reset()
 
 

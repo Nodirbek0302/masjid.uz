@@ -130,10 +130,12 @@
           if (m.provider !== o[0]) call("POST", "/api/admin/map/provider", { provider: o[0] });
         } });
       }));
-      var now = m.effective === "yandex" ? T("adm.map_now_yandex") : m.provider === "yandex" ? T("adm.map_now_fallback") : T("adm.map_now_osm");
+      function stateOf(kind) { var e = m.effective[kind]; return e === "yandex" ? T("adm.map_state_yandex") : m.provider === "yandex" ? T("adm.map_state_fallback") : T("adm.map_state_osm"); }
+      var warn = m.provider === "yandex" && (m.effective.web !== "yandex" || m.effective.app !== "yandex");
+      var now = T("adm.map_web") + ": " + stateOf("web") + "  ·  " + T("adm.map_app") + ": " + stateOf("app");
       v.appendChild(el("div", { class: "card" }, [
         el("h3", { text: T("adm.map_title") }), el("p", { class: "muted", text: T("adm.map_hint") }), seg,
-        el("p", { class: "now" + (m.provider === "yandex" && m.effective !== "yandex" ? " warn" : ""), text: now })
+        el("p", { class: "now" + (warn ? " warn" : ""), text: now })
       ]));
       var list = el("div", { class: "card" }, [el("h3", { text: T("adm.key_title") })]);
       if (!m.keys.length) list.appendChild(el("p", { class: "muted", text: T("adm.key_none") }));
@@ -142,7 +144,7 @@
         var state = !k.enabled ? [T("adm.key_off"), "neutral"] : k.exhausted ? [T("adm.key_exhausted"), "warn"] : full ? [T("adm.key_full"), "warn"] : [T("adm.key_ok"), ""];
         var pct = Math.min(100, Math.round(100 * k.users_today / k.daily_limit));
         list.appendChild(el("div", { class: "keyrow" }, [
-          el("div", { class: "keyhead" }, [el("b", { text: k.label || ("#" + k.id) }), el("code", { text: k.key }), el("span", { class: "chip " + state[1], text: state[0] })]),
+          el("div", { class: "keyhead" }, [el("b", { text: k.label || ("#" + k.id) }), el("span", { class: "chip neutral", text: T(k.kind === "app" ? "adm.map_app" : "adm.map_web") }), el("code", { text: k.key }), el("span", { class: "chip " + state[1], text: state[0] })]),
           el("div", { class: "meter" }, [el("i", { style: "width:" + pct + "%" })]),
           el("div", { class: "muted", text: T("adm.key_users", { n: k.users_today, max: k.daily_limit }) }),
           el("div", { class: "actions" }, [
@@ -160,12 +162,13 @@
       });
       var key = el("input", { type: "password", placeholder: T("adm.key_ph"), autocomplete: "off", spellcheck: "false", maxlength: 200 });
       var label = el("input", { placeholder: T("adm.key_label_ph"), maxlength: 60 });
+      var kind = el("select", { "aria-label": T("adm.key_kind") }, [el("option", { value: "web", text: T("adm.kind_web") }), el("option", { value: "app", text: T("adm.kind_app") })]);
       var limit = el("input", { type: "number", min: 1, value: 25000, placeholder: T("adm.key_limit_ph") });
       list.appendChild(el("form", { class: "keyadd", onsubmit: function (e) {
         e.preventDefault();
         if (!key.value.trim()) return;
-        call("POST", "/api/admin/map/keys", { key: key.value.trim(), label: label.value, daily_limit: limit.value });
-      } }, [key, label, limit, el("button", { class: "btn", text: T("adm.key_add") })]));
+        call("POST", "/api/admin/map/keys", { key: key.value.trim(), label: label.value, daily_limit: limit.value, kind: kind.value });
+      } }, [key, kind, label, limit, el("button", { class: "btn", text: T("adm.key_add") })]));
       v.appendChild(list);
     }).catch(fail);
   }

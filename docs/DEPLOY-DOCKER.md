@@ -131,6 +131,7 @@ Ovozdan o'qish (`POST /api/timetable/voice`, ilovadagi mikrofon tugmasi): bot bi
 Moderator paneli (`/admin.html`, faqat Telegram orqali) → **Xarita** yorlig'i:
 - **Xarita turi:** OpenStreetMap (bepul, standart) yoki Yandex. Klientlar `GET /api/config` javobidagi `map` maydonidan o'qiydi:
   `{"provider": "osm"}` yoki `{"provider": "yandex", "yandex_key": "…", "key_id": N}`.
+- **Kalit turi:** Yandex veb va ilova uchun *boshqa-boshqa* kalit beradi: **Veb** = «JavaScript API va HTTP Geokoder» kaliti, **Ilova** = «MapKit mobil SDK» kaliti. Kalit qo'shganda turi tanlanadi; veb va Telegram faqat Veb kalitini, ilova faqat Ilova kalitini oladi. Har tur uchun alohida zaxira ishlaydi (Veb kalitlari tugasa veb OpenStreetMap'ga o'tadi, ilova esa o'z kalitlari bilan davom etadi).
 - **Kalitlar puli:** bir nechta Yandex kaliti qo'shiladi, har biriga **kunlik limit** (shu kalit bir kunda xizmat qiladigan *foydalanuvchi*
   soni; Yandex tarifingizga qarab o'zingiz qo'yasiz). Foydalanuvchiga limiti tugamagan *birinchi* kalit beriladi va o'sha kun uchun eslab qolinadi
   (bir foydalanuvchi bir marta sanaladi). Kun Moskva vaqti bilan almashadi.

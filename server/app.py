@@ -409,10 +409,11 @@ class Store:
     MAP_DAY = "(now() AT TIME ZONE 'Europe/Moscow')::date"          # Yandex counts its day in Moscow time
     MAP_REPORTS_TO_EXHAUST = 3                                         # distinct devices that must say "Yandex refused this key"
 
-    def map_choice(self, client):
+    def map_choice(self, client, kind="web"):
         """What a client should draw today -> {"provider": "osm"} or {"provider": "yandex", "yandex_key": ..., "key_id": ...}.
         The first enabled key with room (distinct users today < its limit, not refused by Yandex today) is handed out and remembered
-        for the day, so one user counts once. No key left -> OpenStreetMap, whatever the setting says."""
+        for the day, so one user counts once. Only keys of the client's kind (web = JavaScript API key, app = MapKit key) are considered.
+        No key left -> OpenStreetMap, whatever the setting says."""
         osm = {"provider": "osm"}
         with self.pool.connection() as c:
             if c.execute("SELECT provider FROM map_settings").fetchone()["provider"] != "yandex":
@@ -421,14 +422,14 @@ class Store:
             day = c.execute("SELECT " + self.MAP_DAY + " AS d").fetchone()["d"]
             # a key this very client already reported as refused today is never handed to it again (the others may still work for it)
             not_refused = " AND NOT EXISTS (SELECT 1 FROM map_key_reports r WHERE r.day=%s AND r.key_id=k.id AND r.client_id=%s)"
-            usable = ("SELECT k.id, k.api_key FROM map_keys k WHERE k.enabled AND k.exhausted_on IS DISTINCT FROM %s"
+            usable = ("SELECT k.id, k.api_key FROM map_keys k WHERE k.kind=%s AND k.enabled AND k.exhausted_on IS DISTINCT FROM %s"
                       " AND (SELECT COUNT(*) FROM map_key_users u WHERE u.day=%s AND u.key_id=k.id) < k.daily_limit" + not_refused + " ORDER BY k.id LIMIT 1")
             row = None
             if client:
                 row = c.execute("SELECT k.id, k.api_key FROM map_key_users u JOIN map_keys k ON k.id=u.key_id WHERE u.day=%s AND u.client_id=%s"
-                                " AND k.enabled AND k.exhausted_on IS DISTINCT FROM %s" + not_refused, (day, client, day, day, client)).fetchone()
+                                " AND k.kind=%s AND k.enabled AND k.exhausted_on IS DISTINCT FROM %s" + not_refused, (day, client, kind, day, day, client)).fetchone()
             if not row:
-                row = c.execute(usable, (day, day, day, client or "")).fetchone()
+                row = c.execute(usable, (kind, day, day, day, client or "")).fetchone()
                 if row and client:
                     c.execute("INSERT INTO map_key_users (day, client_id, key_id) VALUES (%s,%s,%s)"
                               " ON CONFLICT (day, client_id) DO UPDATE SET key_id=EXCLUDED.key_id", (day, client, row["id"]))
@@ -474,11 +475,13 @@ class Store:
         with self.pool.connection() as c:
             provider = c.execute("SELECT provider FROM map_settings").fetchone()["provider"]
             day = c.execute("SELECT " + self.MAP_DAY + " AS d").fetchone()["d"]
-            keys = [{"id": r["id"], "label": r["label"], "key": self._mask(r["api_key"]), "daily_limit": r["daily_limit"], "enabled": r["enabled"],
+            keys = [{"id": r["id"], "label": r["label"], "kind": r["kind"], "key": self._mask(r["api_key"]), "daily_limit": r["daily_limit"], "enabled": r["enabled"],
                      "exhausted": r["exhausted_on"] == day, "users_today": r["users"]} for r in c.execute(
                 "SELECT k.*, (SELECT COUNT(*) FROM map_key_users u WHERE u.day=%s AND u.key_id=k.id) AS users FROM map_keys k ORDER BY k.id", (day,))]
-        usable = [k for k in keys if k["enabled"] and not k["exhausted"] and k["users_today"] < k["daily_limit"]]
-        return {"provider": provider, "keys": keys, "effective": "yandex" if provider == "yandex" and usable else "osm"}
+        def effective(kind):
+            usable = [k for k in keys if k["kind"] == kind and k["enabled"] and not k["exhausted"] and k["users_today"] < k["daily_limit"]]
+            return "yandex" if provider == "yandex" and usable else "osm"
+        return {"provider": provider, "keys": keys, "effective": {"web": effective("web"), "app": effective("app")}}
 
     def map_set_provider(self, provider):
         if provider not in ("osm", "yandex"):
@@ -492,10 +495,13 @@ class Store:
         if not re.fullmatch(r"[0-9A-Za-z._-]{10,200}", key):
             raise ApiError(400, "invalid_key", "the key looks wrong (10-200 letters, digits, dots, dashes)")
         label = str(body.get("label") or "").strip()[:60]
+        kind = body.get("kind", "web")
+        if kind not in ("web", "app"):
+            raise ApiError(400, "invalid_kind", "kind must be web or app")
         limit = self._limit(body.get("daily_limit", 25000))
         with self.pool.connection() as c:
             try:
-                r = c.execute("INSERT INTO map_keys (label, api_key, daily_limit) VALUES (%s,%s,%s) RETURNING id", (label, key, limit)).fetchone()
+                r = c.execute("INSERT INTO map_keys (label, api_key, daily_limit, kind) VALUES (%s,%s,%s,%s) RETURNING id", (label, key, limit, kind)).fetchone()
             except psycopg.errors.UniqueViolation:
                 raise ApiError(409, "key_exists", "this key is already added") from None
         return {"id": r["id"]}
@@ -827,6 +833,10 @@ def make_handler(cfg, store):
             actor, _ = self.identity()
             return actor
 
+        def map_kind(self):
+            """Which kind of Yandex key this client can use: the app (device id) a MapKit key, the browser and Telegram a JavaScript API key."""
+            return "app" if self.identity()[1].get("kind") == "mobile" else "web"
+
         def me_lang(self):
             """The language this (signature-verified) Telegram user chose in the bot, else None. Used by the Mini App."""
             actor, _ = self.identity()
@@ -906,12 +916,12 @@ def make_handler(cfg, store):
                                             "photo_reading": ocr.available(),
                                             "voice_reading": stt.available(),
                                             "bot_username": cfg.bot_username,
-                                            "map": store.map_choice(self.map_client())})
+                                            "map": store.map_choice(self.map_client(), self.map_kind())})
             if path == "/api/map/yandex-failed" and method == "POST":
                 kid = self.body_json().get("key_id")
                 client = self.map_client()
                 exhausted = isinstance(kid, int) and store.map_report_failure(kid, client)
-                return self.send_json(200, {"exhausted": exhausted, "map": store.map_choice(client)})   # the next key (or OSM) right away: no gap
+                return self.send_json(200, {"exhausted": exhausted, "map": store.map_choice(client, self.map_kind())})   # the next key (or OSM) right away: no gap
             if path == "/api/timetable/read" and method == "POST":
                 return self.send_json(200, self.read_timetable())
             if path == "/api/timetable/voice" and method == "POST":

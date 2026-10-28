@@ -206,9 +206,6 @@ UZ = {
     "adm.map_hint": "Ilova va veb qaysi xaritani chizishini shu yerdan boshqarasiz. Yandex tanlansa, quyidagi kalitlardan limiti tugamagan birinchisi beriladi; hammasining limiti tugasa hamma avtomatik OpenStreetMapʼga oʻtadi. Masjid maʼlumotlari va koordinatalar har doim OpenStreetMapʼdan.",
     "adm.map_osm": "OpenStreetMap (bepul)",
     "adm.map_yandex": "Yandex (kalit limiti bor)",
-    "adm.map_now_osm": "Hozir hammaga: OpenStreetMap",
-    "adm.map_now_yandex": "Hozir hammaga: Yandex",
-    "adm.map_now_fallback": "Yandex tanlangan, lekin ishlaydigan kalit yoʻq: hozir OpenStreetMap",
     "adm.key_title": "Yandex kalitlari",
     "adm.key_ph": "Yandex API kaliti",
     "adm.key_label_ph": "Nomi (ixtiyoriy)",
@@ -231,6 +228,15 @@ UZ = {
     "err.invalid_limit": "Limit 1 dan katta butun son boʻlishi kerak",
     "err.key_exists": "Bu kalit allaqachon qoʻshilgan",
     "err.invalid_provider": "Nomaʼlum xarita turi",
+    "adm.map_web": "Veb",
+    "adm.map_app": "Ilova",
+    "adm.map_state_yandex": "Yandex",
+    "adm.map_state_osm": "OpenStreetMap",
+    "adm.map_state_fallback": "OpenStreetMap (ishlaydigan kalit yoʻq)",
+    "adm.kind_web": "Veb: JavaScript API kaliti",
+    "adm.kind_app": "Ilova: MapKit kaliti",
+    "adm.key_kind": "Kalit turi",
+    "err.invalid_kind": "Kalit turi notoʻgʻri",
 }
 
 RU = {
@@ -424,9 +430,6 @@ RU = {
     "adm.map_hint": "Здесь выбирается, какую карту рисуют приложение и веб. При выборе Яндекса выдаётся первый ключ, у которого не исчерпан лимит; когда лимиты всех ключей исчерпаны, все автоматически переходят на OpenStreetMap. Данные о мечетях и координаты всегда из OpenStreetMap.",
     "adm.map_osm": "OpenStreetMap (бесплатно)",
     "adm.map_yandex": "Яндекс (у ключа есть лимит)",
-    "adm.map_now_osm": "Сейчас у всех: OpenStreetMap",
-    "adm.map_now_yandex": "Сейчас у всех: Яндекс",
-    "adm.map_now_fallback": "Выбран Яндекс, но рабочего ключа нет: сейчас OpenStreetMap",
     "adm.key_title": "Ключи Яндекса",
     "adm.key_ph": "API-ключ Яндекса",
     "adm.key_label_ph": "Название (необязательно)",
@@ -449,6 +452,15 @@ RU = {
     "err.invalid_limit": "Лимит должен быть целым числом больше 0",
     "err.key_exists": "Этот ключ уже добавлен",
     "err.invalid_provider": "Неизвестный тип карты",
+    "adm.map_web": "Веб",
+    "adm.map_app": "Приложение",
+    "adm.map_state_yandex": "Яндекс",
+    "adm.map_state_osm": "OpenStreetMap",
+    "adm.map_state_fallback": "OpenStreetMap (рабочего ключа нет)",
+    "adm.kind_web": "Веб: ключ JavaScript API",
+    "adm.kind_app": "Приложение: ключ MapKit",
+    "adm.key_kind": "Тип ключа",
+    "err.invalid_kind": "Неверный тип ключа",
 }
 
 EN = {
@@ -642,9 +654,6 @@ EN = {
     "adm.map_hint": "Choose which map the app and the web draw. With Yandex, the first key that still has room is handed out; when every key is used up, everybody switches to OpenStreetMap automatically. Mosque data and coordinates always come from OpenStreetMap.",
     "adm.map_osm": "OpenStreetMap (free)",
     "adm.map_yandex": "Yandex (keys have limits)",
-    "adm.map_now_osm": "Right now everybody gets: OpenStreetMap",
-    "adm.map_now_yandex": "Right now everybody gets: Yandex",
-    "adm.map_now_fallback": "Yandex is selected but no key works: right now OpenStreetMap",
     "adm.key_title": "Yandex keys",
     "adm.key_ph": "Yandex API key",
     "adm.key_label_ph": "Name (optional)",
@@ -667,6 +676,15 @@ EN = {
     "err.invalid_limit": "The limit must be a whole number above 0",
     "err.key_exists": "This key is already added",
     "err.invalid_provider": "Unknown map type",
+    "adm.map_web": "Web",
+    "adm.map_app": "App",
+    "adm.map_state_yandex": "Yandex",
+    "adm.map_state_osm": "OpenStreetMap",
+    "adm.map_state_fallback": "OpenStreetMap (no working key)",
+    "adm.kind_web": "Web: JavaScript API key",
+    "adm.kind_app": "App: MapKit key",
+    "adm.key_kind": "Key type",
+    "err.invalid_kind": "Unknown key type",
 }
 
 # Hand-written Cyrillic where plain transliteration would be wrong (loan words that need ь/ц etc.).
