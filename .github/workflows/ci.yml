@@ -27,8 +27,8 @@ jobs:
     env:
       TEST_DATABASE_URL: postgresql://ci:ci@localhost:5432/masjid_test   # wiped by the tests: CI only
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -42,7 +42,7 @@ jobs:
     needs: [test]
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: docker build --platform linux/amd64 -t masjid-uz:ci .
       - name: image runs as non-root and imports
         run: |
