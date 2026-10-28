@@ -516,6 +516,24 @@ class Api(unittest.TestCase):
         self.assertEqual(self.cfg_map("c0000002-1")["yandex_key"], "ACCOUNT-1-0123456789")      # others are not affected by one device's reports
         self.reset()
 
+    def test_csp_opens_for_yandex_only_while_it_is_chosen(self):
+        self.reset()
+        def csp():
+            with urllib.request.urlopen(self.base + "/") as r:
+                return r.headers.get("Content-Security-Policy")
+        self.call("POST", "/api/admin/map/provider", {"provider": "osm"}, admin=True)
+        c = csp()
+        self.assertNotIn("yandex", c)
+        self.assertNotIn("unsafe-eval", c)
+        self.call("POST", "/api/admin/map/provider", {"provider": "yandex"}, admin=True)
+        c = csp()
+        self.assertIn("https://api-maps.yandex.ru", c)
+        self.assertIn("https://*.maps.yandex.net", c)
+        self.assertIn("'unsafe-eval'", c)
+        self.call("POST", "/api/admin/map/provider", {"provider": "osm"}, admin=True)
+        self.assertNotIn("yandex", csp())
+        self.reset()
+
 
 def make_server(**extra):
     """Fresh server on a free port against the test DB, independent of test order and of the real .env."""
