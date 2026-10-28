@@ -405,6 +405,116 @@ class Store:
             rows = c.execute(sql + " ORDER BY last_seen DESC LIMIT %s", args + [min(limit, 200)]).fetchall()
         return [dict(r, first_seen=iso(r["first_seen"]), last_seen=iso(r["last_seen"])) for r in rows]
 
+    # -- map provider: OpenStreetMap or Yandex with a pool of keys (see migrations/009_map_keys.sql)
+    MAP_DAY = "(now() AT TIME ZONE 'Europe/Moscow')::date"          # Yandex counts its day in Moscow time
+    MAP_REPORTS_TO_EXHAUST = 3                                         # distinct devices that must say "Yandex refused this key"
+
+    def map_choice(self, client):
+        """What a client should draw today -> {"provider": "osm"} or {"provider": "yandex", "yandex_key": ..., "key_id": ...}.
+        The first enabled key with room (distinct users today < its limit, not refused by Yandex today) is handed out and remembered
+        for the day, so one user counts once. No key left -> OpenStreetMap, whatever the setting says."""
+        osm = {"provider": "osm"}
+        with self.pool.connection() as c:
+            if c.execute("SELECT provider FROM map_settings").fetchone()["provider"] != "yandex":
+                return osm
+            c.execute("SELECT pg_advisory_xact_lock(727002)")
+            day = c.execute("SELECT " + self.MAP_DAY + " AS d").fetchone()["d"]
+            usable = ("SELECT k.id, k.api_key FROM map_keys k WHERE k.enabled AND k.exhausted_on IS DISTINCT FROM %s"
+                      " AND (SELECT COUNT(*) FROM map_key_users u WHERE u.day=%s AND u.key_id=k.id) < k.daily_limit ORDER BY k.id LIMIT 1")
+            row = None
+            if client:
+                row = c.execute("SELECT k.id, k.api_key FROM map_key_users u JOIN map_keys k ON k.id=u.key_id WHERE u.day=%s AND u.client_id=%s"
+                                " AND k.enabled AND k.exhausted_on IS DISTINCT FROM %s", (day, client, day)).fetchone()
+            if not row:
+                row = c.execute(usable, (day, day)).fetchone()
+                if row and client:
+                    c.execute("INSERT INTO map_key_users (day, client_id, key_id) VALUES (%s,%s,%s)"
+                              " ON CONFLICT (day, client_id) DO UPDATE SET key_id=EXCLUDED.key_id", (day, client, row["id"]))
+                    c.execute("DELETE FROM map_key_users WHERE day < %s - 2", (day,))
+                    c.execute("DELETE FROM map_key_reports WHERE day < %s - 2", (day,))
+        return {"provider": "yandex", "yandex_key": row["api_key"], "key_id": row["id"]} if row else osm
+
+    def map_report_failure(self, key_id, client):
+        """A client says Yandex refused this key. Enough different devices saying so switch the key off for the rest of the day."""
+        if not client:
+            return False
+        with self.pool.connection() as c:
+            day = c.execute("SELECT " + self.MAP_DAY + " AS d").fetchone()["d"]
+            if not c.execute("SELECT 1 FROM map_keys WHERE id=%s", (key_id,)).fetchone():
+                return False
+            c.execute("INSERT INTO map_key_reports (day, key_id, client_id) VALUES (%s,%s,%s) ON CONFLICT DO NOTHING", (day, key_id, client))
+            n = c.execute("SELECT COUNT(*) AS n FROM map_key_reports WHERE day=%s AND key_id=%s", (day, key_id)).fetchone()["n"]
+            if n >= self.MAP_REPORTS_TO_EXHAUST:
+                c.execute("UPDATE map_keys SET exhausted_on=%s WHERE id=%s", (day, key_id))
+                return True
+        return False
+
+    @staticmethod
+    def _mask(k):
+        return k[:4] + "…" + k[-4:] if len(k) > 10 else "…"
+
+    def map_admin(self):
+        with self.pool.connection() as c:
+            provider = c.execute("SELECT provider FROM map_settings").fetchone()["provider"]
+            day = c.execute("SELECT " + self.MAP_DAY + " AS d").fetchone()["d"]
+            keys = [{"id": r["id"], "label": r["label"], "key": self._mask(r["api_key"]), "daily_limit": r["daily_limit"], "enabled": r["enabled"],
+                     "exhausted": r["exhausted_on"] == day, "users_today": r["users"]} for r in c.execute(
+                "SELECT k.*, (SELECT COUNT(*) FROM map_key_users u WHERE u.day=%s AND u.key_id=k.id) AS users FROM map_keys k ORDER BY k.id", (day,))]
+        usable = [k for k in keys if k["enabled"] and not k["exhausted"] and k["users_today"] < k["daily_limit"]]
+        return {"provider": provider, "keys": keys, "effective": "yandex" if provider == "yandex" and usable else "osm"}
+
+    def map_set_provider(self, provider):
+        if provider not in ("osm", "yandex"):
+            raise ApiError(400, "invalid_provider", "provider must be osm or yandex")
+        with self.pool.connection() as c:
+            c.execute("UPDATE map_settings SET provider=%s, updated_at=now()", (provider,))
+
+    def map_add_key(self, body):
+        key = str(body.get("key") or "").strip()
+        if not re.fullmatch(r"[0-9A-Za-z._-]{10,200}", key):
+            raise ApiError(400, "invalid_key", "the key looks wrong (10-200 letters, digits, dots, dashes)")
+        label = str(body.get("label") or "").strip()[:60]
+        limit = self._limit(body.get("daily_limit", 1000))
+        with self.pool.connection() as c:
+            try:
+                r = c.execute("INSERT INTO map_keys (label, api_key, daily_limit) VALUES (%s,%s,%s) RETURNING id", (label, key, limit)).fetchone()
+            except psycopg.errors.UniqueViolation:
+                raise ApiError(409, "key_exists", "this key is already added") from None
+        return {"id": r["id"]}
+
+    @staticmethod
+    def _limit(v):
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            n = 0
+        if not 1 <= n <= 10_000_000:
+            raise ApiError(400, "invalid_limit", "the daily limit must be a whole number from 1 up")
+        return n
+
+    def map_update_key(self, key_id, body):
+        sets, args = [], []
+        if "enabled" in body:
+            sets.append("enabled=%s"); args.append(bool(body["enabled"]))
+        if "daily_limit" in body:
+            sets.append("daily_limit=%s"); args.append(self._limit(body["daily_limit"]))
+        if "label" in body:
+            sets.append("label=%s"); args.append(str(body["label"]).strip()[:60])
+        if body.get("reset"):
+            sets.append("exhausted_on=NULL")
+        if not sets:
+            raise ApiError(400, "invalid", "nothing to change")
+        with self.pool.connection() as c:
+            if not c.execute("UPDATE map_keys SET " + ",".join(sets) + " WHERE id=%s RETURNING id", args + [key_id]).fetchone():
+                raise ApiError(404, "not_found", "no such key")
+            if body.get("reset"):
+                c.execute("DELETE FROM map_key_reports WHERE key_id=%s", (key_id,))
+
+    def map_delete_key(self, key_id):
+        with self.pool.connection() as c:
+            if not c.execute("DELETE FROM map_keys WHERE id=%s RETURNING id", (key_id,)).fetchone():
+                raise ApiError(404, "not_found", "no such key")
+
     def history(self, m_id):
         """Public audit trail: no personal identifiers. `actor` is only a role: user | moderator | osm | system."""
         with self.pool.connection() as c:
@@ -688,6 +798,11 @@ def make_handler(cfg, store):
                 return "client:" + cid, info
             return None, info
 
+        def map_client(self):
+            """The id a map key is counted against: the verified Telegram user, device id or browser id (never invented from other headers)."""
+            actor, _ = self.identity()
+            return actor
+
         def me_lang(self):
             """The language this (signature-verified) Telegram user chose in the bot, else None. Used by the Mini App."""
             actor, _ = self.identity()
@@ -766,7 +881,11 @@ def make_handler(cfg, store):
                                             "admin_token_login": cfg.allow_admin_token,
                                             "photo_reading": ocr.available(),
                                             "voice_reading": stt.available(),
-                                            "bot_username": cfg.bot_username})
+                                            "bot_username": cfg.bot_username,
+                                            "map": store.map_choice(self.map_client())})
+            if path == "/api/map/yandex-failed" and method == "POST":
+                kid = self.body_json().get("key_id")
+                return self.send_json(200, {"exhausted": isinstance(kid, int) and store.map_report_failure(kid, self.map_client())})
             if path == "/api/timetable/read" and method == "POST":
                 return self.send_json(200, self.read_timetable())
             if path == "/api/timetable/voice" and method == "POST":
@@ -830,6 +949,23 @@ def make_handler(cfg, store):
                     raise ApiError(401, "unauthorized", "moderator access requires an allow-listed Telegram account")
                 if path == "/api/admin/actors" and method == "GET":
                     return self.send_json(200, {"items": store.actors(q.get("q"), int(q.get("limit", 50)))})
+                if path == "/api/admin/map" and method == "GET":
+                    return self.send_json(200, store.map_admin())
+                if path == "/api/admin/map/provider" and method == "POST":
+                    store.map_set_provider(self.body_json().get("provider"))
+                    return self.send_json(200, store.map_admin())
+                if path == "/api/admin/map/keys" and method == "POST":
+                    store.map_add_key(self.body_json())
+                    return self.send_json(201, store.map_admin())
+                m = re.fullmatch(r"/api/admin/map/keys/(\d{1,9})(/delete)?", path)
+                if m and method in ("PATCH", "POST"):
+                    if m.group(2):
+                        store.map_delete_key(int(m.group(1)))
+                    elif method == "PATCH":
+                        store.map_update_key(int(m.group(1)), self.body_json())
+                    else:
+                        raise ApiError(405, "method_not_allowed", "method not allowed")
+                    return self.send_json(200, store.map_admin())
                 if path == "/api/admin/overview" and method == "GET":
                     return self.send_json(200, store.overview())
                 if path == "/api/admin/mosques" and method == "GET":

@@ -126,3 +126,16 @@ Tilni tanlamagan foydalanuvchining birinchi xabari (masalan, lokatsiya yoki `/st
 (8 MB); Tesseract yo'q bo'lsa `503 ocr_unavailable` va `/api/config` da `photo_reading: false` (ilova tugmani yashiradi).
 
 Ovozdan o'qish (`POST /api/timetable/voice`, ilovadagi mikrofon tugmasi): bot bilan bir xil ovoz modeli (`faster-whisper`, `WITH_VOICE=1`) va bir xil qoidalar (o'zbekcha, ruscha, inglizcha; AM/PM aniqlanadi). Yozuv xotirada tanib olinadi va tashlanadi; soatlik cheklov rasmniki bilan umumiy, hajm `MAX_VOICE_BYTES` (2 MB), bir vaqtda bitta yozuv (`503 busy`); model yo'q bo'lsa `503 stt_unavailable` va `/api/config` da `voice_reading: false` (ilova tugmani yashiradi).
+
+## Xarita turi va Yandex kalitlari (admin panel → «Xarita»)
+Moderator paneli (`/admin.html`, faqat Telegram orqali) → **Xarita** yorlig'i:
+- **Xarita turi:** OpenStreetMap (bepul, standart) yoki Yandex. Klientlar `GET /api/config` javobidagi `map` maydonidan o'qiydi:
+  `{"provider": "osm"}` yoki `{"provider": "yandex", "yandex_key": "…", "key_id": N}`.
+- **Kalitlar puli:** bir nechta Yandex kaliti qo'shiladi, har biriga **kunlik limit** (shu kalit bir kunda xizmat qiladigan *foydalanuvchi*
+  soni; Yandex tarifingizga qarab o'zingiz qo'yasiz). Foydalanuvchiga limiti tugamagan *birinchi* kalit beriladi va o'sha kun uchun eslab qolinadi
+  (bir foydalanuvchi bir marta sanaladi). Kun Moskva vaqti bilan almashadi.
+- **Avtomatik zaxira:** hamma kalitning limiti tugasa (yoki o'chirilgan bo'lsa) hamma uchun OpenStreetMap beriladi, kalit qo'shsangiz yoki limitni
+  oshirsangiz qaytadan Yandex.
+- **Yandex rad etsa:** klient `POST /api/map/yandex-failed {"key_id": N}` yuboradi; 3 ta turli qurilma xabar bersa kalit shu kunga to'xtatiladi
+  (panelda «Yandex rad etdi», «Qayta urinish» tugmasi bilan qaytariladi).
+- Kalitlar panelda faqat qisman ko'rinadi (`ABCD…WXYZ`). Masjid ma'lumotlari va koordinatalar har doim OpenStreetMap'dan.

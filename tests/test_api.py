@@ -444,6 +444,59 @@ class Api(unittest.TestCase):
         try: urllib.request.urlopen(self.base + "/..%2fserver/app.py"); self.fail()
         except urllib.error.HTTPError as e: self.assertEqual(e.code, 404)
 
+    # -- which map the clients draw: OSM, or Yandex with a pool of keys that rotates and falls back to OSM by itself
+    def cfg_map(self, client):
+        return self.call("GET", "/api/config", client=client)[1]["map"]
+
+    def reset(self):
+        with psycopg.connect(TEST_URL, autocommit=True) as c:
+            c.execute("DELETE FROM map_keys; DELETE FROM map_key_users; DELETE FROM map_key_reports; UPDATE map_settings SET provider='osm'")
+
+    def test_pool_rotation_and_fallback(self):
+        self.reset()
+        self.assertEqual(self.cfg_map("a0000001-1"), {"provider": "osm"})                       # the default: OpenStreetMap
+        self.assertEqual(self.call("GET", "/api/admin/map")[0], 401)                           # admin only
+        s, a = self.call("POST", "/api/admin/map/provider", {"provider": "yandex"}, admin=True)
+        self.assertEqual((s, a["provider"], a["effective"]), (200, "yandex", "osm"))           # yandex chosen but no key yet: OSM
+        self.assertEqual(self.cfg_map("a0000001-1")["provider"], "osm")
+        self.assertEqual(self.call("POST", "/api/admin/map/keys", {"key": "short"}, admin=True)[0], 400)
+        self.assertEqual(self.call("POST", "/api/admin/map/keys", {"key": "KEY-ONE-1234567890", "label": "one", "daily_limit": 2}, admin=True)[0], 201)
+        self.assertEqual(self.call("POST", "/api/admin/map/keys", {"key": "KEY-ONE-1234567890"}, admin=True)[0], 409)
+        s, a = self.call("POST", "/api/admin/map/keys", {"key": "KEY-TWO-1234567890", "label": "two", "daily_limit": 1}, admin=True)
+        self.assertEqual(a["effective"], "yandex")
+        self.assertNotIn("KEY-ONE-1234567890", json.dumps(a))                                  # the list never shows a whole key
+        # two users fill key one (limit 2), the third gets key two (limit 1), the fourth finds nothing left -> OSM
+        c1, c2, c3, c4 = (self.cfg_map("a000000%d-1" % i) for i in (1, 2, 3, 4))
+        self.assertEqual((c1["yandex_key"], c2["yandex_key"]), ("KEY-ONE-1234567890",) * 2)
+        self.assertEqual(c3["yandex_key"], "KEY-TWO-1234567890")
+        self.assertEqual(c4, {"provider": "osm"})
+        self.assertEqual(self.cfg_map("a0000001-1")["yandex_key"], "KEY-ONE-1234567890")        # a user already counted keeps their key
+        a = self.call("GET", "/api/admin/map", admin=True)[1]
+        self.assertEqual([k["users_today"] for k in a["keys"]], [2, 1])
+        # clients tell that Yandex refused key two: three different devices switch it off for the day
+        kid = a["keys"][1]["id"]
+        for i, who in enumerate(("b0000001-1", "b0000002-1", "b0000003-1")):
+            s, r = self.call("POST", "/api/map/yandex-failed", {"key_id": kid}, client=who)
+            self.assertEqual((s, r["exhausted"]), (200, i == 2))
+        a = self.call("GET", "/api/admin/map", admin=True)[1]
+        self.assertTrue(a["keys"][1]["exhausted"])
+        self.assertEqual(self.cfg_map("a0000003-1"), {"provider": "osm"})                      # its user falls back (key one is full)
+        # the owner switches it back on, raises key one's limit
+        self.call("PATCH", "/api/admin/map/keys/%d" % a["keys"][0]["id"], {"daily_limit": 50}, admin=True)
+        self.assertEqual(self.cfg_map("a0000003-1")["yandex_key"], "KEY-ONE-1234567890")
+        s, a = self.call("PATCH", "/api/admin/map/keys/%d" % kid, {"reset": True, "enabled": False}, admin=True)
+        self.assertEqual((a["keys"][1]["exhausted"], a["keys"][1]["enabled"]), (False, False))
+        # switching the provider off sends everybody to OSM, whatever the pool holds
+        self.call("POST", "/api/admin/map/provider", {"provider": "osm"}, admin=True)
+        self.assertEqual(self.cfg_map("a0000001-1"), {"provider": "osm"})
+        self.assertEqual(self.call("POST", "/api/admin/map/provider", {"provider": "google"}, admin=True)[0], 400)
+        # a key can be removed (POST .../delete: nothing is deletable with the DELETE method)
+        s, a = self.call("POST", "/api/admin/map/keys/%d/delete" % kid, {}, admin=True)
+        self.assertEqual([k["label"] for k in a["keys"]], ["one"])
+        self.assertEqual(self.call("POST", "/api/admin/map/keys/99999/delete", {}, admin=True)[0], 404)
+        self.reset()
+
+
 def make_server(**extra):
     """Fresh server on a free port against the test DB, independent of test order and of the real .env."""
     env = dict(DATABASE_URL=TEST_URL, ADMIN_TOKEN="secret", PORT="0", WRITE_RATE_PER_MIN="1000", TELEGRAM_BOT_TOKEN=BOT_TOKEN,
@@ -459,6 +512,7 @@ def make_server(**extra):
             else: os.environ[k] = v
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv, "http://127.0.0.1:%d" % srv.server_address[1]
+
 
 class TimetableVoiceEndpoint(unittest.TestCase):
     """POST /api/timetable/voice with a fake speech recogniser (the real model is not needed to test the endpoint)."""

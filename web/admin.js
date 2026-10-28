@@ -121,6 +121,55 @@
     });
   }
 
+  function viewMap(v) {                              // which map everybody gets, and the pool of Yandex keys
+    function call(method, path, body) { return api(method, path, body).then(function () { toast(T("adm.done")); render(); }).catch(fail); }
+    api("GET", "/api/admin/map").then(function (m) {
+      v.textContent = "";
+      var seg = el("div", { class: "seg" }, [["osm", "adm.map_osm"], ["yandex", "adm.map_yandex"]].map(function (o) {
+        return el("button", { type: "button", class: "btn ghost" + (m.provider === o[0] ? " on" : ""), text: T(o[1]), onclick: function () {
+          if (m.provider !== o[0]) call("POST", "/api/admin/map/provider", { provider: o[0] });
+        } });
+      }));
+      var now = m.effective === "yandex" ? T("adm.map_now_yandex") : m.provider === "yandex" ? T("adm.map_now_fallback") : T("adm.map_now_osm");
+      v.appendChild(el("div", { class: "card" }, [
+        el("h3", { text: T("adm.map_title") }), el("p", { class: "muted", text: T("adm.map_hint") }), seg,
+        el("p", { class: "now" + (m.provider === "yandex" && m.effective !== "yandex" ? " warn" : ""), text: now })
+      ]));
+      var list = el("div", { class: "card" }, [el("h3", { text: T("adm.key_title") })]);
+      if (!m.keys.length) list.appendChild(el("p", { class: "muted", text: T("adm.key_none") }));
+      m.keys.forEach(function (k) {
+        var full = k.users_today >= k.daily_limit;
+        var state = !k.enabled ? [T("adm.key_off"), "neutral"] : k.exhausted ? [T("adm.key_exhausted"), "warn"] : full ? [T("adm.key_full"), "warn"] : [T("adm.key_ok"), ""];
+        var pct = Math.min(100, Math.round(100 * k.users_today / k.daily_limit));
+        list.appendChild(el("div", { class: "keyrow" }, [
+          el("div", { class: "keyhead" }, [el("b", { text: k.label || ("#" + k.id) }), el("code", { text: k.key }), el("span", { class: "chip " + state[1], text: state[0] })]),
+          el("div", { class: "meter" }, [el("i", { style: "width:" + pct + "%" })]),
+          el("div", { class: "muted", text: T("adm.key_users", { n: k.users_today, max: k.daily_limit }) }),
+          el("div", { class: "actions" }, [
+            el("button", { class: "btn ghost", type: "button", text: k.enabled ? T("adm.key_pause") : T("adm.key_resume"), onclick: function () { call("PATCH", "/api/admin/map/keys/" + k.id, { enabled: !k.enabled }); } }),
+            k.exhausted ? el("button", { class: "btn ghost", type: "button", text: T("adm.key_reset"), onclick: function () { call("PATCH", "/api/admin/map/keys/" + k.id, { reset: true }); } }) : null,
+            el("button", { class: "btn ghost", type: "button", text: T("adm.key_limit"), onclick: function () {
+              var n = window.prompt(T("adm.key_limit_prompt"), String(k.daily_limit));
+              if (n !== null && n.trim()) call("PATCH", "/api/admin/map/keys/" + k.id, { daily_limit: n.trim() });
+            } }),
+            el("button", { class: "btn danger", type: "button", text: T("adm.key_delete"), onclick: function () {
+              if (window.confirm(T("adm.key_confirm_delete"))) call("POST", "/api/admin/map/keys/" + k.id + "/delete", {});
+            } })
+          ])
+        ]));
+      });
+      var key = el("input", { type: "password", placeholder: T("adm.key_ph"), autocomplete: "off", spellcheck: "false", maxlength: 200 });
+      var label = el("input", { placeholder: T("adm.key_label_ph"), maxlength: 60 });
+      var limit = el("input", { type: "number", min: 1, value: 1000, placeholder: T("adm.key_limit_ph") });
+      list.appendChild(el("form", { class: "keyadd", onsubmit: function (e) {
+        e.preventDefault();
+        if (!key.value.trim()) return;
+        call("POST", "/api/admin/map/keys", { key: key.value.trim(), label: label.value, daily_limit: limit.value });
+      } }, [key, label, limit, el("button", { class: "btn", text: T("adm.key_add") })]));
+      v.appendChild(list);
+    }).catch(fail);
+  }
+
   function render() {
     var on = !!tg || !!token;
     $("gate").hidden = true;
@@ -142,6 +191,7 @@
         { label: T("adm.archive"), action: "archive", cls: "danger", confirm: T("adm.confirm_archive") },
         { label: T("adm.dismiss"), action: "dismiss", cls: "ghost" }]);
       else if (tab === "archived") viewList(v, "archived", [{ label: T("adm.restore"), action: "restore" }]);
+      else if (tab === "map") viewMap(v);
       else viewActivity(v, ov);
     }).catch(fail);
   }
