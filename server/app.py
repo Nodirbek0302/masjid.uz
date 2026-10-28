@@ -451,12 +451,13 @@ class Store:
                 return True
         return False
 
-    _map_flag = (0.0, False)
+    _map_flag = None                      # (when asked, answer); None = ask again
 
     def map_uses_yandex(self):
         """True while the admin has chosen Yandex (asked at most every 10 s: this runs for every response)."""
-        t, v = self._map_flag
-        if time.monotonic() - t > 10:
+        flag = self._map_flag
+        t, v = flag if flag else (0.0, False)
+        if flag is None or time.monotonic() - t > 10:
             try:
                 with self.pool.connection() as c:
                     v = c.execute("SELECT provider FROM map_settings").fetchone()["provider"] == "yandex"
@@ -484,7 +485,7 @@ class Store:
             raise ApiError(400, "invalid_provider", "provider must be osm or yandex")
         with self.pool.connection() as c:
             c.execute("UPDATE map_settings SET provider=%s, updated_at=now()", (provider,))
-        self._map_flag = (0.0, False)         # the page headers follow the new choice at once
+        self._map_flag = None                 # the page headers follow the new choice at once
 
     def map_add_key(self, body):
         key = str(body.get("key") or "").strip()
