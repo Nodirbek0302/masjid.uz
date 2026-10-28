@@ -478,6 +478,7 @@ class Api(unittest.TestCase):
         for i, who in enumerate(("b0000001-1", "b0000002-1", "b0000003-1")):
             s, r = self.call("POST", "/api/map/yandex-failed", {"key_id": kid}, client=who)
             self.assertEqual((s, r["exhausted"]), (200, i == 2))
+            self.assertNotEqual(r["map"].get("key_id"), kid)                                    # the reply already carries the next key (or OSM)
         a = self.call("GET", "/api/admin/map", admin=True)[1]
         self.assertTrue(a["keys"][1]["exhausted"])
         self.assertEqual(self.cfg_map("a0000003-1"), {"provider": "osm"})                      # its user falls back (key one is full)
@@ -494,6 +495,25 @@ class Api(unittest.TestCase):
         s, a = self.call("POST", "/api/admin/map/keys/%d/delete" % kid, {}, admin=True)
         self.assertEqual([k["label"] for k in a["keys"]], ["one"])
         self.assertEqual(self.call("POST", "/api/admin/map/keys/99999/delete", {}, admin=True)[0], 404)
+        self.reset()
+
+    def test_three_accounts_switch_without_a_gap(self):
+        self.reset()
+        self.call("POST", "/api/admin/map/provider", {"provider": "yandex"}, admin=True)
+        for i in (1, 2, 3):
+            self.call("POST", "/api/admin/map/keys", {"key": "ACCOUNT-%d-0123456789" % i, "label": "acc %d" % i}, admin=True)
+        ids = [k["id"] for k in self.call("GET", "/api/admin/map", admin=True)[1]["keys"]]
+        me = "c0000001-1"
+        self.assertEqual(self.cfg_map(me)["yandex_key"], "ACCOUNT-1-0123456789")
+        # Yandex stops key 1 for this device (its 25 000 are used): the reply already holds key 2, then key 3, then OSM
+        r = self.call("POST", "/api/map/yandex-failed", {"key_id": ids[0]}, client=me)[1]
+        self.assertEqual(r["map"]["yandex_key"], "ACCOUNT-2-0123456789")
+        r = self.call("POST", "/api/map/yandex-failed", {"key_id": ids[1]}, client=me)[1]
+        self.assertEqual(r["map"]["yandex_key"], "ACCOUNT-3-0123456789")
+        r = self.call("POST", "/api/map/yandex-failed", {"key_id": ids[2]}, client=me)[1]
+        self.assertEqual(r["map"], {"provider": "osm"})
+        self.assertEqual(self.cfg_map(me), {"provider": "osm"})                                 # stays on OSM for that device today
+        self.assertEqual(self.cfg_map("c0000002-1")["yandex_key"], "ACCOUNT-1-0123456789")      # others are not affected by one device's reports
         self.reset()
 
 

@@ -419,14 +419,16 @@ class Store:
                 return osm
             c.execute("SELECT pg_advisory_xact_lock(727002)")
             day = c.execute("SELECT " + self.MAP_DAY + " AS d").fetchone()["d"]
+            # a key this very client already reported as refused today is never handed to it again (the others may still work for it)
+            not_refused = " AND NOT EXISTS (SELECT 1 FROM map_key_reports r WHERE r.day=%s AND r.key_id=k.id AND r.client_id=%s)"
             usable = ("SELECT k.id, k.api_key FROM map_keys k WHERE k.enabled AND k.exhausted_on IS DISTINCT FROM %s"
-                      " AND (SELECT COUNT(*) FROM map_key_users u WHERE u.day=%s AND u.key_id=k.id) < k.daily_limit ORDER BY k.id LIMIT 1")
+                      " AND (SELECT COUNT(*) FROM map_key_users u WHERE u.day=%s AND u.key_id=k.id) < k.daily_limit" + not_refused + " ORDER BY k.id LIMIT 1")
             row = None
             if client:
                 row = c.execute("SELECT k.id, k.api_key FROM map_key_users u JOIN map_keys k ON k.id=u.key_id WHERE u.day=%s AND u.client_id=%s"
-                                " AND k.enabled AND k.exhausted_on IS DISTINCT FROM %s", (day, client, day)).fetchone()
+                                " AND k.enabled AND k.exhausted_on IS DISTINCT FROM %s" + not_refused, (day, client, day, day, client)).fetchone()
             if not row:
-                row = c.execute(usable, (day, day)).fetchone()
+                row = c.execute(usable, (day, day, day, client or "")).fetchone()
                 if row and client:
                     c.execute("INSERT INTO map_key_users (day, client_id, key_id) VALUES (%s,%s,%s)"
                               " ON CONFLICT (day, client_id) DO UPDATE SET key_id=EXCLUDED.key_id", (day, client, row["id"]))
@@ -474,7 +476,7 @@ class Store:
         if not re.fullmatch(r"[0-9A-Za-z._-]{10,200}", key):
             raise ApiError(400, "invalid_key", "the key looks wrong (10-200 letters, digits, dots, dashes)")
         label = str(body.get("label") or "").strip()[:60]
-        limit = self._limit(body.get("daily_limit", 1000))
+        limit = self._limit(body.get("daily_limit", 25000))
         with self.pool.connection() as c:
             try:
                 r = c.execute("INSERT INTO map_keys (label, api_key, daily_limit) VALUES (%s,%s,%s) RETURNING id", (label, key, limit)).fetchone()
@@ -885,7 +887,9 @@ def make_handler(cfg, store):
                                             "map": store.map_choice(self.map_client())})
             if path == "/api/map/yandex-failed" and method == "POST":
                 kid = self.body_json().get("key_id")
-                return self.send_json(200, {"exhausted": isinstance(kid, int) and store.map_report_failure(kid, self.map_client())})
+                client = self.map_client()
+                exhausted = isinstance(kid, int) and store.map_report_failure(kid, client)
+                return self.send_json(200, {"exhausted": exhausted, "map": store.map_choice(client)})   # the next key (or OSM) right away: no gap
             if path == "/api/timetable/read" and method == "POST":
                 return self.send_json(200, self.read_timetable())
             if path == "/api/timetable/voice" and method == "POST":

@@ -160,7 +160,7 @@
       });
       var key = el("input", { type: "password", placeholder: T("adm.key_ph"), autocomplete: "off", spellcheck: "false", maxlength: 200 });
       var label = el("input", { placeholder: T("adm.key_label_ph"), maxlength: 60 });
-      var limit = el("input", { type: "number", min: 1, value: 1000, placeholder: T("adm.key_limit_ph") });
+      var limit = el("input", { type: "number", min: 1, value: 25000, placeholder: T("adm.key_limit_ph") });
       list.appendChild(el("form", { class: "keyadd", onsubmit: function (e) {
         e.preventDefault();
         if (!key.value.trim()) return;
