@@ -1,29 +1,26 @@
-"""One-off / periodic import of mosques from OpenStreetMap (ODbL) into the community database.
+"""Import of mosques from OpenStreetMap (ODbL) into the community database: container command `import-osm`, run once a night by
+TIMUS as a one-off container (never inside `serve`). Idempotent; prints one summary line at the end.
 
-Licence: data (c) OpenStreetMap contributors, ODbL 1.0. Imported rows are marked origin='imported',
-source='openstreetmap', carry osm_ref, and are re-published via /api/export/osm-derived.geojson
-(ODbL share-alike). Run manually, respectfully (Overpass fair-use); do not schedule frequent runs.
+Licence: data (c) OpenStreetMap contributors, ODbL 1.0. Imported rows are marked origin='imported', source='openstreetmap',
+carry osm_ref, and are re-published via /masjiduz/v1/export/osm-derived (ODbL share-alike).
+The only outbound call is the Overpass query (User-Agent names info@timus.uz); photos are worked out from the tags, no request is made.
 
-Usage:
-  python server/import_osm.py --fetch [--endpoint URL]   # query Overpass for Uzbekistan once
-  python server/import_osm.py --file overpass.json       # or import a saved Overpass JSON
+  python server/cli.py import-osm              # query Overpass for Uzbekistan
+  python server/cli.py import-osm --file F     # or use a saved Overpass JSON answer
 """
-import argparse
 import json
-import os
-import sys
+import logging
 import urllib.parse
 import urllib.request
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import app  # noqa: E402
-import osm_photo  # noqa: E402
-import translit  # noqa: E402
+import app
+import osm_photo
+import translit
 
 QUERY = ('[out:json][timeout:180];area["ISO3166-1"="UZ"][admin_level=2]->.a;'
          'nwr["amenity"="place_of_worship"]["religion"="muslim"](area.a);out center tags;')
-UA = "masjid-uz-import/0.1 (%s)" % os.environ.get("OSM_CONTACT", "no contact set")
+UA = "masjid-uz-import/1.0 (info@timus.uz)"
+log = logging.getLogger("import-osm")
 
 
 def osm_address(tags):
@@ -49,13 +46,14 @@ def osm_address(tags):
 
 
 def fetch(endpoint):
+    """One Overpass query (the only outbound call of this command)."""
     req = urllib.request.Request(endpoint, data=urllib.parse.urlencode({"data": QUERY}).encode(),
                                  headers={"User-Agent": UA})
     with urllib.request.urlopen(req, timeout=240) as r:
         return json.load(r)
 
 
-def sync_photos(data, store, lookup=osm_photo.commons_lookup):
+def sync_photos(data, store):
     """Photos come from the tags and are never edited by people, so they follow OSM even for rows a human has edited.
     A mosque is looked up once; a failed lookup is retried at the next sync."""
     wanted = {"%s/%s" % (el["type"], el["id"]): el["tags"] for el in data.get("elements", []) if osm_photo.commons_title(el.get("tags") or {})}
@@ -65,22 +63,18 @@ def sync_photos(data, store, lookup=osm_photo.commons_lookup):
             row = c.execute("SELECT id, photo_url FROM mosques WHERE osm_ref=%s AND status<>'archived'", (ref,)).fetchone()
             if not row or row["photo_url"]:
                 continue
-            try:
-                found = osm_photo.photo_for(tags, lookup)
-            except Exception as e:                      # Commons unreachable / odd answer: the sync itself must not fail
-                sys.stderr.write("photo lookup failed for %s: %s\n" % (ref, e))
-                continue
+            found = osm_photo.photo_for(tags)
             if found:
                 c.execute("UPDATE mosques SET photo_url=%s, photo_credit=%s WHERE id=%s", (found[0], found[1], row["id"]))
                 done += 1
     return done
 
 
-def run(data, cfg, store=None, photo_lookup=osm_photo.commons_lookup):
+def run(data, cfg, store=None):
     """Idempotent sync. New OSM objects are inserted. Existing imported rows are refreshed from OSM only while no
     human has touched them (every history row is by 'import:osm'); community edits always win. Objects that vanished
     from OSM are only counted, never archived automatically."""
-    store = store or app.Store(cfg)
+    store = store or app.Store(cfg, name="masjiduz-import", statement_timeout_ms=60000)
     added = updated = protected = near = unchanged = 0
     seen = set()
     for el in data.get("elements", []):
@@ -91,8 +85,11 @@ def run(data, cfg, store=None, photo_lookup=osm_photo.commons_lookup):
         ref = "%s/%s" % (el["type"], el["id"])
         seen.add(ref)
         tags = el.get("tags", {})
-        lat, lon = app.clean_coord(*pt)
-        name = (tags.get("name") or tags.get("name:uz") or tags.get("name:ru") or "")[:200] or None
+        try:
+            lat, lon = app.clean_coord(*pt)
+            name = app.clean_text((tags.get("name") or tags.get("name:uz") or tags.get("name:ru") or "")[:200], "name", 200)
+        except app.ApiError:                              # one odd OSM object never aborts the whole sync
+            continue
         addr = osm_address(tags)
         with store.pool.connection() as c:
             cur = c.cursor()
@@ -130,19 +127,10 @@ def run(data, cfg, store=None, photo_lookup=osm_photo.commons_lookup):
     if seen:                                          # only meaningful for a complete download
         with store.pool.connection() as c:
             gone = sum(1 for r in c.execute("SELECT osm_ref FROM mosques WHERE osm_ref IS NOT NULL AND status<>'archived'") if r["osm_ref"] not in seen)
-    photos = sync_photos(data, store, photo_lookup)
+    photos = sync_photos(data, store)
     summary = {"added": added, "updated": updated, "unchanged": unchanged, "protected_edited": protected,
                "near_existing": near, "missing_in_osm": gone, "photos": photos}
-    print(" ".join("%s=%d" % kv for kv in summary.items()))
+    line = "import-osm done: " + " ".join("%s=%d" % kv for kv in summary.items())
+    log.info(line)
+    print(line, flush=True)
     return summary
-
-
-if __name__ == "__main__":
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--fetch", action="store_true")
-    ap.add_argument("--file")
-    ap.add_argument("--endpoint", default=os.environ.get("OVERPASS_URL", "https://overpass-api.de/api/interpreter"))
-    a = ap.parse_args()
-    if not (a.fetch or a.file):
-        ap.error("--fetch or --file required")
-    run(fetch(a.endpoint) if a.fetch else json.load(open(a.file)), app.Config())

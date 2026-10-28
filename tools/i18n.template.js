@@ -15,7 +15,7 @@
   }
   function detect() {
     // 1) ?lang= (the bot opens the Mini App with the user's chosen language) is remembered; 2) the saved choice; 3) the browser language.
-    // Telegram's own interface language is deliberately NOT used: inside Telegram the choice made in the bot (/api/me) decides.
+    // Telegram's own interface language is deliberately NOT used: inside Telegram the choice made in the bot (GET /me) decides.
     var q = /[?&]lang=([\w-]+)/.exec(location.search), fromUrl = norm(q && q[1]);
     if (fromUrl) { try { localStorage.setItem("lang", fromUrl); } catch (e) {} return fromUrl; }
     var saved = null;
@@ -55,12 +55,18 @@
     var d = new Date(iso), p = function (n) { return (n < 10 ? "0" : "") + n; };
     return p(d.getDate()) + "." + p(d.getMonth() + 1) + "." + d.getFullYear() + " " + p(d.getHours()) + ":" + p(d.getMinutes());
   }
-  function errMessage(e) {                   // API error object or network failure -> localized text
+  var ERR_ALIAS = { validation: "invalid", service_unavailable: "busy", reader_unavailable: "ocr_unavailable", stt_unavailable: "stt_unavailable" };
+  function errMessage(e) {                   // API error ({status, code, message:{code,text,reason}}) or network failure -> localized text
     if (!e) return t("err.generic");
     if (e instanceof TypeError || e.name === "TypeError") return t("err.network");
-    var code = e.error || "";
-    if (D.uz["err." + code]) return t("err." + code);
-    if (/^invalid_/.test(code)) return t("err.invalid");
+    var mc = (e.message && e.message.code) || "";                       // "error.possibleDuplicate"
+    var key = String(mc).replace(/^error\./, "").replace(/[A-Z]/g, function (c) { return "_" + c.toLowerCase(); });   // -> "possible_duplicate"
+    if (key && D.uz["err." + key]) return t("err." + key);
+    if (key && ERR_ALIAS[key] && D.uz["err." + ERR_ALIAS[key]]) return t("err." + ERR_ALIAS[key]);
+    if (/^invalid_/.test(key)) return t("err.invalid");
+    if (e.code === "UNAUTHORIZED" && D.uz["err.unauthorized"]) return t("err.unauthorized");
+    if (e.code === "RATE_LIMITED") return t("err.rate_limited");
+    if (e.code === "NOT_FOUND") return t("err.not_found");
     return t("err.generic");
   }
   root.I18N = { t: t, apply: apply, init: init, set: set, lang: function () { return lang; }, langs: LANGS, fmtDate: fmtDate, errMessage: errMessage };

@@ -20,8 +20,8 @@
   try {
     if (tgData && !sessionStorage.getItem("langSync")) {
       sessionStorage.setItem("langSync", "1");
-      fetch("/api/me", { headers: { "X-Telegram-Init-Data": tgData } }).then(function (r) { return r.json(); }).then(function (j) {
-        if (j && j.lang && j.lang !== I18N.lang()) { I18N.set(j.lang); location.reload(); }
+      api("GET", "/me").then(function (d) {
+        if (d && d.lang && d.lang !== I18N.lang()) { I18N.set(d.lang); location.reload(); }
       }).catch(function () {});
     }
   } catch (e) {}
@@ -32,12 +32,25 @@
     document.head.appendChild(sc);
   }
 
-  function api(method, path, body) {
-    var h = { "Content-Type": "application/json", "X-Client-Id": clientId, "X-Client-Platform": "web", "ngrok-skip-browser-warning": "1" };   // header lets API calls pass ngrok's free-plan warning page
-    if (tg && tg.initData) h["X-Telegram-Init-Data"] = tg.initData;
-    return fetch(path, { method: method, headers: h, body: body ? JSON.stringify(body) : undefined })
-      .then(function (r) { return r.json().then(function (j) { if (!r.ok) { j.status = r.status; throw j; } return j; }); });
+  // Every endpoint answers {success, httpStatus, code, message:{code,text,reason?}, data}: success returns `data`,
+  // failure throws {status, code, message, data} (data carries e.g. the duplicates). A network failure stays a TypeError.
+  var API = window.MASJIDUZ_API_BASE || "/masjiduz/v1";
+  function headers(type) {
+    var h = { "Content-Type": type || "application/json", "X-Client-Id": clientId, "X-Client-Platform": "web" };
+    var init = (tg && tg.initData) || tgData;
+    if (init) h["X-Telegram-Init-Data"] = init;
+    return h;
   }
+  function send(method, path, type, body) {
+    return fetch(API + path, { method: method, headers: headers(type), body: body, keepalive: method !== "GET" && typeof body === "string" })
+      .then(function (r) {
+        return r.json().catch(function () { return null; }).then(function (j) {
+          if (r.ok && j && j.success !== false) return j.data;
+          throw { status: r.status, code: j && j.code, message: (j && j.message) || {}, data: j && j.data };
+        });
+      });
+  }
+  function api(method, path, body) { return send(method, path, "application/json", body ? JSON.stringify(body) : undefined); }
 
   function el(tag, props, children) {
     var n = document.createElement(tag);
@@ -64,10 +77,10 @@
     return null;                                    // plain unverified record: no badge (it never claims to be verified)
   }
 
-  // ---- navigation: opens an external app/site; nothing is requested from or stored by Yandex
-  function yandexLinks(m) {
+  // ---- navigation: a plain link that opens an external app/site; nothing is requested by this page
+  function routeLinks(m) {
     return [el("a", { class: "btn ghost", target: "_blank", rel: "noopener noreferrer",
-      href: "https://yandex.com/maps/?rtext=~" + m.lat + "," + m.lon + "&rtt=auto", text: "🧭 " + T("link.route") })];
+      href: "https://www.openstreetmap.org/?mlat=" + m.lat + "&mlon=" + m.lon + "#map=17/" + m.lat + "/" + m.lon, text: "🧭 " + T("link.route") })];
   }
 
   // ---- own mosque icon (drawn here; no third-party artwork): green badge with dome and minaret
@@ -86,26 +99,26 @@
   }
 
   // ---- map
-  var map, cfg = { style_url: "https://tiles.openfreemap.org/styles/liberty", duplicate_radius_m: 50 };
+  var map, cfg = { styleUrl: "https://tiles.openfreemap.org/styles/liberty", duplicateRadiusM: 50 };
   var mode = "browse", picked = null, pickMarker = null, popup = null;
 
   function emptyFC() { return { type: "FeatureCollection", features: [] }; }
   // ---- fast start ------------------------------------------------------------------------------
-  // Everything that can run in parallel does: style JSON, /api/config and the first mosque query start at
+  // Everything that can run in parallel does: style JSON, /config and the first mosque query start at
   // once (no waiting for the map "load" event). The map opens at the last known position (cached) or the
   // device location, so the first tiles are already the right ones, and only a padded window is fetched;
   // moving the map extends that window on demand.
   var DEFAULT_STYLE = "https://tiles.openfreemap.org/styles/liberty";
   var REGION = [[54, 36], [75.5, 47]];            // Uzbekistan + margin: panning is bounded, so no world-scale tile loading
   var TASHKENT = [69.2797, 41.3111];
-  var stylePromise = fetch(DEFAULT_STYLE, { headers: { "ngrok-skip-browser-warning": "1" } }).then(function (r) {
+  var stylePromise = fetch(DEFAULT_STYLE).then(function (r) {
     if (!r.ok) throw new Error("style HTTP " + r.status);
     return r.json();
   });
   stylePromise.catch(function () {});               // handled below; avoids an unhandled-rejection warning
   function mapProblem(text) { $("maperr-text").textContent = text; $("maperr").hidden = false; }
   $("maperr-retry").onclick = function () { location.reload(); };
-  var configPromise = api("GET", "/api/config").catch(function () { return cfg; });
+  var configPromise = api("GET", "/config").catch(function () { return cfg; });
 
   function savedPos() {
     try { var p = JSON.parse(localStorage.getItem("lastpos")); if (p && isFinite(p.lat) && isFinite(p.lon)) return p; } catch (e) {}
@@ -116,11 +129,11 @@
   var loadedBox = null, mosqueSeq = 0, moveTimer = null, userMoved = false, lastFC = emptyFC();
   function applyMosques() {
     var src = map && map.getSource("mosques");
-    if (src) src.setData(lastFC); else if (map && map.engine !== "yandex") map.once("styledata", applyMosques);
+    if (src) src.setData(lastFC); else if (map) map.once("styledata", applyMosques);
   }
   function fetchMosques(box) {                      // box = [west, south, east, north]
     var seq = ++mosqueSeq;
-    return api("GET", "/api/mosques?bbox=" + box.join(",")).then(function (r) {
+    return api("GET", "/mosques?bbox=" + box.join(",")).then(function (r) {
       if (seq !== mosqueSeq) return;                // a newer request superseded this one
       loadedBox = box;
       lastFC = { type: "FeatureCollection", features: r.items.map(function (m) {
@@ -160,7 +173,7 @@
     style.sources.mosques = { type: "geojson", data: lastFC };
     var font = ["Noto Sans Regular"];
     var halo = isDark() ? { "text-color": "#d1fae5", "text-halo-color": "#101416", "text-halo-width": 1.6 } : { "text-color": "#064e3b", "text-halo-color": "#fff", "text-halo-width": 1.6 };
-    if (c.show_tile_mosques !== false && style.sources.openmaptiles) {
+    if (c.showTileMosques !== false && style.sources.openmaptiles) {
       // Mosques already present in the OSM tiles, drawn live and never stored. The tile schema has no religion
       // field, so this matches on the name (masjid/мечеть/...): an interim, incomplete heuristic.
       var nm = ["downcase", ["coalesce", ["get", "name"], ""]];
@@ -187,8 +200,7 @@
   function applyTheme() {
     document.documentElement.dataset.theme = isDark() ? "dark" : "light";
     var m = document.querySelector('meta[name="theme-color"]'); if (m) m.content = isDark() ? "#12211e" : "#047857";
-    if (map && map.engine === "yandex") map.setDark(isDark());
-    else if (map && rawStyle) map.setStyle(buildStyle());                       // the map is recoloured at the same view
+    if (map && rawStyle) map.setStyle(buildStyle());                       // the map is recoloured at the same view
   }
   function toggleTheme() { theme = isDark() ? "light" : "dark"; try { localStorage.setItem("theme", theme); } catch (e) {} applyTheme(); }
   if (darkMQ && darkMQ.addEventListener) darkMQ.addEventListener("change", function () { if (!theme) applyTheme(); });
@@ -328,7 +340,7 @@
   function changeLang(code) {                                                   // labels are baked into the map style: reload at the same view
     I18N.set(code);
     if (tgData) {                                                                // keep the bot in the same language
-      try { fetch("/api/me/lang", { method: "POST", keepalive: true, headers: { "Content-Type": "application/json", "X-Telegram-Init-Data": tgData }, body: JSON.stringify({ lang: code }) }); } catch (e) {}
+      try { api("POST", "/me/lang", { lang: code }).catch(function () {}); } catch (e) {}
     }
     var u = new URL(location.href);
     u.searchParams.delete("lang");
@@ -367,7 +379,7 @@
     var now = new Date(), p = prayerPos(), o = cfg.prayer || {};
     var tz = inRegion(p.lon, p.lat) ? 5 : -now.getTimezoneOffset() / 60;
     var t = Prayer.times(now.getFullYear(), now.getMonth() + 1, now.getDate(), p.lat, p.lon, tz,
-      { fajr: o.fajr_angle, isha: o.isha_angle, asr: o.asr_factor, dhuhrMin: o.dhuhr_offset_min });
+      { fajr: o.fajrAngle, isha: o.ishaAngle, asr: o.asrFactor, dhuhrMin: o.dhuhrOffsetMin });
     var nowH = (now.getUTCHours() + now.getUTCMinutes() / 60 + tz + 24) % 24;       // current time in that region
     var nextKey = null, cur = "isha";
     PNAMES.forEach(function (n) { if (!nextKey && t[n] > nowH && n !== "sunrise") nextKey = n; if (t[n] <= nowH) cur = n; });
@@ -421,11 +433,7 @@
 
   // The first mosque query and the map itself are only started when the map page is opened (the home page needs neither).
   var mapCreated = false;
-  function mosqueDataUrl(color) {                                          // the pin as a picture for the Yandex engine's DOM markers
-    var im = mosqueIcon(color), c = document.createElement("canvas"); c.width = c.height = im.width; c.getContext("2d").putImageData(im, 0, 0);
-    return c.toDataURL("image/png");
-  }
-  function afterMap(start) {                                                // what follows once a map of either engine exists
+  function afterMap(start) {                                                // what follows once the map exists
     var q = mapQuery, hasDeep = !!pendingMap.length;
     var fns = pendingMap; pendingMap = []; fns.forEach(function (fn) { fn(); });
     if (!q && !hasDeep) locate(start);
@@ -436,12 +444,8 @@
     map.on("click", onMapClick);
     ensureMosques();
   }
-  function startYandex(m, start) {                                          // rejects on any trouble: the caller reports the key and falls back
-    return YandexMap.create({ key: m.yandex_key, container: "map", center: start.center, zoom: start.zoom, bounds: REGION, dark: isDark(), lang: I18N.lang(), icon: mosqueDataUrl })
-      .then(function (ym) { map = ym; afterMap(start); });
-  }
-  function startOsm(c, start) {
-    var sp2 = c.style_url && c.style_url !== DEFAULT_STYLE ? fetch(c.style_url).then(function (r) { return r.json(); }) : stylePromise;
+  function startMap(c, start) {
+    var sp2 = c.styleUrl && c.styleUrl !== DEFAULT_STYLE ? fetch(c.styleUrl).then(function (r) { return r.json(); }) : stylePromise;
     return sp2.then(function (style) { rawStyle = style; return buildStyle(); }).then(function (style) {
       map = new maplibregl.Map({ container: "map", style: style, center: start.center, zoom: start.zoom, locale: mapLocale(),
         minZoom: 5, maxBounds: REGION, fadeDuration: 0, pixelRatio: Math.min(window.devicePixelRatio || 1, 2),
@@ -464,35 +468,13 @@
       setTimeout(function () { if (!map.loaded()) mapProblem(T("map.err_slow")); }, 20000);
     });
   }
-  // Yandex refused the key (or did not load): tell the server (it hands out the next key, or says OpenStreetMap) and carry on without a gap.
-  function yandexFailed(m) {
-    return api("POST", "/api/map/yandex-failed", { key_id: m.key_id }).then(function (r) { return r.map; }).catch(function () { return { provider: "osm" }; });
-  }
   function createMap() {
     if (mapCreated) return;
     mapCreated = true;
     var start = mapStart;
     var d = 0.1;                                                              // first mosque query right away, around the start position (~11 km window)
     fetchMosques([start.center[0] - d, start.center[1] - d, start.center[0] + d, start.center[1] + d]);
-    configPromise.then(function (c) {
-      cfg = c;
-      function osm() { return startOsm(c, start); }
-      function yandex(m, tries) {
-        return startYandex(m, start).catch(function () {
-          document.getElementById("map").textContent = "";
-          if (tries >= 2) return yandexFailed(m).then(function () { return osm(); });
-          return yandexFailed(m).then(function (next) {
-            // the Yandex script cannot take a second key in the same page: the next key needs a fresh page, OpenStreetMap does not
-            if (next && next.provider === "yandex" && next.yandex_key && next.key_id !== m.key_id) { try { sessionStorage.setItem("ytry", String(tries + 1)); } catch (e) {} location.reload(); return null; }
-            return osm();
-          });
-        });
-      }
-      var tries = 0;
-      try { tries = +sessionStorage.getItem("ytry") || 0; } catch (e) {}
-      if (c.map && c.map.provider === "yandex" && c.map.yandex_key && window.YandexMap) return yandex(c.map, tries);
-      return osm();
-    }).catch(function () {
+    configPromise.then(function (c) { cfg = c; return startMap(c, start); }).catch(function () {
       mapProblem(T("map.err_style"));
     });
   }
@@ -527,22 +509,22 @@
   var LIST_PAGE = 20, LIST_MAX = 200;
   function ensureList() { if (list.built) return; list.built = true; reloadList(); }
   function reloadList() {
-    list.gen++; list.items = []; list.done = false; list.loading = false;
+    list.gen++; list.items = []; list.cursor = null; list.done = false; list.loading = false;
     $("list").textContent = ""; $("list-more").textContent = "";
     loadMore();
   }
   function listCard(m) {
     var lead;
-    if (m.photo_url && m.photo_url.indexOf("https://") === 0) {
-      lead = el("img", { class: "ph", src: m.photo_url, alt: "", loading: "lazy", width: "76", height: "76", referrerpolicy: "no-referrer" });
+    if (m.photoUrl && m.photoUrl.indexOf("https://") === 0) {
+      lead = el("img", { class: "ph", src: m.photoUrl, alt: "", loading: "lazy", width: "76", height: "76", referrerpolicy: "no-referrer" });
       lead.addEventListener("error", function () { var i = el("span", { class: "ic" }); i.innerHTML = '<svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M12 2c1 1.6 2.6 2.4 2.6 4.4a2.6 2.6 0 0 1-5.2 0C9.4 4.4 11 3.6 12 2zM5 21V12.5a7 7 0 0 1 14 0V21h-4.5v-4a2.5 2.5 0 0 0-5 0v4z"/></svg>'; lead.replaceWith(i); });
     } else {
       lead = el("span", { class: "ic" }); lead.innerHTML = '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path fill="currentColor" d="M12 2c1 1.6 2.6 2.4 2.6 4.4a2.6 2.6 0 0 1-5.2 0C9.4 4.4 11 3.6 12 2zM5 21V12.5a7 7 0 0 1 14 0V21h-4.5v-4a2.5 2.5 0 0 0-5 0v4z"/></svg>';
     }
     var meta = [];
-    if (list.known && m.distance_m != null) meta.push(el("span", { text: "↗ " + fmtDist(m.distance_m) }));
-    if (m.times_updated_at) meta.push(el("span", { text: "🕒 " + T("list.times") }));
-    return el("button", { class: "card", type: "button", onclick: function () { showOnMap(m.id, m.lon, m.lat, list.known ? m.distance_m : null); } }, [lead, el("div", { class: "tx" }, [
+    if (list.known && m.distanceM != null) meta.push(el("span", { text: "↗ " + fmtDist(m.distanceM) }));
+    if (m.timesUpdatedAt) meta.push(el("span", { text: "🕒 " + T("list.times") }));
+    return el("button", { class: "card", type: "button", onclick: function () { showOnMap(m.id, m.lon, m.lat, list.known ? m.distanceM : null); } }, [lead, el("div", { class: "tx" }, [
       el("div", m.name ? { class: "nm", text: m.name } : { class: "nm missing", text: T("m.name_unknown") }),
       el("div", m.address ? { class: "ad", text: m.address } : { class: "ad missing", text: T("m.addr_unknown") }),
       meta.length ? el("div", { class: "mt" }, meta) : null])]);
@@ -554,11 +536,12 @@
     list.loading = true;
     var more = $("list-more"); more.textContent = "";
     if (!list.items.length) for (var i = 0; i < 5; i++) more.appendChild(el("div", { class: "sk sk-card" }));
-    api("GET", "/api/mosques/nearest?lat=" + (+o.lat).toFixed(5) + "&lon=" + (+o.lon).toFixed(5) + "&limit=" + LIST_PAGE + "&offset=" + list.items.length).then(function (r) {
+    api("GET", "/mosques/nearest?lat=" + (+o.lat).toFixed(5) + "&lon=" + (+o.lon).toFixed(5) + "&limit=" + LIST_PAGE + (list.cursor ? "&cursor=" + encodeURIComponent(list.cursor) : "")).then(function (r) {
       if (gen !== list.gen) return;
       more.textContent = ""; list.loading = false;
       r.items.forEach(function (m) { list.items.push(m); $("list").appendChild(listCard(m)); });
-      list.done = r.items.length < LIST_PAGE || list.items.length >= LIST_MAX;
+      list.cursor = r.nextCursor || null;
+      list.done = !list.cursor || r.items.length < LIST_PAGE || list.items.length >= LIST_MAX;
       if (list.done && !list.items.length) more.appendChild(el("p", { class: "muted", text: T("list.none") }));
       fillList();
     }).catch(function (e) {
@@ -596,7 +579,7 @@
       el("div", { class: "row" }, [])
     ]);
     var row = body.lastChild;
-    api("GET", "/api/mosques/nearby?lat=" + c[1] + "&lon=" + c[0] + "&radius=" + cfg.duplicate_radius_m).then(function (r) {
+    api("GET", "/mosques/nearby?lat=" + c[1] + "&lon=" + c[0] + "&radius=" + cfg.duplicateRadiusM).then(function (r) {
       if (r.items.length) row.appendChild(btn("small", T("poi.open"), function () { closePopup(); openMosque(r.items[0].id); }));
       else row.appendChild(btn("small", T("poi.add"), function () { closePopup(); startAdd(); setPicked({ lng: c[0], lat: c[1] }); }));
     }).catch(function () {});
@@ -647,7 +630,7 @@
   function timesGrid(m) {
     var g = el("div", { class: "times" });
     PRAYERS.forEach(function (p) {
-      var v = m.prayer_times[p];
+      var v = (m.prayerTimes || {})[p];
       g.appendChild(el("div", { class: "tile" + (v ? "" : " empty") }, [el("small", { text: T("pn." + p) }), el("b", { text: v || "—" })]));
     });
     return g;
@@ -655,11 +638,11 @@
 
   // A picture from Wikimedia Commons (taken from the OpenStreetMap tags) with its credit; nothing at all when the mosque has none.
   function photoBlock(m) {
-    if (!m.photo_url || m.photo_url.indexOf("https://") !== 0) return null;
-    var img = el("img", { class: "photo", src: m.photo_url, alt: "", loading: "lazy", referrerpolicy: "no-referrer" });
+    if (!m.photoUrl || m.photoUrl.indexOf("https://") !== 0) return null;
+    var img = el("img", { class: "photo", src: m.photoUrl, alt: "", loading: "lazy", referrerpolicy: "no-referrer" });
     img.addEventListener("error", function () { wrap.hidden = true; });
-    var credit = m.photo_credit && m.photo_credit.indexOf("https://") === 0
-      ? el("a", { href: m.photo_credit, target: "_blank", rel: "noopener noreferrer", text: T("m.photo") })
+    var credit = m.photoCredit && m.photoCredit.indexOf("https://") === 0
+      ? el("a", { href: m.photoCredit, target: "_blank", rel: "noopener noreferrer", text: T("m.photo") })
       : el("span", { text: T("m.photo") });
     var wrap = el("div", { class: "photo-wrap" }, [img, el("div", { class: "photo-credit" }, [credit])]);
     return wrap;
@@ -667,7 +650,7 @@
   function openMosque(id, opts) {
     opts = opts || {};
     showPanel(skeleton());
-    api("GET", "/api/mosques/" + id).then(function (m) {
+    api("GET", "/mosques/" + id).then(function (m) {
       var lb = label(m);
       var node = el("div", {}, [
         photoBlock(m),
@@ -677,16 +660,16 @@
         el("p", m.address ? { text: m.address } : { class: "missing", text: T("m.addr_unknown") }),
         el("div", { class: "muted stack" }, [
           el("div", { text: m.lat.toFixed(6) + ", " + m.lon.toFixed(6) + " · " + T("m.version", { v: m.version }) }),
-          m.verification_note ? el("div", { text: T("m.verif", { note: m.verification_note }) }) : null
+          m.verificationNote ? el("div", { text: T("m.verif", { note: m.verificationNote }) }) : null
         ]),
         el("h3", { text: T("m.times") }), timesGrid(m),
-        el("div", { class: "times-meta muted", text: m.times_updated_at ? T("times.updated", { t: I18N.fmtDate(m.times_updated_at) }) : T("times.never") }),
+        el("div", { class: "times-meta muted", text: m.timesUpdatedAt ? T("times.updated", { t: I18N.fmtDate(m.timesUpdatedAt) }) : T("times.never") }),
         el("div", { class: "cta" }, [
-          el("p", { text: T(m.times_updated_at ? "cta.have" : "cta.empty") }),
-          btn(m.times_updated_at ? "ghost small" : "small", T("cta.btn"), function () { editForm(m, { timesOnly: true }); }),
+          el("p", { text: T(m.timesUpdatedAt ? "cta.have" : "cta.empty") }),
+          btn(m.timesUpdatedAt ? "ghost small" : "small", T("cta.btn"), function () { editForm(m, { timesOnly: true }); }),
         ]),
         el("div", { class: "row" }, readButtons(m)),
-        el("div", { class: "row" }, yandexLinks(m)),
+        el("div", { class: "row" }, routeLinks(m)),
         el("div", { class: "row" }, [
           m.origin === "imported" ? null : btn("", T("btn.edit"), function () { editForm(m); }),     // map-data mosques: only the times are editable (see the button above)
           btn("ghost", T("btn.history"), function () { historyView(m); }),
@@ -703,20 +686,20 @@
   }
 
   // ---- reading the times from a photo or a voice recording (the same flow as the app): read, check, correct, save ----
-  function apiRaw(path, blob, type) {
-    var h = { "Content-Type": type, "X-Client-Id": clientId, "X-Client-Platform": "web", "ngrok-skip-browser-warning": "1" };
-    if (tg && tg.initData) h["X-Telegram-Init-Data"] = tg.initData;
-    return fetch(path, { method: "POST", headers: h, body: blob })
-      .then(function (r) { return r.json().then(function (j) { if (!r.ok) { j.status = r.status; throw j; } return j; }); });
+  function apiRaw(path, blob, type) {                     // raw body (the file itself); same envelope as every call
+    return send("POST", path, type, blob).catch(function (e) {
+      if (path === "/timetable/voice" && e && e.message && e.message.code === "error.readerUnavailable") e.message = { code: "error.sttUnavailable" };
+      throw e;
+    });
   }
-  function readButtons(m) {                               // photo and voice, always both; when the server cannot, the button opens the bot (or says so)
-    var bot = cfg.bot_username;
-    function fallback(code) { return bot ? function () { window.open("https://t.me/" + bot + "?start=m_" + m.id, "_blank", "noopener"); } : function () { toast(errText({ error: code })); }; }
-    var canVoice = cfg.voice_reading && navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder;
+  function readButtons(m) {                               // photo and voice; when the server cannot read, the button opens the bot (or says so)
+    var bot = cfg.botUsername;
+    function fallback(code) { return bot ? function () { window.open("https://t.me/" + encodeURIComponent(bot) + "?start=m_" + m.id, "_blank", "noopener"); } : function () { toast(errText({ message: { code: code } })); }; }
+    var canVoice = cfg.voiceReading && navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder;
     return [
-      btn("ghost small", "📷 " + T("photo.btn"), cfg.photo_reading ? function () { photoSource(m); } : fallback("ocr_unavailable")),
-      btn("ghost small", "🎙 " + T("voice.btn"), canVoice ? function () { voiceFlow(m); } : fallback("stt_unavailable")),
-      bot ? el("a", { class: "btn ghost small", target: "_blank", rel: "noopener noreferrer", href: "https://t.me/" + bot + "?start=s_" + m.id, text: T("cta.sub") }) : null
+      btn("ghost small", "📷 " + T("photo.btn"), cfg.photoReading ? function () { photoSource(m); } : fallback("error.ocrUnavailable")),
+      btn("ghost small", "🎙 " + T("voice.btn"), canVoice ? function () { voiceFlow(m); } : fallback("error.sttUnavailable")),
+      bot ? el("a", { class: "btn ghost small", target: "_blank", rel: "noopener noreferrer", href: "https://t.me/" + encodeURIComponent(bot) + "?start=s_" + m.id, text: T("cta.sub") }) : null
     ];
   }
   function readSheet(m, o) {                              // o: title, reading, check, note, other, again(), read() -> Promise, header(result|null) -> node
@@ -730,7 +713,7 @@
       o.read().then(function (r) {
         if (cancelled) return;
         res = r; head(r);
-        if (r.alt) choose(r); else review(r.times || {}, r.complete);
+        if (r.alt && !Array.isArray(r.alt) && Object.keys(r.alt).length) choose(r); else review(r.times || {}, r.complete);
       }).catch(function (e) {
         if (cancelled) return;
         body.textContent = "";
@@ -742,7 +725,7 @@
       body.textContent = "";
       body.appendChild(el("p", { class: "strong", text: T("photo.two") }));
       [r.times, r.alt].forEach(function (col, i) {
-        var tile = el("button", { type: "button", class: "colpick", onclick: function () { review(col, Object.keys(col).length >= 5); } }, [el("small", { text: T("photo.col", { n: i + 1 }) }), timesGrid({ prayer_times: col })]);
+        var tile = el("button", { type: "button", class: "colpick", onclick: function () { review(col, Object.keys(col).length >= 5); } }, [el("small", { text: T("photo.col", { n: i + 1 }) }), timesGrid({ prayerTimes: col })]);
         body.appendChild(tile);
       });
       body.appendChild(el("div", { class: "row" }, [btn("ghost", o.other, o.again)]));
@@ -752,9 +735,9 @@
       var save = btn("", T("btn.save"), function () {
         save.disabled = true;
         var now = readTimes(grid), pt = {};
-        PRAYERS.forEach(function (p) { if ((now[p] || null) !== (m.prayer_times[p] || null)) pt[p] = now[p]; });
+        PRAYERS.forEach(function (p) { if ((now[p] || null) !== ((m.prayerTimes || {})[p] || null)) pt[p] = now[p]; });
         if (!Object.keys(pt).length) { toast(T("photo.same")); openMosque(m.id); return; }
-        api("PATCH", "/api/mosques/" + m.id, { prayer_times: pt, note: o.note }).then(function (u) { toast(T("toast.saved")); loadMosques(); openMosque(u.id); })
+        api("PATCH", "/mosques/" + m.id, { prayerTimes: pt, note: o.note }).then(function (u) { toast(T("toast.saved")); loadMosques(); openMosque(u.id); })
           .catch(function (e) { toast(errText(e)); sync(); });
       });
       function sync() { var now = readTimes(grid); save.disabled = !PRAYERS.every(function (p) { return now[p]; }); }
@@ -798,7 +781,7 @@
       title: T("photo.title"), reading: T("photo.reading"), check: T("photo.check"), other: T("photo.other"), note: "Veb (rasm)",
       again: function () { URL.revokeObjectURL(url); photoSource(m); },
       header: function () { return el("img", { class: "readpic", src: url, alt: "" }); },
-      read: function () { return scaleDown(file).then(function (b) { return apiRaw("/api/timetable/read", b, b.type || "image/jpeg"); }); }
+      read: function () { return scaleDown(file).then(function (b) { return apiRaw("/timetable/photo", b, b.type || "image/jpeg"); }); }
     });
   }
 
@@ -822,7 +805,7 @@
       rec.onstop = function () {
         release(); if (cancelled) return;
         var blob = new Blob(chunks, { type: rec.mimeType || type || "audio/webm" });
-        if (!blob.size) { toast(errText({ error: "bad_audio" })); openMosque(m.id); return; }
+        if (!blob.size) { toast(errText({ message: { code: "error.badAudio" } })); openMosque(m.id); return; }
         voiceRead(m, blob);
       };
       rec.start(); t0 = Date.now();
@@ -834,7 +817,7 @@
       title: T("voice.title"), reading: T("voice.listening"), check: T("voice.check"), other: T("voice.again"), note: "Veb (ovoz)",
       again: function () { voiceFlow(m); },
       header: function (r) { return r && r.heard ? el("p", { class: "heard", text: T("voice.heard", { t: r.heard }) }) : null; },
-      read: function () { return apiRaw("/api/timetable/voice", blob, blob.type || "audio/webm"); }
+      read: function () { return apiRaw("/timetable/voice", blob, blob.type || "audio/webm"); }
     });
   }
 
@@ -910,7 +893,7 @@
     var timesOnly = !!(opts && opts.timesOnly);                  // short form: only the congregation times (the "add the times" button)
     var name = el("input", { value: m.name || "", maxlength: 200, autocomplete: "off" });
     var addr = el("input", { value: m.address || "", maxlength: 300, autocomplete: "off" });
-    var grid = timesInputs(m.prayer_times);
+    var grid = timesInputs(m.prayerTimes || {});
     var note = el("input", { placeholder: T("f.note_ph"), maxlength: 300 });
     var coords = el("div", { class: "muted", text: T("edit.loc", { c: fmtC(m.lat, m.lon) }) });
     var newPos = null;
@@ -930,15 +913,15 @@
           var b = ev.currentTarget; b.disabled = true;
           // Send only what this user changed: a form opened a minute ago must never overwrite what others saved since.
           var body = { note: note.value }, now = readTimes(grid), pt = {};
-          PRAYERS.forEach(function (p) { if ((now[p] || null) !== (m.prayer_times[p] || null)) pt[p] = now[p]; });
-          if (Object.keys(pt).length) body.prayer_times = pt;
+          PRAYERS.forEach(function (p) { if ((now[p] || null) !== ((m.prayerTimes || {})[p] || null)) pt[p] = now[p]; });
+          if (Object.keys(pt).length) body.prayerTimes = pt;
           if (!timesOnly) {
             if (name.value.trim() !== (m.name || "")) body.name = name.value;
             if (addr.value.trim() !== (m.address || "")) body.address = addr.value;
             if (newPos) { body.lat = newPos.lat; body.lon = newPos.lng; }
           }
-          if (!body.prayer_times && body.name === undefined && body.address === undefined && !newPos) { b.disabled = false; openMosque(m.id); return; }
-          api("PATCH", "/api/mosques/" + m.id, body).then(function (u) { toast(T("toast.saved")); loadMosques(); openMosque(u.id); })
+          if (!body.prayerTimes && body.name === undefined && body.address === undefined && !newPos) { b.disabled = false; openMosque(m.id); return; }
+          api("PATCH", "/mosques/" + m.id, body).then(function (u) { toast(T("toast.saved")); loadMosques(); openMosque(u.id); })
             .catch(function (e) {
               b.disabled = false;
               toast(errText(e));
@@ -959,7 +942,7 @@
   }
   function describeChange(field, pair) {                       // -> list of readable lines for one changed field
     var a = pair[0], b = pair[1];
-    if (field === "prayer_times") {
+    if (field === "prayer_times" || field === "prayerTimes") {
       var keys = PRAYERS.filter(function (p) { return (a && a[p]) !== (b && b[p]); });
       return keys.map(function (p) { return T("pn." + p) + ": " + fmtVal("", a && a[p]) + " → " + fmtVal("", b && b[p]); });
     }
@@ -970,7 +953,7 @@
   function historyView(m) {
     var box = el("div", {}, [el("h2", { text: T("hist.title") }), skeleton()]);
     showPanel(box);
-    api("GET", "/api/mosques/" + m.id + "/history").then(function (r) {
+    api("GET", "/mosques/" + m.id + "/history").then(function (r) {
       box.textContent = "";
       box.appendChild(el("h2", { text: T("hist.title") }));
       r.items.forEach(function (h) {
@@ -997,7 +980,7 @@
       el("div", { class: "row" }, [
         btn("", T("btn.send"), function (ev) {
           var b = ev.currentTarget; b.disabled = true;
-          api("POST", "/api/mosques/" + m.id + "/reports", { kind: kind.value, reason: reason.value })
+          api("POST", "/mosques/" + m.id + "/reports", { kind: kind.value, reason: reason.value })
             .then(function () { toast(T("toast.reported")); loadMosques(); openMosque(m.id); })
             .catch(function (e) { b.disabled = false; toast(errText(e)); });
         }),
@@ -1014,14 +997,14 @@
     b.disabled = true; toast(T("nearest.locating"));
     function done() { b.disabled = false; }
     function go(lat, lon, fromMap) {
-      api("GET", "/api/mosques/nearest?lat=" + lat + "&lon=" + lon + "&limit=1").then(function (r) {
+      api("GET", "/mosques/nearest?lat=" + lat + "&lon=" + lon + "&limit=1").then(function (r) {
         done();
         if (!r.items.length) { toast(T("nearest.none")); return; }
         var m = r.items[0];
         if (meMarker) meMarker.remove();
         meMarker = newMarker({ element: el("div", { class: "me-dot" }) }).setLngLat([lon, lat]).addTo(map);
         toast(fromMap ? T("nearest.from_map") : T("nearest.btn") + ": " + (m.name || T("m.name_unknown")));
-        openMosque(m.id, { dist: m.distance_m, fit: [[Math.min(lon, m.lon), Math.min(lat, m.lat)], [Math.max(lon, m.lon), Math.max(lat, m.lat)]] });
+        openMosque(m.id, { dist: m.distanceM, fit: [[Math.min(lon, m.lon), Math.min(lat, m.lat)], [Math.max(lon, m.lon), Math.max(lat, m.lat)]] });
       }).catch(function (e) { done(); toast(errText(e)); });
     }
     function fromMap() { var c = map.getCenter(); go(+c.lat.toFixed(6), +c.lng.toFixed(6), true); }
@@ -1040,7 +1023,7 @@
   function runSearch() {
     var v = $("q").value.trim(), ul = $("results"), seq = ++searchSeq;
     if (v.length < 2) { hideResults(); return; }
-    api("GET", "/api/search?q=" + encodeURIComponent(v)).then(function (r) {
+    api("GET", "/mosques/search?q=" + encodeURIComponent(v)).then(function (r) {
       if (seq !== searchSeq) return;
       ul.textContent = "";
       if (!r.items.length) ul.appendChild(el("li", { class: "muted", text: T("search.none") }));
@@ -1061,7 +1044,7 @@
   document.addEventListener("click", function (e) { if (!$("search").contains(e.target)) hideResults(); });
 
   // ---- add mosque
-  function newMarker(o) { return map.engine === "yandex" ? new map.Marker(o) : new maplibregl.Marker(o); }
+  function newMarker(o) { return new maplibregl.Marker(o); }
   function clearPick() { if (pickMarker) { pickMarker.remove(); pickMarker = null; } }
   function setPicked(ll) {
     if (pickDone) { var f = pickDone; pickDone = null; f(ll); return; }
@@ -1093,16 +1076,16 @@
     ];
     function submit(force, b) {
       if (b) b.disabled = true;
-      var body = { lat: picked.lat, lon: picked.lng, name: name.value, address: addr.value, prayer_times: readTimes(grid), force: !!force };
-      api("POST", "/api/mosques", body).then(function (m) { toast(T("toast.added")); endAdd(); loadMosques(); openMosque(m.id); })
+      var body = { lat: picked.lat, lon: picked.lng, name: name.value, address: addr.value, prayerTimes: readTimes(grid), force: !!force };
+      api("POST", "/mosques", body).then(function (m) { toast(T("toast.added")); endAdd(); loadMosques(); openMosque(m.id); })
         .catch(function (e) {
           if (b) b.disabled = false;
-          if (e.error === "possible_duplicate") {
+          if (e.code === "MASJIDUZ_POSSIBLE_DUPLICATE") {
             var box = el("div", {}, [el("h2", { text: T("dup.title") })]);
-            e.duplicates.forEach(function (d) {
+            ((e.data && e.data.duplicates) || []).forEach(function (d) {
               box.appendChild(el("div", { class: "dup stack" }, [
                 el("b", d.name ? { text: d.name } : { class: "missing", text: T("m.name_unknown") }),
-                el("div", { class: "muted", text: T("dup.dist", { d: Math.round(d.distance_m), s: (label(d) || [""])[0] }).replace(/ · $/, "") }),
+                el("div", { class: "muted", text: T("dup.dist", { d: Math.round(d.distanceM), s: (label(d) || [""])[0] }).replace(/ · $/, "") }),
                 btn("small", T("dup.open"), function () { endAdd(); openMosque(d.id); })
               ]));
             });

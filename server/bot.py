@@ -2,13 +2,15 @@
 
 Commands: /start /help /nearest /reminders (/region) /subs /stop /id /admin /cancel.
 Update flow: the user shares a mosque's location -> picks the mosque (or adds a new one) -> sends a photo of the timetable (read with
-Tesseract) or types the five times -> checks the preview -> the times are saved, and the bot says they changed and offers a button to
+Gemini) or types the five times -> checks the preview -> the times are saved, and the bot says they changed and offers a button to
 open that mosque in the Mini App. Also: a nearest-mosque card for every shared location, subscriptions (a message when a mosque's
 congregation times change) and daily / 15-minutes-before prayer reminders (Notifier). A photo is never stored and a wrong reading is never saved without the user's confirmation.
-The token is read from the environment/.env and never logged.
+The token comes from the environment (TIMUS_APP_MASJIDUZ_TELEGRAM_BOT_TOKEN) and is never logged. Container command `bot`: a single replica.
 """
 import json
+import logging
 import os
+import signal
 import sys
 import threading
 import time
@@ -21,21 +23,21 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import app  # noqa: E402  (load_dotenv, Store)
+import app  # noqa: E402  (Store, clean_coord)
+import psycopg  # noqa: E402
 import botdb  # noqa: E402
 import bottexts  # noqa: E402
-import ocr  # noqa: E402
+import gemini  # noqa: E402
+import logs  # noqa: E402
 import prayertimes  # noqa: E402
-import spoken  # noqa: E402
-import stt  # noqa: E402
 import timetable  # noqa: E402
 import translit  # noqa: E402
 
-app.load_dotenv()
-TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-WEBAPP_URL = os.environ.get("WEBAPP_URL", "").strip()
-ADMIN_IDS = {int(x) for x in os.environ.get("ADMIN_TG_IDS", "").replace(",", " ").split() if x.lstrip("-").isdigit()}
-API = "https://api.telegram.org/bot%s/" % TOKEN
+_log = logging.getLogger("bot")
+TOKEN = ""                        # set by main(cfg)
+WEBAPP_URL = ""
+ADMIN_IDS = set()
+API = ""
 NEAR_M = 200.0
 MAX_PHOTO_BYTES = 8 * 1024 * 1024
 PHOTOS_PER_HOUR = 30
@@ -87,8 +89,7 @@ def download(file_id):
 
 
 def log(msg):
-    sys.stderr.write("%s %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), msg))
-    sys.stderr.flush()
+    _log.info("%s", logs.mask(msg, 200))
 
 
 LANG_NAMES = [("uz", "Oʻzbekcha"), ("uz-cyrl", "Ўзбекча"), ("ru", "Русский"), ("en", "English")]
@@ -543,10 +544,10 @@ class Bot:
             return self.say(chat, tx["no_ocr"])
         self.say(chat, tx["reading"])
         best = max(photos, key=lambda p: p.get("file_size", 0) or p.get("width", 0))
-        texts = self.ocr_read(self.fetch_photo(best["file_id"]))
-        if texts is None:                                   # OCR engine disappeared after start-up
+        try:
+            r = self.ocr_read(self.fetch_photo(best["file_id"]))
+        except gemini.Unavailable:
             return self.say(chat, tx["no_ocr"])
-        r = timetable.best_of(texts)
         if r.get("alt"):
             st.update(step="confirm", times=r["times"], alt=r["alt"], ts=time.time())
             return self.say(chat, tx["two_cols"].format(a=fmt_times(tx, r["times"]), b=fmt_times(tx, r["alt"])),
@@ -570,10 +571,11 @@ class Bot:
         if not self.stt_read or not self.fetch_photo:
             return self.say(chat, tx["no_stt"])
         self.say(chat, tx["voice_reading"])
-        heard = self.stt_read(self.fetch_photo(voice["file_id"]))
-        if heard is None:
+        try:
+            r = self.stt_read(self.fetch_photo(voice["file_id"]))
+        except gemini.Unavailable:
             return self.say(chat, tx["no_stt"])
-        r = spoken.parse(heard)
+        heard = r.get("heard") or ""
         if not r["complete"] or r["alt"]:
             found = tx["found"].format(t=", ".join("%s %s" % (n, r["times"][k]) for n, k in zip(tx["names"], timetable.ORDER) if k in r["times"])) if r["times"] else ""
             return self.say(chat, tx["voice_heard"].format(t=heard[:300]) + "\n" + tx["voice_unclear"].format(found=found))
@@ -742,19 +744,16 @@ class Notifier:
             self.db.mark_notified(tid, r["mosque_id"], r["times_updated_at"])
 
 
-def real_stt(data):
-    return stt.transcribe(data) if stt.available() else None
-
-
-def real_ocr(data):
-    return ocr.read_texts(data) if ocr.available() else None
-
-
-def main():
+def main(cfg):
+    global TOKEN, WEBAPP_URL, ADMIN_IDS, API
+    TOKEN, WEBAPP_URL, ADMIN_IDS = cfg.bot_token, cfg.webapp_url, set(cfg.moderator_ids)
+    API = "https://api.telegram.org/bot%s/" % TOKEN
     if not TOKEN:
-        sys.exit("TELEGRAM_BOT_TOKEN is not set")
+        raise RuntimeError("TELEGRAM_BOT_TOKEN is not set")
+    real_ocr = (lambda data: gemini.read_photo(cfg, data, "image/jpeg")) if gemini.available(cfg) else None
+    real_stt = (lambda data: gemini.read_voice(cfg, data, "audio/ogg")) if gemini.available(cfg) else None
     me = call("getMe")
-    log("bot @%s started; mini app url: %s; photo reading: %s" % (me["username"], WEBAPP_URL or "(not set)", "on" if ocr.available() else "off (no tesseract)") + "; voice reading: %s" % ("on (%s)" % stt.MODEL if stt.available() else "off (no faster-whisper)"))
+    log("bot @%s started; mini app url: %s; photo and voice reading: %s" % (me["username"], WEBAPP_URL or "(not set)", "on" if real_ocr else "off (no Gemini key)"))
     call("deleteWebhook", drop_pending_updates=False)    # long polling and webhooks are mutually exclusive
     for lc, table in CMDS.items():                # global command menu (users who chose a language get their own, see apply_language)
         if lc == "uz-cyrl":
@@ -769,11 +768,12 @@ def main():
             log("could not set admin commands for %s: %s" % (aid, type(e).__name__))
     if WEBAPP_URL.startswith("https://"):
         call("setChatMenuButton", menu_button={"type": "web_app", "text": "Xarita", "web_app": {"url": WEBAPP_URL}})
-    cfg = app.Config()
     cfg.db_pool_max = min(cfg.db_pool_max, 8)             # the bot needs a handful of connections: 4 handlers, the notifier, the poller
-    store = app.Store(cfg)
-    bot = Bot(call, store, real_ocr if ocr.available() else None, download, WEBAPP_URL, ADMIN_IDS,
-              real_stt if stt.available() else None)
+    store = app.Store(cfg, name="masjiduz-bot")
+    lock = psycopg.connect(cfg.conninfo(), autocommit=True)       # the bot runs as ONE replica: a second one would fight over getUpdates
+    if not lock.execute("SELECT pg_try_advisory_lock(727004)").fetchone()[0]:
+        raise RuntimeError("another bot instance is already running (only one replica is allowed)")
+    bot = Bot(call, store, real_ocr, download, WEBAPP_URL, ADMIN_IDS, real_stt)
     notifier = Notifier(call, bot.db, WEBAPP_URL)
 
     def notify_loop():
@@ -784,28 +784,28 @@ def main():
                 log("notifier error: %s" % type(e).__name__)
             time.sleep(30)
     threading.Thread(target=notify_loop, daemon=True).start()
-    if stt.available():                                   # download/load the speech model now, not during somebody's first voice message
-        def warm():
-            try:
-                stt._load()
-                log("speech model ready")
-            except Exception as e:
-                log("speech model failed to load: %s" % type(e).__name__)
-        threading.Thread(target=warm, daemon=True).start()
     offset, backoff = None, 1
     pool = ThreadPoolExecutor(max_workers=4)             # a slow photo (OCR) must not block everybody else
-    while True:
+    stopping = threading.Event()
+    def on_stop(*a):
+        stopping.set()                                             # finish the current poll and the running handlers, then exit 0 ...
+        t = threading.Timer(8.0, lambda: os._exit(0))              # ... but never later than 8 s (a slow reading must not hold the shutdown)
+        t.daemon = True
+        t.start()
+    signal.signal(signal.SIGTERM, on_stop)
+    signal.signal(signal.SIGINT, on_stop)
+    while not stopping.is_set():
         try:
-            for u in call("getUpdates", offset=offset, timeout=30, allowed_updates=["message", "callback_query"]):
+            for u in call("getUpdates", offset=offset, timeout=5, allowed_updates=["message", "callback_query"]):
                 offset = u["update_id"] + 1
                 pool.submit(bot.handle, u)
             bot.purge()
             backoff = 1
         except Exception as e:                             # network blips, rate limits: retry with backoff
             log("poll error: %s" % type(e).__name__)
-            time.sleep(backoff)
+            stopping.wait(backoff)
             backoff = min(backoff * 2, 60)
-
-
-if __name__ == "__main__":
-    main()
+    log("SIGTERM: waiting for running handlers")
+    pool.shutdown(wait=True)
+    store.close()
+    return 0

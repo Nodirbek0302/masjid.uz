@@ -1,131 +1,50 @@
 name: CI
-
-# Har bir push va PR'da: sir skaneri → lint → testlar (PostgreSQL) → image qurish + smoke test.
-# Image bu yerda push qilinmaydi — faqat Dockerfile buzilmaganini tekshiradi.
-# Push qilish (CD) uchun: .github/workflows/docker.yml
-
+# Tests only: lint, tests against an ephemeral PostgreSQL 17, pip-audit, docker build. No push, no deploy, no registry login.
 on:
   push:
-    branches: [main, develop]
+    branches: [main]
   pull_request:
   workflow_dispatch:
-
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
-
 permissions:
   contents: read
-
-env:
-  PYTHON_VERSION: "3.12"
-
 jobs:
-  secrets:
-    name: Sir skaneri
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      pull-requests: read
-    steps:
-      - name: Kodni olish (butun tarix bilan)
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Gitleaks
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
   test:
-    name: Lint va testlar (PostgreSQL)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     services:
       postgres:
-        image: postgres:16-alpine
+        image: postgres:17-alpine
         env:
           POSTGRES_USER: ci
           POSTGRES_PASSWORD: ci
           POSTGRES_DB: masjid_test
         ports: ["5432:5432"]
         options: >-
-          --health-cmd "pg_isready -U ci"
-          --health-interval 5s --health-timeout 5s --health-retries 10
+          --health-cmd "pg_isready -U ci" --health-interval 5s --health-timeout 5s --health-retries 10
     env:
-      # Testlar bu bazani HAR SAFAR tozalaydi (DROP SCHEMA) — faqat CI uchun.
-      TEST_DATABASE_URL: postgresql://ci:ci@localhost:5432/masjid_test
+      TEST_DATABASE_URL: postgresql://ci:ci@localhost:5432/masjid_test   # wiped by the tests: CI only
     steps:
-      - name: Kodni olish
-        uses: actions/checkout@v4
-
-      - name: Python ${{ env.PYTHON_VERSION }}
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          python-version: "3.12"
           cache: pip
           cache-dependency-path: requirements.txt
-
-      - name: Bog'liqliklar
-        run: pip install -r requirements.txt ruff
-
-      - name: Ruff
-        run: ruff check server tests
-
-      - name: Testlar
-        run: python -m unittest discover -s tests -v
-
+      - run: pip install --require-hashes -r requirements.txt && pip install ruff pip-audit
+      - run: ruff check server tests
+      - run: python -m unittest discover -s tests -v
+      - run: pip-audit -r requirements.txt --require-hashes
   docker:
-    name: Docker image
     runs-on: ubuntu-latest
     needs: [test]
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
-      - name: Kodni olish
-        uses: actions/checkout@v4
-
-      - name: Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Image'ni qurish
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          load: true
-          tags: masjid-uz:ci
-          build-args: |
-            VERSION=ci
-            VCS_REF=${{ github.sha }}
-            OCI_SOURCE=${{ github.server_url }}/${{ github.repository }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Smoke test (import)
-        # Entrypoint chetlab o'tiladi: u Postgres'ni kutadi, bu qadamda baza yo'q.
+      - uses: actions/checkout@v4
+      - run: docker build --platform linux/amd64 -t masjid-uz:ci .
+      - name: image runs as non-root and imports
         run: |
-          docker run --rm -e PYTHONPATH=/app/server --entrypoint python masjid-uz:ci \
-            -c "import app, import_osm; print('imports ok')"
-
-      - name: Root bo'lmagan foydalanuvchi
-        run: |
-          user=$(docker run --rm --entrypoint id masjid-uz:ci -un)
-          echo "konteyner foydalanuvchisi: $user"
-          test "$user" = "appuser"
-
-      - name: Compose bilan to'liq smoke test
-        # Haqiqiy Postgres bilan: migratsiyalar qo'llanadi, /api/health va bosh sahifa javob beradi.
-        run: |
-          export POSTGRES_PASSWORD=ci HOST_WEB_PORT=18080
-          docker compose up -d --build postgres web
-          for i in $(seq 1 40); do
-            if curl -fsS http://127.0.0.1:18080/api/health >/dev/null 2>&1; then ok=1; break; fi
-            sleep 2
-          done
-          test "${ok:-0}" = "1" || { docker compose logs web; exit 1; }
-          curl -fsS http://127.0.0.1:18080/ | grep -qi maplibre
-          # Telegram imzosisiz admin API yopiq bo'lishi shart.
-          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/api/admin/overview)
-          test "$code" = "401"
-          docker compose down -v
+          test "$(docker run --rm --entrypoint id masjid-uz:ci -u)" = "10001"
+          docker run --rm --read-only --tmpfs /tmp --entrypoint python masjid-uz:ci -c "import sys; sys.path.insert(0,'/app/server'); import app, bot, import_osm, data_import; print('imports ok')"
