@@ -204,17 +204,28 @@ class Envelope(ServerCase):
         class Dead:
             def connection(self, *a, **k):
                 raise PoolTimeout("pool exhausted")
+        self.srv.store._ping = (0.0, True)
         with mock.patch.object(self.srv.store, "pool", Dead()):
             self.assertEqual(self.call("GET", "/mosques/" + NOBODY)[0], 503)    # busy pool: the data endpoints retry-later
             h = self.call("GET", "/health", full=True)                          # ... but the database itself is fine (own connection)
             self.assertEqual((h.status, h.json["data"]["status"], h.json["data"]["db"]), (200, "UP", "UP"))
 
     def test_health_is_down_when_the_database_cannot_be_reached(self):
+        self.srv.store._ping = (0.0, True)                                       # the answer is cached for a second: start without it
         with mock.patch.dict(self.srv.store.cfg.db, {"port": 1}):               # nothing listens there
             h = self.call("GET", "/health", full=True)
         self.check(h, 503, "SERVICE_UNAVAILABLE", "error.serviceUnavailable")
         self.assertEqual((h.json["data"]["status"], h.json["data"]["db"]), ("DOWN", "DOWN"))
+        self.assertEqual(self.call("GET", "/health")[0], 503)                   # ... and it is reused for a second
+        self.srv.store._ping = (0.0, True)
         self.assertEqual(self.call("GET", "/health")[0], 200)
+        probes = []
+        real = self.srv.store.ping
+        with mock.patch.object(self.srv.store, "ping", lambda: probes.append(1) or real()):
+            self.srv.store._ping = (0.0, True)
+            for _ in range(20):
+                self.assertEqual(self.call("GET", "/health")[0], 200)
+        self.assertEqual(len(probes), 1)                                          # twenty health checks, one database probe
 
     # -- request id and friends
     def test_request_id_is_echoed_when_valid_and_generated_otherwise(self):
@@ -643,8 +654,8 @@ class Migrations(unittest.TestCase):
         self.assertEqual(db("SELECT to_regclass('masjiduz.mosques') IS NOT NULL, to_regclass('masjiduz.schema_history') IS NOT NULL"), [(True, True)])
         for t in ("map_settings", "map_keys", "map_key_users", "map_key_reports", "ai_calls", "ai_cooldown", "bot_users"):
             self.assertEqual(db("SELECT to_regclass(%s) IS NOT NULL", "masjiduz." + t), [(True,)], t)
-        self.assertGreaterEqual(len(self.names), 3)
-        self.assertEqual([n[:5] for n in self.names][:3], ["V0001", "V0002", "V0003"])
+        self.assertGreaterEqual(len(self.names), 4)
+        self.assertEqual([n[:5] for n in self.names][:4], ["V0001", "V0002", "V0003", "V0004"])
         self.assertEqual(db("SELECT provider FROM map_settings"), [("osm",)])                            # the baseline row: OpenStreetMap
 
     def test_a_new_file_is_applied_alone_and_in_a_transaction(self):
@@ -735,7 +746,7 @@ class ConfigValidation(unittest.TestCase):
         self.assertEqual((c.api_base, c.cors_origins, c.admin_token, c.moderator_ids, c.gemini_keys), ("/masjiduz/v1", [], "", set(), []))
         self.assertTrue(c.show_tile_mosques)
         self.assertEqual(self.cfg(TIMUS_ENV="").env, "dev")
-        self.assertEqual(c.version, "1.0.0")
+        self.assertEqual(c.version, "1.0.1")
 
     def test_port_zero_is_accepted_in_dev(self):
         self.assertEqual(self.cfg(PORT="0").port, 0)

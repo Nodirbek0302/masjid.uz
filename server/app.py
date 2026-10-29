@@ -13,6 +13,8 @@ import json
 import logging
 import math
 import mimetypes
+import os
+import random
 import re
 import signal
 import socket
@@ -226,6 +228,46 @@ class Store:
     def close(self):
         self.pool.close()
 
+    _ping = (0.0, True)
+    _ping_lock = threading.Lock()
+
+    def ping_cached(self, ttl=1.0):
+        """Health checks hammer this: the answer is reused for a second (one probe per second, not one new connection per request)."""
+        with self._ping_lock:
+            t, ok = self._ping
+            if time.monotonic() - t < ttl:
+                return ok
+            try:
+                self.ping()
+                ok = True
+            except Exception:
+                ok = False
+            self._ping = (time.monotonic(), ok)
+            return ok
+
+    def _rate_key(self, bucket, key):
+        return hmac.new(self.cfg.actor_salt.encode(), (bucket + "|" + key).encode(), hashlib.sha256).hexdigest()[:24]
+
+    def rate_allow(self, bucket, key, per_window, window, count=True):
+        """Sliding-window counter kept in the database, so every serve process of a container (and every replica) shares it. -> bool"""
+        k = self._rate_key(bucket, key)
+        with self.pool.connection() as c:
+            c.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (bucket + "|" + k,))
+            c.execute("DELETE FROM rate_hits WHERE bucket=%s AND key=%s AND at < now() - make_interval(secs => %s)", (bucket, k, window))
+            n = c.execute("SELECT count(*) AS n FROM rate_hits WHERE bucket=%s AND key=%s", (bucket, k)).fetchone()["n"]
+            ok = n < per_window
+            if ok and count:
+                c.execute("INSERT INTO rate_hits(bucket, key) VALUES (%s, %s)", (bucket, k))
+            if random.random() < 0.005:
+                c.execute("DELETE FROM rate_hits WHERE at < now() - interval '1 hour'")         # idle keys do not pile up (the longest window is an hour)
+            return ok
+
+    def rate_retry_after(self, bucket, key, window):
+        k = self._rate_key(bucket, key)
+        with self.pool.connection() as c:
+            r = c.execute("SELECT extract(epoch FROM now() - min(at)) AS age FROM rate_hits WHERE bucket=%s AND key=%s", (bucket, k)).fetchone()
+        return max(1, int(math.ceil(window - r["age"]))) if r and r["age"] is not None else 1
+
     def ping(self):
         """A fresh short-lived connection (2 s): a busy pool is not a database outage."""
         opts = "-c search_path=%s -c statement_timeout=2000 -c application_name=masjiduz-health" % migrate.SCHEMA
@@ -331,6 +373,21 @@ class Store:
                 out.append(item)
         return sorted(out, key=lambda x: (x["distance_m"], x["id"]))      # a fixed order for equal distances: pages never repeat or skip
 
+    def _near_ids(self, cur, lat, lon, radius):
+        """[(distance_m rounded to 0.1, id)] of the mosques inside the circle, nearest first (equal distances by id). Only id, lat and lon are read:
+        the full rows are fetched for the one page that is returned, not for everything inside the circle."""
+        dlat = radius / 111320.0
+        dlon = radius / (111320.0 * max(math.cos(math.radians(lat)), 0.01))
+        cur.execute("SELECT id, lat, lon FROM mosques WHERE status<>'archived' AND lat BETWEEN %s AND %s AND lon BETWEEN %s AND %s",
+                    (lat - dlat, lat + dlat, lon - dlon, lon + dlon))
+        out = []
+        for r in cur.fetchall():
+            d = haversine_m(lat, lon, r["lat"], r["lon"])
+            if d <= radius:
+                out.append((round(d, 1), r["id"]))
+        out.sort(key=lambda x: (x[0], str(x[1])))
+        return out
+
     MAX_DEPTH = 500
 
     def nearest(self, lat, lon, limit=5, max_m=3000000.0, offset=0):
@@ -343,10 +400,20 @@ class Store:
         with self.pool.connection() as c:
             cur = c.cursor()
             for r in (500.0, 2000.0, 8000.0, 30000.0, 100000.0, max_m):
-                found = self._nearby(cur, lat, lon, min(r, max_m))
+                found = self._near_ids(cur, lat, lon, min(r, max_m))
                 if len(found) >= limit + offset:
                     break
-        return found[offset:offset + limit]
+            page = found[offset:offset + limit]
+            if not page:
+                return []
+            rows = {str(r["id"]): r for r in cur.execute("SELECT * FROM mosques WHERE id = ANY(%s)", ([i for _, i in page],)).fetchall()}
+        out = []
+        for d, i in page:
+            if str(i) in rows:                                   # (archived between the two reads: skipped)
+                item = self.row(rows[str(i)])
+                item["distance_m"] = d
+                out.append(item)
+        return out
 
     def nearby(self, lat, lon, radius):
         with self.pool.connection() as c:
@@ -740,6 +807,18 @@ def network_of(ip):
     return str(ipaddress.ip_network("%s/%d" % (a, 24 if a.version == 4 else 48), strict=False))
 
 
+class DbRateLimiter:
+    """The same interface as RateLimiter, but the counters live in the database (shared by all workers and replicas)."""
+    def __init__(self, store, bucket, per_window, window):
+        self.store, self.bucket, self.per_window, self.window = store, bucket, per_window, window
+
+    def allow(self, key, count=True):
+        return self.store.rate_allow(self.bucket, key, self.per_window, self.window, count)
+
+    def retry_after(self, key):
+        return self.store.rate_retry_after(self.bucket, key, self.window)
+
+
 class RateLimiter:
     def __init__(self, per_window, window=60):
         self.per_window, self.window, self.hits, self.lock = per_window, window, {}, threading.Lock()
@@ -765,7 +844,8 @@ class RateLimiter:
 
 # ---------------------------------------------------------------- http
 ID = r"([0-9a-f-]{36})"
-LIGHT_WRITES = ("/me/lang", "/map/yandex-failed", "/timetable/photo", "/timetable/voice")     # cheap or limited on their own: not counted as community writes
+LIGHT_WRITES = ("/me/lang", "/map/yandex-failed")                       # not community edits: counted in their own budget (same size, per address and hour)
+READING_WRITES = ("/timetable/photo", "/timetable/voice")               # limited by the reading limiters (per device and per address) and AI_DAILY_LIMIT
 STATIC_CACHE = {}
 COMPRESSIBLE = (".js", ".css", ".html", ".json", ".svg")
 HASHED = re.compile(r"^(.+)\.([0-9a-f]{8})\.(js|css)$")
@@ -1117,8 +1197,11 @@ class Request(BaseHTTPRequestHandler):
                 continue
             if path.startswith("/admin/"):
                 self.admin = self.require_admin()
-            elif method in ("POST", "PATCH") and path not in LIGHT_WRITES and not self.state.write_limiter.allow(self.client_ip()):
-                raise RateLimited(self.state.write_limiter.retry_after(self.client_ip()), "too many writes; slow down")
+            elif method in ("POST", "PATCH") and path not in READING_WRITES:
+                lim = self.state.light_limiter if path in LIGHT_WRITES else self.state.write_limiter
+                who = self.client_ip() + ("|" + path if path in LIGHT_WRITES else "")        # each light route has its own budget
+                if not lim.allow(who):
+                    raise RateLimited(lim.retry_after(who), "too many writes; slow down")
             return fn(q, *hit.groups())
         if allowed:
             err = ApiError(405, "method_not_allowed", "method not allowed")
@@ -1138,11 +1221,7 @@ class Request(BaseHTTPRequestHandler):
 
     # -- public endpoints
     def r_health(self, q):
-        db = "UP"
-        try:
-            self.store.ping()
-        except Exception:
-            db = "DOWN"
+        db = "UP" if self.store.ping_cached() else "DOWN"
         status = "UP" if db == "UP" else "DOWN"
         data = {"status": status, "version": self.cfg.version, "commit": self.cfg.commit, "env": self.cfg.env, "db": db}
         if status == "DOWN":
@@ -1427,12 +1506,13 @@ class Request(BaseHTTPRequestHandler):
 
 class State:
     """Per-server shared state: limiters, the CSP, and the count of requests in flight (for a graceful stop)."""
-    def __init__(self, cfg):
-        self.write_limiter = RateLimiter(cfg.rate_limit, 3600)         # writes per client address per hour
-        self.read_limiter = RateLimiter(30, 3600)                      # timetable readings per device per hour
-        self.read_ip_limiter = RateLimiter(120, 3600)                  # ... and per address (several people may share one)
+    def __init__(self, cfg, store):
+        self.write_limiter = DbRateLimiter(store, "write", cfg.rate_limit, 3600)       # writes per client address per hour
+        self.light_limiter = DbRateLimiter(store, "light", cfg.rate_limit, 3600)       # language / Yandex key reports: their own budget, same size
+        self.read_limiter = DbRateLimiter(store, "read", 30, 3600)                     # timetable readings per device per hour
+        self.read_ip_limiter = DbRateLimiter(store, "readip", 120, 3600)               # ... and per address (several people may share one)
         self.read_slots = threading.BoundedSemaphore(4)                # readings in flight at the same time
-        self.admin_limiter = RateLimiter(10, 600)                      # failed admin logins per address per 10 minutes
+        self.admin_limiter = DbRateLimiter(store, "admin", 10, 600)                    # failed admin logins per address per 10 minutes
         self.active, self.lock, self.idle = 0, threading.Lock(), threading.Condition()
 
     def busy(self):
@@ -1458,7 +1538,7 @@ class State:
 
 
 def make_handler(cfg, store):
-    state = State(cfg)
+    state = State(cfg, store)
 
     class H(Request):
         pass
@@ -1476,21 +1556,54 @@ class Server(ThreadingHTTPServer):
         log.error("connection error: %s", type(_sys.exc_info()[1]).__name__)
 
 
-def build_server(cfg, store=None):
+def build_server(cfg, store=None, sock=None):
     store = store or Store(cfg)
     handler = make_handler(cfg, store)
-    srv = Server((cfg.host, cfg.port), handler)
+    if sock is None:
+        srv = Server((cfg.host, cfg.port), handler)
+    else:                                                  # a listening socket shared with the other workers of this container
+        srv = Server(sock.getsockname()[:2], handler, bind_and_activate=False)
+        srv.socket = sock
     srv.store, srv.state = store, handler.state
     return srv
 
 
+def listen_socket(cfg):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind((cfg.host, cfg.port))
+    sock.listen(Server.request_queue_size)
+    sock.setblocking(False)            # shared by several processes: a connection another worker took first must not leave accept() blocked
+    return sock
+
+
 def serve(cfg):
-    store = Store(cfg)
+    """One process, or WEB_CONCURRENCY processes sharing one listening socket (the kernel hands each connection to one of them: Python threads
+    share one core, processes do not). Workers are fresh processes (not forks: a fork after a database connection is unsafe) that get the socket as
+    an inherited file descriptor. The first process is a worker too and supervises the others: if one dies the container exits and is restarted."""
     for w in cfg.warnings:
         log.warning("insecure setting: %s", w)
     if not cfg.moderator_ids and not cfg.admin_token:
         log.warning("no moderators configured: moderation is disabled for everyone")
-    srv = build_server(cfg, store)
+    todo = migrate.pending(cfg)                              # before any worker exists: a missing migration stops the whole container
+    if todo:
+        raise ConfigError("database migrations are pending (%s): run the migrate command first" % ", ".join(todo))
+    workers, stopping, children, sock = cfg.web_concurrency, threading.Event(), [], None
+    leader = not cfg.worker_fd
+    if cfg.worker_fd:                                        # a worker started by the leader
+        sock = socket.socket(fileno=cfg.worker_fd)
+        sock.setblocking(False)
+        cfg.db_pool_max = max(2, -(-cfg.db_pool_max // workers))
+    elif workers > 1:
+        import subprocess
+        import sys
+        sock = listen_socket(cfg)
+        env = dict(os.environ, **{"TIMUS_APP_MASJIDUZ_WORKER_FD": str(sock.fileno())})
+        cli_py = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cli.py")
+        children = [subprocess.Popen([sys.executable, cli_py, "serve"], env=env, pass_fds=[sock.fileno()]) for _ in range(workers - 1)]
+        cfg.db_pool_max = max(2, -(-cfg.db_pool_max // workers))       # DB_POOL_MAX is the total of the container
+    store = Store(cfg)
+    srv = build_server(cfg, store, sock)
 
     def purge_loop():
         while True:
@@ -1501,17 +1614,37 @@ def serve(cfg):
             except Exception as e:  # noqa
                 log.error("network hash purge failed: %s", type(e).__name__)
             time.sleep(6 * 3600)
-    threading.Thread(target=purge_loop, daemon=True).start()
+    if leader:
+        threading.Thread(target=purge_loop, daemon=True).start()
 
     def stop(signum, frame):
+        stopping.set()
         log.info("SIGTERM: no new connections, finishing requests in flight")
         threading.Thread(target=srv.shutdown, daemon=True).start()
+        for ch in children:
+            if ch.poll() is None:
+                ch.terminate()
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
-    log.info("serving %s v%s on %s:%d (env=%s)", API, cfg.version, cfg.host, cfg.port, cfg.env)
+
+    def supervise():
+        while not stopping.is_set():
+            if any(ch.poll() is not None for ch in children):
+                log.error("a worker process died: stopping so the container restarts")
+                stop(signal.SIGTERM, None)
+                return
+            time.sleep(0.5)
+    if children:
+        threading.Thread(target=supervise, daemon=True).start()
+    log.info("serving %s v%s on %s:%d (env=%s, workers=%d)", API, cfg.version, cfg.host, cfg.port, cfg.env, workers)
     srv.serve_forever()
     clean = srv.state.wait_idle(10)
     srv.server_close()
     store.close()
+    for ch in children:
+        try:
+            ch.wait(timeout=12)
+        except Exception:
+            ch.kill()
     log.info("stopped%s", "" if clean else " (some requests were still running after 10 s)")
     return 0

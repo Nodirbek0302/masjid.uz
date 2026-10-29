@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.1 — acceptance fixes
+### Fixed
+- `POST /map/yandex-failed` and `POST /me/lang` are rate limited (per address and hour, `WRITE_RATE_PER_HOUR`, each its own budget): 429 + `Retry-After` over the limit (CONTRACT §6).
+- Latency under load: `serve` runs `WEB_CONCURRENCY` worker processes (default 4) on one port; `/mosques/nearest` reads only id/lat/lon inside the search circle and the full rows for the returned page only; `/health` reuses its database probe for one second. Locally, 60 parallel clients and 900 requests: `/mosques/nearest` p95 139 ms → 60 ms, `/health` p95 113 ms → 23 ms.
+### Changed
+- Rate-limit counters moved from process memory to the database (`rate_hits`), shared by all workers and replicas; the key is a salted hash, not the address.
+### Migrations
+- `V0004__rate_hits.sql`: new UNLOGGED table `rate_hits` (expand only; v1.0.0 keeps working with it).
+
 ## 1.0.0 — first TIMUS release
 ### Added
 - API under `/masjiduz/v1` with the standard envelope, camelCase fields, cursor lists, `GET /health`, `X-Request-Id`, `X-Timus-Env`.

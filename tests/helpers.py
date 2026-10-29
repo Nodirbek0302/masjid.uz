@@ -47,7 +47,7 @@ def _db_env():
 
 def base_env():
     env = {"TIMUS_ENV": "dev", "PORT": "0", "HOST": "127.0.0.1", "TELEGRAM_BOT_TOKEN": BOT_TOKEN, "MODERATOR_IDS": str(ADMIN_ID),
-           "WRITE_RATE_PER_HOUR": "1000", "REPORT_THRESHOLD": "2", "ACTOR_SALT": SALT}
+           "WRITE_RATE_PER_HOUR": "1000", "REPORT_THRESHOLD": "2", "ACTOR_SALT": SALT, "WEB_CONCURRENCY": "1"}
     env.update(_db_env())
     return env
 

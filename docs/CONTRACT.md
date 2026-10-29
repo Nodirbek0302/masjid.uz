@@ -59,8 +59,8 @@ else `X-Client-Id` (browser id). Only a verified Telegram profile is recorded.
 
 ## 2. Health
 
-`GET /masjiduz/v1/health` → `data: {"status": "UP"|"DEGRADED"|"DOWN", "version": "1.0.0", "commit": "...", "env": "staging", "db": "UP"|"DOWN"}`.
-`503` when DOWN (database unreachable, checked with `SELECT 1`, 2 s timeout). Public, no rate limit.
+`GET /masjiduz/v1/health` → `data: {"status": "UP"|"DEGRADED"|"DOWN", "version": "1.0.1", "commit": "...", "env": "staging", "db": "UP"|"DOWN"}`.
+`503` when DOWN (database unreachable, checked with `SELECT 1`, 2 s timeout). Public, no rate limit. The database probe is reused for one second, so a burst of health checks costs one probe per second.
 
 ## 3. Public endpoints
 
@@ -119,7 +119,10 @@ Headers (the web never uses Yandex: the CSP is always this strict one): `Content
 
 ## 6. Rate limits
 
-* Writes (`POST`/`PATCH`) per client IP: `TIMUS_APP_MASJIDUZ_WRITE_RATE_PER_HOUR` (default 30) → `429` + `Retry-After`.
+Every `POST`/`PATCH` is rate limited per client IP (the address nginx puts in `X-Forwarded-For`) and per hour; over the limit → `429 RATE_LIMITED` + `Retry-After` (seconds). The counters are kept in the database (table `rate_hits`, the key is a salted hash, never the address), so all `serve` workers and replicas share them.
+* Community writes (create/edit mosques, reports, admin actions): `TIMUS_APP_MASJIDUZ_WRITE_RATE_PER_HOUR` (default 30).
+* `POST /me/lang` and `POST /map/yandex-failed`: the same number (`WRITE_RATE_PER_HOUR`), each route its own budget, so they never use up the community budget.
+* `POST /timetable/photo|voice`: 30 per device and 120 per address per hour, plus `AI_DAILY_LIMIT` per day for everybody (see §4).
 * Failed admin logins: 10 per 10 minutes per IP → `429`.
 
 ## 7. Container commands
@@ -142,6 +145,7 @@ One image, `python server/cli.py <command>` (entrypoint, default `serve`):
 * `actors`: id (`tg:<id>` | `device:<id>` | `client:<id>`), Telegram profile fields **only when signature-verified**, device/app info, `ip_hash` (salted HMAC of the /24 (IPv4) or /48 (IPv6) network, never the address; cleared after 30 days), counters, first/last seen.
 * `map_settings`, `map_keys`, `map_key_users`, `map_key_reports`: the map provider choice, the Yandex MapKit keys of the app (secrets held in the database, masked in the admin listing), and per-day counters (client id + key id) that keep a key within its daily limit; removed after 2 days.
 * `ai_calls`, `ai_cooldown`: only counters (which model slot was called when) that keep the readers inside their provider limits; no file or user data.
+* `rate_hits` (UNLOGGED): rate-limit counters (bucket, salted hash of the client address or device, time); rows older than an hour are deleted.
 * `bot_users`, `bot_subs`, `bot_sent`: Telegram id, chosen language/region/reminder settings, subscriptions, a send ledger. `/stop` removes every row of the user.
 * No full IP addresses are stored anywhere. Logs never contain tokens, `Authorization`, `initData`, IPs or free text.
 
@@ -160,7 +164,7 @@ Nothing else: no telemetry or analytics. (`telegram.org/js/telegram-web-app.js` 
 
 ## 10. Environment variables
 
-`TIMUS_ENV` (`dev|staging|prod`), `TIMUS_APP_MASJIDUZ_` + `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` (secret), `DB_POOL_MAX` (10),
+`TIMUS_ENV` (`dev|staging|prod`), `TIMUS_APP_MASJIDUZ_` + `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` (secret), `DB_POOL_MAX` (10, connections of the whole `serve` container, split between its workers), `WEB_CONCURRENCY` (4, `serve` worker processes sharing the port; 1–16),
 `ADMIN_TOKEN` (secret, optional, ≥32 chars), `TELEGRAM_BOT_TOKEN` (secret), `MODERATOR_IDS` (comma-separated Telegram ids), `ACTOR_SALT` (secret), `CORS_ORIGINS`, `API_BASE`, `TRUSTED_PROXIES`, `COMMIT`,
 `BOT_USERNAME`, `WEBAPP_URL`, `WRITE_RATE_PER_HOUR` (30), `DUPLICATE_RADIUS_M` (50), `REPORT_THRESHOLD` (3), `SHOW_TILE_MOSQUES` (1), `TILE_STYLE_URL`, `AI_DAILY_LIMIT` (300), `GEMINI_API_KEY` (secret, optional, comma-separated keys of separate projects add their limits; reading is off without any key), `GEMINI_MODELS` (`name:rpm:rpd,...` in the order tried), `OVERPASS_URL`, `PRAYER_FAJR_ANGLE`, `PRAYER_ISHA_ANGLE`, `PRAYER_ASR_FACTOR`, `PRAYER_DHUHR_OFFSET_MIN`.
 In `staging`/`prod` missing secrets (`DB_PASSWORD`, `ACTOR_SALT`, `TELEGRAM_BOT_TOKEN`) stop the process with one log line naming the variable; `CORS_ORIGINS=*` stops it in `prod` (warning in `staging`).

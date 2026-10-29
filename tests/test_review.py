@@ -62,21 +62,31 @@ class WriteLimiterScope(ServerCase):
     def setUp(self):
         reset_db()
 
-    def test_light_posts_do_not_use_the_write_budget(self):
+    def test_light_posts_have_their_own_budget_and_readings_their_own_limits(self):
         self.use(WRITE_RATE_PER_HOUR="2")
+        # /me/lang and /map/yandex-failed are limited too (same size, own budget): the third one of the hour is 429 + Retry-After
+        self.assertEqual([self.call("POST", "/map/yandex-failed", {"keyId": 1})[0] for _ in range(3)], [200, 200, 429])
+        r = self.call("POST", "/map/yandex-failed", {"keyId": 1}, full=True)
+        self.assertEqual((r.status, r.json["code"]), (429, "RATE_LIMITED"))
+        self.assertGreaterEqual(int(r.header("Retry-After")), 1)
+        self.assertEqual([self.call("POST", "/me/lang", {"lang": "ru"})[0] for _ in range(3)], [400, 400, 429])   # anonymous: refused on merit, then 429
+        # ... and they do not use the community write budget
+        self.assertEqual([self.call("POST", "/mosques", {"lat": 12 + i, "lon": 12.0})[0] for i in range(3)], [201, 201, 429])
+        # the readings keep their own limiters (never the write budget): 503 here, no reader configured
         for i in range(8):
-            self.assertEqual(self.call("POST", "/me/lang", {"lang": "ru"})[0], 400)            # anonymous: refused on its merits, not 429
-            self.assertEqual(self.call("POST", "/map/yandex-failed", {"keyId": 1})[0], 200)
             for kind, body in (("photo", JPEG + b"1"), ("voice", b"OggS" + b"1" * 20)):
                 ctype = "image/jpeg" if kind == "photo" else "audio/ogg"
                 r = self.req("POST", API + "/timetable/" + kind, body, {"Content-Type": ctype, "X-Device-Id": "device%05d" % i})
-                self.assertEqual(r.status, 503, kind)                                           # no reader configured; never 429 from the write limiter
-        self.assertEqual([self.call("POST", "/mosques", {"lat": 12 + i, "lon": 12.0})[0] for i in range(3)], [201, 201, 429])
-        self.assertEqual(self.call("POST", "/me/lang", {"lang": "ru"})[0], 400)                 # still not counted once the budget is gone
-        self.assertEqual(self.call("POST", "/map/yandex-failed", {"keyId": 1})[0], 200)
+                self.assertEqual(r.status, 503, kind)
         self.assertEqual(self.call("PATCH", "/mosques/00000000-0000-0000-0000-000000000000", {"name": "x"})[0], 429)    # real writes still are
         report = self.call("POST", "/mosques/00000000-0000-0000-0000-000000000000/reports", {"reason": "x"})
         self.assertEqual(report[0], 429)
+
+    def test_150_posts_from_one_address_are_cut_at_the_limit(self):
+        self.use(WRITE_RATE_PER_HOUR="30")
+        codes = [self.call("POST", "/map/yandex-failed", {"keyId": 1}, ip="203.0.113.7")[0] for _ in range(150)]
+        self.assertEqual((codes.count(200), codes.count(429)), (30, 120))
+        self.assertEqual(self.call("POST", "/map/yandex-failed", {"keyId": 1}, ip="203.0.113.8")[0], 200)     # another address is not affected
 
 
 class ConditionalRequests(ServerCase):
