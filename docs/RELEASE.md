@@ -1,6 +1,6 @@
 # Release v1.0.0
 
-- **Commit:** the commit the annotated tag `v1.0.0` points to (fill in at tagging).
+- **Commit:** the commit the annotated tag `v1.0.0` points to (`git rev-parse v1.0.0^{commit}`).
 - **Migrations:** yes — `V0001__init.sql` (fresh baseline in schema `masjiduz`). Run `migrate` before `serve`/`bot`.
 - **Data:** optional first import: `import --file <path>` (format `docs/IMPORT.md`), then `import-osm` nightly.
 - **Env vars (names only):** all of `.env.example`. Required secrets in staging/prod: `TIMUS_APP_MASJIDUZ_DB_PASSWORD`, `_ACTOR_SALT`, `_TELEGRAM_BOT_TOKEN`. Optional: `_ADMIN_TOKEN`, `_GEMINI_API_KEY`.
