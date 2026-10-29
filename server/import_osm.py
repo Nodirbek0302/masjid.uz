@@ -17,6 +17,7 @@ import urllib.request
 
 import app
 import osm_photo
+import psycopg
 import translit
 
 QUERY = ('[out:json][timeout:180];area["ISO3166-1"="UZ"][admin_level=2]->.a;'
@@ -91,11 +92,36 @@ def sync_photos(data, store):
     return done
 
 
+LOCK_ID = 727006                          # one import at a time: the nightly container and the moderator's bot button never overlap
+
+
+def download(cfg):
+    """Overpass for Uzbekistan, checked: an empty or partial answer must never look like a real sync."""
+    data = fetch(cfg.overpass_url)
+    if len(data.get("elements", [])) < 100:
+        raise RuntimeError("suspiciously small Overpass answer (%d elements)" % len(data.get("elements", [])))
+    return data
+
+
 def run(data, cfg, store=None):
+    """The sync under a database lock; while another import holds it nothing is done -> {"skipped": True}."""
+    store = store or app.Store(cfg, name="masjiduz-import", statement_timeout_ms=60000)
+    lock = psycopg.connect(cfg.conninfo(), autocommit=True)
+    try:
+        if not lock.execute("SELECT pg_try_advisory_lock(%s)", (LOCK_ID,)).fetchone()[0]:
+            line = "import-osm skipped: another import is running"
+            log.info(line)
+            print(line, flush=True)
+            return {"skipped": True}
+        return _run(data, cfg, store)
+    finally:
+        lock.close()                                  # closing the session releases the lock
+
+
+def _run(data, cfg, store):
     """Idempotent sync. New OSM objects are inserted. Existing imported rows are refreshed from OSM only while no
     human has touched them (every history row is by 'import:osm'); community edits always win. Objects that vanished
     from OSM are only counted, never archived automatically."""
-    store = store or app.Store(cfg, name="masjiduz-import", statement_timeout_ms=60000)
     added = updated = protected = near = unchanged = 0
     seen = set()
     for el in data.get("elements", []):

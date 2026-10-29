@@ -11,7 +11,7 @@ REGION_NAMES = {
 
 MORE = {
     "uz": {
-        "venue_btn": "📍 Telegram xaritasida", "copy_btn": "📋 Vaqtlarni nusxalash", "ai_notice": "🔒 Yuborgan rasm yoki ovozingiz oʻqish uchun Google (Gemini) ga joʻnatiladi va oʻqilgach saqlanmaydi.", "m": "m", "km": "km", "no_times": "Jamoat vaqtlari hali kiritilmagan.", "updated": "🕒 Yangilangan: {d}",
+        "imp_btn": "🔄 Masjidlar bazasini yangilash (OpenStreetMap)", "imp_start": "⏳ OpenStreetMapʼdan yangilanmoqda… Bu 1–8 daqiqa olishi mumkin, tugagach yozaman.", "imp_busy": "Yangilash allaqachon ketyapti, tugashini kuting.", "imp_done": "✅ Masjidlar bazasi yangilandi: {added} ta qoʻshildi, {updated} ta yangilandi, {unchanged} ta oʻzgarmadi, {protected_edited} ta foydalanuvchilar tahriri saqlandi, {near_existing} ta mavjudiga juda yaqin, {photos} ta rasm.", "imp_fail": "❌ Yangilab boʻlmadi ({why}). OpenStreetMap band boʻlishi mumkin, keyinroq qayta urinib koʻring.", "venue_btn": "📍 Telegram xaritasida", "copy_btn": "📋 Vaqtlarni nusxalash", "ai_notice": "🔒 Yuborgan rasm yoki ovozingiz oʻqish uchun Google (Gemini) ga joʻnatiladi va oʻqilgach saqlanmaydi.", "m": "m", "km": "km", "no_times": "Jamoat vaqtlari hali kiritilmagan.", "updated": "🕒 Yangilangan: {d}",
         "route": "🧭 Yoʻnalish", "upd_btn": "✏️ Vaqtlarni yangilash", "sub_btn": "🔔 Obuna boʻlish", "unsub_btn": "🔕 Obunani bekor qilish",
         "card_head": "Eng yaqin masjid:", "near_ask": "Eng yaqin masjidni topish uchun joylashuvingizni yuboring 👇",
         "near_none": "Yaqin atrofda masjid topilmadi.",
@@ -30,7 +30,7 @@ MORE = {
         "sub_offer": "🔔 Bu masjid vaqtlari oʻzgarsa, xabar olish",
     },
     "ru": {
-        "venue_btn": "📍 На карте Telegram", "copy_btn": "📋 Скопировать время", "ai_notice": "🔒 Отправленные фото или голос передаются в Google (Gemini) для распознавания и после обработки не сохраняются.", "m": "м", "km": "км", "no_times": "Время джамаата ещё не указано.", "updated": "🕒 Обновлено: {d}",
+        "imp_btn": "🔄 Обновить базу мечетей (OpenStreetMap)", "imp_start": "⏳ Обновляю из OpenStreetMap… Это может занять 1–8 минут, напишу, когда закончу.", "imp_busy": "Обновление уже идёт, дождитесь окончания.", "imp_done": "✅ База мечетей обновлена: добавлено {added}, обновлено {updated}, без изменений {unchanged}, правки пользователей сохранены у {protected_edited}, слишком близко к существующим {near_existing}, фото {photos}.", "imp_fail": "❌ Не удалось обновить ({why}). Возможно, OpenStreetMap занят, попробуйте позже.", "venue_btn": "📍 На карте Telegram", "copy_btn": "📋 Скопировать время", "ai_notice": "🔒 Отправленные фото или голос передаются в Google (Gemini) для распознавания и после обработки не сохраняются.", "m": "м", "km": "км", "no_times": "Время джамаата ещё не указано.", "updated": "🕒 Обновлено: {d}",
         "route": "🧭 Маршрут", "upd_btn": "✏️ Обновить время", "sub_btn": "🔔 Подписаться", "unsub_btn": "🔕 Отписаться",
         "card_head": "Ближайшая мечеть:", "near_ask": "Чтобы найти ближайшую мечеть, отправьте свою геопозицию 👇",
         "near_none": "Поблизости мечетей не найдено.",
@@ -49,7 +49,7 @@ MORE = {
         "sub_offer": "🔔 Получать сообщения, если время этой мечети изменится",
     },
     "en": {
-        "venue_btn": "📍 On the Telegram map", "copy_btn": "📋 Copy the times", "ai_notice": "🔒 A photo or voice message you send is passed to Google (Gemini) to be read and is not kept afterwards.", "m": "m", "km": "km", "no_times": "Congregation times have not been entered yet.", "updated": "🕒 Updated: {d}",
+        "imp_btn": "🔄 Update the mosque database (OpenStreetMap)", "imp_start": "⏳ Updating from OpenStreetMap… This can take 1–8 minutes, I will write when it is done.", "imp_busy": "An update is already running, please wait for it.", "imp_done": "✅ Mosque database updated: {added} added, {updated} updated, {unchanged} unchanged, {protected_edited} kept as edited by users, {near_existing} too close to an existing one, {photos} photos.", "imp_fail": "❌ Could not update ({why}). OpenStreetMap may be busy, try again later.", "venue_btn": "📍 On the Telegram map", "copy_btn": "📋 Copy the times", "ai_notice": "🔒 A photo or voice message you send is passed to Google (Gemini) to be read and is not kept afterwards.", "m": "m", "km": "km", "no_times": "Congregation times have not been entered yet.", "updated": "🕒 Updated: {d}",
         "route": "🧭 Directions", "upd_btn": "✏️ Update the times", "sub_btn": "🔔 Subscribe", "unsub_btn": "🔕 Unsubscribe",
         "card_head": "Nearest mosque:", "near_ask": "Share your location to find the nearest mosque 👇",
         "near_none": "No mosque found nearby.",

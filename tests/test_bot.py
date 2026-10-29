@@ -292,6 +292,53 @@ class BotFlow(unittest.TestCase):
             self.assertEqual(self.botmod.web_root(base), "https://api.example/masjiduz/web/")
         self.assertEqual(self.botmod.web_url("https://api.example/masjiduz/web", "ru"), "https://api.example/masjiduz/web/?lang=ru")
 
+    def test_moderator_button_updates_the_mosques(self):
+        import threading as th
+        gate, calls = th.Event(), []
+
+        def osm():
+            calls.append(1)
+            gate.wait(5)
+            return {"added": 3, "updated": 1, "unchanged": 2200, "protected_edited": 4, "near_existing": 70, "photos": 1}
+        self.bot.osm_import = osm
+        self.user = {"id": 7, "first_name": "Mod", "language_code": "uz"}; self.sent.clear()
+        self.send(text="/admin")
+        self.assertIn("osm:sync", [b.get("callback_data") for b in self.buttons()])
+        self.tap("osm:sync", message_id=11)
+        self.assertIn("1–8 daqiqa", self.calls("editMessageText")[0]["text"])                 # the /admin message says it started
+        self.tap("osm:sync", message_id=11)                                                    # a second press while it runs
+        a = self.calls("answerCallbackQuery")
+        self.assertTrue(a[0]["show_alert"]); self.assertIn("allaqachon", a[0]["text"])
+        gate.set()
+        for _ in range(50):
+            if any("yangilandi" in t for t in self.msgs()):
+                break
+            __import__("time").sleep(0.05)
+        self.assertIn("3 ta qoʻshildi", self.msgs()[-1]); self.assertEqual(len(calls), 1)
+        # it fails: said so, and the button works again
+        self.bot.osm_import = lambda: (_ for _ in ()).throw(TimeoutError())
+        self.tap("osm:sync", message_id=12)
+        for _ in range(50):
+            if any("Yangilab boʻlmadi" in t for t in self.msgs()):
+                break
+            __import__("time").sleep(0.05)
+        self.assertIn("TimeoutError", self.msgs()[-1])
+
+    def test_only_moderators_see_and_use_the_update_button(self):
+        ran = []
+        self.bot.osm_import = lambda: ran.append(1) or {}
+        self.user = {"id": 556, "first_name": "Eve", "language_code": "uz"}; self.sent.clear()
+        self.send(text="/admin")
+        self.assertEqual(self.msgs(), [])
+        self.tap("osm:sync", message_id=13)                                                    # a forged press
+        __import__("time").sleep(0.2)
+        self.assertEqual(ran, [])
+        self.bot.osm_import = None                                                             # switched off (the default)
+        self.user = {"id": 7, "first_name": "Mod", "language_code": "uz"}; self.sent.clear()
+        self.send(text="/admin")
+        self.assertNotIn("osm:sync", [b.get("callback_data") for b in self.buttons()])
+        self.assertEqual((make_cfg().bot_osm_import, make_cfg(BOT_OSM_IMPORT="1").bot_osm_import), (False, True))
+
     def test_descriptions_fit_telegram_limits(self):
         import bottexts
         self.assertEqual(set(bottexts.DESCRIPTIONS), {"uz", "ru", "en"})

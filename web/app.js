@@ -748,8 +748,40 @@
     return [
       btn("ghost small", "📷 " + T("photo.btn"), cfg.photoReading ? function () { photoSource(m); } : fallback("error.ocrUnavailable")),
       btn("ghost small", "🎙 " + T("voice.btn"), canVoice ? function () { voiceFlow(m); } : fallback("error.sttUnavailable")),
-      bot ? el("a", { class: "btn ghost small", target: "_blank", rel: "noopener noreferrer", href: "https://t.me/" + encodeURIComponent(bot) + "?start=s_" + m.id, text: T("cta.sub") }) : null
+      subButton(m)
     ];
+  }
+  // The bell: inside Telegram the subscription is set right here (signed by Telegram) and the button shows it; in a plain browser it opens the bot.
+  function subButton(m) {
+    var bot = cfg.botUsername;
+    if (!((tg && tg.initData) || tgData)) {
+      return bot ? el("a", { class: "btn ghost small", target: "_blank", rel: "noopener noreferrer", href: "https://t.me/" + encodeURIComponent(bot) + "?start=s_" + m.id, text: T("cta.sub") }) : null;
+    }
+    var icon = el("span", { class: "bell-i", text: "🔔" }), label = el("span", { text: T("sub.btn") });
+    var b = el("button", { type: "button", class: "btn ghost small bell", "aria-pressed": "false" }, [icon, label]);
+    var on = false, busy = false;
+    function show(v, ring) {
+      on = v; b.classList.toggle("on", v); b.setAttribute("aria-pressed", String(v));
+      icon.textContent = v ? "🔔" : "🔕"; label.textContent = T(v ? "sub.on" : "sub.btn");
+      if (ring) { b.classList.remove("ring"); void b.offsetWidth; b.classList.add("ring"); }          // restart the animation
+    }
+    show(false);
+    api("GET", "/me/subscriptions/" + m.id).then(function (r) { show(!!r.subscribed); }).catch(function () {});
+    b.onclick = function () {
+      if (busy) return;
+      busy = true; b.disabled = true;
+      var want = !on;
+      show(want, want);                                                         // at once; corrected if the server says otherwise
+      api("POST", "/me/subscriptions/" + m.id, { on: want }).then(function (r) {
+        show(!!r.subscribed, false);
+        toast(T(r.subscribed ? "sub.done" : "sub.undone"));
+        try { tg.HapticFeedback.notificationOccurred(r.subscribed ? "success" : "warning"); } catch (e) {}
+      }).catch(function (e) {
+        show(!want, false); toast(errText(e));
+        try { tg.HapticFeedback.notificationOccurred("error"); } catch (x) {}
+      }).then(function () { busy = false; b.disabled = false; });
+    };
+    return b;
   }
   function readSheet(m, o) {                              // o: title, reading, check, note, other, again(), read() -> Promise, header(result|null) -> node
     var headBox = el("div", {}), body = el("div", {}), cancelled = false, res = null;

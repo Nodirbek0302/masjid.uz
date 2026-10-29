@@ -787,7 +787,7 @@ class ConfigValidation(unittest.TestCase):
         self.assertEqual((c.api_base, c.cors_origins, c.admin_token, c.moderator_ids, c.gemini_keys), ("/masjiduz/v1", [], "", set(), []))
         self.assertTrue(c.show_tile_mosques)
         self.assertEqual(self.cfg(TIMUS_ENV="").env, "dev")
-        self.assertEqual(c.version, "1.0.5")
+        self.assertEqual(c.version, "1.0.6")
 
     def test_port_zero_is_accepted_in_dev(self):
         self.assertEqual(self.cfg(PORT="0").port, 0)
@@ -1302,6 +1302,21 @@ class Imports(ServerCase):
         self.assertEqual(s["photos"], 1)
         self.assertIn("A_b.jpg", db("SELECT photo_url FROM mosques")[0][0])
 
+
+    def test_two_imports_never_run_at_once(self):
+        import import_osm
+        data = {"elements": [{"type": "node", "id": 41, "lat": 46.5, "lon": 56.5, "tags": {"name": "L"}}]}
+        with psycopg.connect(helpers.TEST_URL, autocommit=True) as c:
+            c.execute("SELECT pg_advisory_lock(%s)", (import_osm.LOCK_ID,))                     # the nightly import holds it
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(import_osm.run(data, self.cfg, self.store), {"skipped": True})
+            self.assertIn("import-osm skipped: another import is running", out.getvalue())
+            self.assertEqual(db("SELECT count(*) FROM mosques"), [(0,)])
+            c.execute("SELECT pg_advisory_unlock(%s)", (import_osm.LOCK_ID,))
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(import_osm.run(data, self.cfg, self.store)["added"], 1)
+            self.assertEqual(import_osm.run(data, self.cfg, self.store)["unchanged"], 1)          # the lock is released after each run
 
     def test_overpass_is_asked_again_while_it_is_busy(self):
         import urllib.error

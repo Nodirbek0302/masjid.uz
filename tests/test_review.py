@@ -59,6 +59,58 @@ class DismissByKind(ServerCase):
         self.assertEqual(db("SELECT DISTINCT resolution FROM reports"), [("accepted",)])        # archive resolves every report, whatever `kind` says
 
 
+class MiniAppSubscriptions(ServerCase):
+    """The bell in the Mini App: the bot's subscription, set over the API by a signature-verified Telegram user."""
+    def setUp(self):
+        reset_db()
+        self.use()
+        self.mid = self.made(40.5, 66.5, name="Bell")["id"]
+
+    def tg(self, uid=4242):
+        return {"X-Telegram-Init-Data": helpers.sign_init_data({"id": uid, "first_name": "U"})}
+
+    def test_subscribe_and_unsubscribe(self):
+        path = "/me/subscriptions/" + self.mid
+        self.assertEqual(self.call("GET", path, headers=self.tg())[1]["data"], {"subscribed": False})
+        s, r = self.call("POST", path, {"on": True}, headers=self.tg())
+        self.assertEqual((s, r["data"]), (200, {"subscribed": True}))
+        self.assertEqual(db("SELECT telegram_id, mosque_id::text FROM bot_subs"), [(4242, self.mid)])      # the bot's own table
+        self.assertEqual(db("SELECT count(*) FROM bot_users WHERE telegram_id=4242"), [(1,)])
+        self.assertEqual(self.call("POST", path, {"on": True}, headers=self.tg())[1]["data"], {"subscribed": True})   # twice is fine
+        self.assertEqual(self.call("GET", path, headers=self.tg())[1]["data"], {"subscribed": True})
+        self.assertEqual(self.call("GET", path, headers=self.tg(5151))[1]["data"], {"subscribed": False})             # per user
+        self.assertEqual(self.call("POST", path, {"on": False}, headers=self.tg())[1]["data"], {"subscribed": False})
+        self.assertEqual(db("SELECT count(*) FROM bot_subs"), [(0,)])
+
+    def test_refusals(self):
+        path = "/me/subscriptions/" + self.mid
+        for method, body in (("GET", None), ("POST", {"on": True})):
+            s, r = self.call(method, path, body)                                                 # a plain browser: no Telegram user
+            self.assertEqual((s, r["code"]), (401, "UNAUTHORIZED"))
+        bad = {"X-Telegram-Init-Data": helpers.sign_init_data({"id": 1}, token="0:wrong")}
+        self.assertEqual(self.call("POST", path, {"on": True}, headers=bad)[0], 401)              # a forged signature
+        for body in ({"on": "yes"}, {}, {"on": True, "x": 1}):
+            s, r = self.call("POST", path, body, headers=self.tg())
+            self.assertEqual((s, r["code"]), (400, "VALIDATION_ERROR"), body)
+        s, r = self.call("POST", "/me/subscriptions/00000000-0000-0000-0000-000000000000", {"on": True}, headers=self.tg())
+        self.assertEqual((s, r["code"]), (404, "NOT_FOUND"))
+        self.srv.store.moderate(self.mid, "archive", "admin:1", "gone")
+        s, r = self.call("POST", path, {"on": True}, headers=self.tg())
+        self.assertEqual((s, r["code"]), (409, "MASJIDUZ_MOSQUE_ARCHIVED"))
+
+    def test_the_twenty_limit_and_its_own_rate_budget(self):
+        import botdb
+        ids = [self.made(41.0 + i * 0.01, 69.0, name="M%d" % i, force=True)["id"] for i in range(botdb.MAX_SUBS)]
+        for mid in ids:
+            self.assertEqual(self.call("POST", "/me/subscriptions/" + mid, {"on": True}, headers=self.tg())[0], 200)
+        s, r = self.call("POST", "/me/subscriptions/" + self.mid, {"on": True}, headers=self.tg())
+        self.assertEqual((s, r["code"], r["message"]["code"]), (409, "CONFLICT", "error.subLimit"))
+        self.use(WRITE_RATE_PER_HOUR="2")
+        codes = [self.call("POST", "/me/subscriptions/" + ids[0], {"on": False}, headers=self.tg(), ip="203.0.113.50")[0] for _ in range(3)]
+        self.assertEqual(codes, [200, 200, 429])                                                  # its own budget ...
+        self.assertEqual(self.call("POST", "/mosques", {"lat": 12.5, "lon": 12.5}, ip="203.0.113.50")[0], 201)   # ... not the community one
+
+
 class WriteLimiterScope(ServerCase):
     def setUp(self):
         reset_db()

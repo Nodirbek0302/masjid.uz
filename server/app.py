@@ -890,7 +890,7 @@ class RateLimiter:
 
 # ---------------------------------------------------------------- http
 ID = r"([0-9a-f-]{36})"
-LIGHT_WRITES = ("/me/lang", "/map/yandex-failed")                       # not community edits: counted in their own budget (same size, per address and hour)
+LIGHT_WRITES = ("/me/lang", "/me/subscriptions", "/map/yandex-failed")   # not community edits: their own budget (same size, per address and hour)
 READING_WRITES = ("/timetable/photo", "/timetable/voice")               # limited by the reading limiters (per device and per address) and AI_DAILY_LIMIT
 STATIC_CACHE = {}
 COMPRESSIBLE = (".js", ".css", ".html", ".json", ".svg")
@@ -1230,6 +1230,8 @@ class Request(BaseHTTPRequestHandler):
             ("POST", r"/timetable/voice", self.r_read_voice),
             ("GET", r"/me", self.r_me),
             ("POST", r"/me/lang", self.r_me_lang),
+            ("GET", r"/me/subscriptions/" + ID, self.r_sub_get),
+            ("POST", r"/me/subscriptions/" + ID, self.r_sub_set),
             ("GET", r"/export/osm-derived", self.r_export),
             ("POST", r"/map/yandex-failed", self.r_map_failed),
             ("GET", r"/admin/map", self.a_map),
@@ -1256,8 +1258,9 @@ class Request(BaseHTTPRequestHandler):
             if path.startswith("/admin/"):
                 self.admin = self.require_admin()
             elif method in ("POST", "PATCH") and path not in READING_WRITES:
-                lim = self.state.light_limiter if path in LIGHT_WRITES else self.state.write_limiter
-                who = self.client_ip() + ("|" + path if path in LIGHT_WRITES else "")        # each light route has its own budget
+                light = next((p for p in LIGHT_WRITES if path == p or path.startswith(p + "/")), None)
+                lim = self.state.light_limiter if light else self.state.write_limiter
+                who = self.client_ip() + ("|" + light if light else "")                  # each light route has its own budget
                 if not lim.allow(who):
                     raise RateLimited(lim.retry_after(who), "too many writes; slow down")
             return fn(q, *hit.groups())
@@ -1434,6 +1437,35 @@ class Request(BaseHTTPRequestHandler):
             raise ApiError(400, "invalid_lang", "a verified Telegram user and a known language are required", reason="lang")
         self.bdb.set_lang(int(actor[3:]), code)
         self.send_ok({"lang": code})
+
+    def tg_user(self):
+        """The Telegram id of a signature-verified Mini App user; anybody else is 401 (subscriptions live in the bot)."""
+        actor, _ = self.identity()
+        if not (actor or "").startswith("tg:"):
+            raise ApiError(401, "unauthorized", "open the map from the Telegram bot to subscribe")
+        return int(actor[3:])
+
+    def r_sub_get(self, q, m_id):
+        tid = self.tg_user()
+        self.store.get(m_id)                                     # 404 for an unknown mosque
+        self.send_ok({"subscribed": self.bdb.is_subscribed(tid, m_id)})
+
+    def r_sub_set(self, q, m_id):
+        """The Mini App's bell: the same subscription as the bot's button (the bot announces changed times)."""
+        tid = self.tg_user()
+        on = pick(self.body_json(), {"on": "on"}).get("on")
+        if not isinstance(on, bool):
+            raise ApiError(400, "validation", "on must be true or false", reason="on")
+        m = self.store.get(m_id)
+        if not on:
+            self.bdb.unsubscribe(tid, m["id"])
+            return self.send_ok({"subscribed": False})
+        if m["status"] == "archived":
+            raise ApiError(409, "archived", "record is archived")
+        self.bdb.set_user(tid)                                   # the bot knows the user (they opened the map from it)
+        if self.bdb.subscribe(tid, m["id"]) == "limit":
+            raise ApiError(409, "sub_limit", "at most %d subscriptions" % botdb.MAX_SUBS)
+        self.send_ok({"subscribed": True})
 
     def r_export(self, q):
         data = self.store.export_osm()

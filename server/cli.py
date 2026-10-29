@@ -53,9 +53,7 @@ def main(argv):
                 with open(a.file, encoding="utf-8") as f:
                     data = json.load(f)
             else:
-                data = import_osm.fetch(cfg.overpass_url)
-                if len(data.get("elements", [])) < 100:          # an empty/partial answer must never look like a real sync
-                    raise RuntimeError("suspiciously small Overpass answer (%d elements)" % len(data.get("elements", [])))
+                data = import_osm.download(cfg)
             import_osm.run(data, cfg, store)
             return 0
         if cmd == "import":

@@ -294,4 +294,11 @@ body.panel-open #view-fab{bottom:calc(var(--nav-h) + var(--panel-h,0px) + 14px)}
 @keyframes sp-out{to{opacity:0;visibility:hidden}}
 @media(prefers-reduced-motion:reduce){#splash{display:none}}
 
+/* the subscription bell in the mosque card: filled while subscribed, it rings when switched on */
+.btn.bell .bell-i{display:inline-block;margin-right:4px;transform-origin:50% 10%}
+.btn.bell.on{background:var(--g600);border-color:var(--g600);color:#fff}
+.btn.bell{transition:background-color .25s,color .25s,border-color .25s}
+.btn.bell.ring .bell-i{animation:bell-ring .9s ease-in-out}
+@keyframes bell-ring{0%{transform:rotate(0)}15%{transform:rotate(18deg)}30%{transform:rotate(-16deg)}45%{transform:rotate(12deg)}60%{transform:rotate(-8deg)}75%{transform:rotate(4deg)}100%{transform:rotate(0)}}
+@media(prefers-reduced-motion:reduce){.btn.bell.ring .bell-i{animation:none}}
 

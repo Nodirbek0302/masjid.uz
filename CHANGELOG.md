@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.6 — the bell in the Mini App, clearer voice reading, a moderator sync button
+### Added
+- Mini App: the subscribe button is a bell that works right there (`GET`/`POST /me/subscriptions/{id}`, signed by Telegram): it turns green and rings when switched on, says so in a notice and vibrates (Telegram haptics); before, it opened the bot behind the Mini App and nothing visible happened. In a plain browser it still opens the bot.
+- Bot: moderators (`MODERATOR_IDS`) get an "update the mosque database" button under `/admin` that runs the OpenStreetMap sync and reports the result. Off unless `TIMUS_APP_MASJIDUZ_BOT_OSM_IMPORT=1` (it makes the bot call Overpass).
+- `import-osm` holds a database lock: the nightly run and the bot button never run at the same time (the second one prints `import-osm skipped: another import is running`).
+### Changed
+- Voice reading: the prompt names the prayers in all their usual forms and explains clock phrases (`besh yarim`, `oltiga o'n besh kam`, `chorak`, `половина шестого`, `без пятнадцати шесть`, `half past`, `quarter to`) and self-corrections. Tested with Gemini: a Russian recording with "половина шестого" and "без пятнадцати четыре" read 5/5 right.
+### Migrations
+- none
+
 ## 1.0.5 — the import survives a busy Overpass; app-like pins
 ### Fixed
 - `import-osm` gave up at the first busy answer of Overpass (502/504 are common there), so the database could stay empty. It now asks again after 30, 60, 120 and 240 s on 429/5xx, network errors, a non-JSON answer or a partial answer (`remark: runtime error …`), and fails (exit code ≠ 0) only after that. A wrong request (4xx) is not retried.

@@ -1,4 +1,11 @@
-# Release v1.0.5
+# Release v1.0.6
+
+- **Commit:** the commit the annotated tag `v1.0.6` points to (`git rev-parse v1.0.6^{commit}`).
+- **Change:** the Mini App's subscribe bell works in place (new `GET`/`POST /me/subscriptions/{id}`, Telegram signature, own rate budget); voice reading understands clock phrases; an optional moderator button in the bot that runs the OpenStreetMap sync; `import-osm` never runs twice at once (CHANGELOG 1.0.6).
+- **Migrations:** none. **New env vars:** `TIMUS_APP_MASJIDUZ_BOT_OSM_IMPORT` (default 0). Leave it 0 unless the `bot` container may call Overpass (CONTRACT §9); with 1 the moderators get the button.
+- **How it was tested:** 255 tests, ruff; the bell in a phone-size browser with a signed Telegram launch (on, ring, notice, off); voice reading against Gemini with synthetic recordings.
+
+## Release v1.0.5
 
 - **Commit:** the commit the annotated tag `v1.0.5` points to (`git rev-parse v1.0.5^{commit}`).
 - **Change:** `import-osm` retries a busy Overpass (30/60/120/240 s, about 7.5 minutes at most) instead of failing at the first 502/504; web map pins like the mobile app's (CHANGELOG 1.0.5).

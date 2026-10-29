@@ -236,10 +236,12 @@ def fmt_times(tx, times):
 class Bot:
     """All conversation logic; the Telegram API, the database and the OCR are injected so it can be tested without a network."""
 
-    def __init__(self, api, store, ocr_read=None, fetch_photo=None, webapp_url="", admin_ids=(), stt_read=None, admin_url=""):
+    def __init__(self, api, store, ocr_read=None, fetch_photo=None, webapp_url="", admin_ids=(), stt_read=None, admin_url="", osm_import=None):
         self.api, self.store, self.ocr_read, self.fetch_photo, self.stt_read = api, store, ocr_read, fetch_photo, stt_read
         self.webapp_url, self.admin_ids = webapp_url, set(admin_ids)
         self.admin_url = admin_url                    # the moderator page: its own address (TIMUS keeps it off the API domain)
+        self.osm_import = osm_import                  # () -> import summary; the moderators' "update the mosques" button (off unless configured)
+        self._importing = threading.Lock()
         self.db = botdb.BotDB(store)
         self.state, self.photo_log, self.msg_log, self.pending = {}, {}, {}, {}
         self._locks, self._locks_guard = {}, threading.Lock()
@@ -485,8 +487,13 @@ class Bot:
             self.say(chat, tx["id"].format(id=uid))
         elif cmd == "/admin":
             if uid in self.admin_ids:
+                rows = []
                 if self.admin_url.startswith("https://"):
-                    self.say(chat, tx["admin_text"], [[{"text": tx["admin_btn"], "web_app": {"url": web_url(self.admin_url, tx["_lang"], "")}}]])
+                    rows.append([{"text": tx["admin_btn"], "web_app": {"url": web_url(self.admin_url, tx["_lang"], "")}}])
+                if self.osm_import:
+                    rows.append([{"text": tx["imp_btn"], "callback_data": "osm:sync", "style": "primary"}])
+                if rows:
+                    self.say(chat, tx["admin_text"] + ("" if self.admin_url.startswith("https://") else "\n" + tx["pending"]), rows)
                 else:
                     self.say(chat, tx["pending"])
         elif cmd == "/nearest":
@@ -567,6 +574,8 @@ class Bot:
                     st["times"] = times
                     return self.preview(chat, tx, st)
                 self.save(chat, user, tx, st)
+            elif kind == "osm" and uid in self.admin_ids and self.osm_import:
+                self.start_import(chat, tx)
             elif kind == "loc":
                 self.send_venue(chat, tx, arg)
             elif kind in ("sub", "unsub") and self.is_card(msg):    # pressed on a mosque card: the card stays, only its button flips
@@ -758,6 +767,30 @@ class Bot:
             rows.append([{"text": tx["copy_btn"], "copy_text": {"text": copy[:256]}}])
         return rows
 
+    def start_import(self, chat, tx):
+        """The moderator's button: the OpenStreetMap sync runs in the background (Overpass takes a minute or more), then says what it did."""
+        if not self._importing.acquire(blocking=False):
+            return self.toast(tx["imp_busy"], alert=True)
+        self.say(chat, tx["imp_start"])
+
+        def work():
+            try:
+                r = self.osm_import()
+                if r.get("skipped"):
+                    text = tx["imp_busy"]
+                else:
+                    text = tx["imp_done"].format(**{k: r.get(k, 0) for k in ("added", "updated", "unchanged", "protected_edited", "near_existing", "photos")})
+            except Exception as e:
+                log("bot import failed: %s" % type(e).__name__)
+                text = tx["imp_fail"].format(why=type(e).__name__)
+            finally:
+                self._importing.release()
+            try:
+                self.say(chat, text)
+            except Exception:
+                pass
+        threading.Thread(target=work, daemon=True, name="osm-import").start()
+
     def send_venue(self, chat, tx, mosque_id):
         """The mosque as a Telegram venue: the map inside Telegram, and from there directions in any maps app on the phone."""
         m = self.store.get(mosque_id)
@@ -927,7 +960,18 @@ def main(cfg):
     lock = psycopg.connect(cfg.conninfo(), autocommit=True)       # the bot runs as ONE replica: a second one would fight over getUpdates
     if not lock.execute("SELECT pg_try_advisory_lock(727004)").fetchone()[0]:
         raise RuntimeError("another bot instance is already running (only one replica is allowed)")
-    bot = Bot(call, store, real_ocr, download, WEBAPP_URL, ADMIN_IDS, real_stt, admin_url=cfg.admin_url)
+    osm = None
+    if cfg.bot_osm_import:                                # Overpass from the bot: only where the deployment allows it (CONTRACT §9)
+        import import_osm
+
+        def osm():
+            data = import_osm.download(cfg)                       # before any connection is opened: the query takes a minute or more
+            st = app.Store(cfg, name="masjiduz-import", statement_timeout_ms=60000, check=False)
+            try:
+                return import_osm.run(data, cfg, st)
+            finally:
+                st.close()
+    bot = Bot(call, store, real_ocr, download, WEBAPP_URL, ADMIN_IDS, real_stt, admin_url=cfg.admin_url, osm_import=osm)
     notifier = Notifier(call, bot.db, WEBAPP_URL)
 
     def notify_loop():
