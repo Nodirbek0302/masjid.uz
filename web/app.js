@@ -20,7 +20,13 @@
   if (location.hash.indexOf("tgWebAppData") >= 0) {         // load Telegram script only inside Telegram
     var sc = document.createElement("script");
     sc.src = "https://telegram.org/js/telegram-web-app.js";
-    sc.onload = function () { tg = window.Telegram && window.Telegram.WebApp; if (tg) { tg.ready(); tg.expand(); } };
+    sc.onload = function () {
+      tg = window.Telegram && window.Telegram.WebApp;
+      if (!tg) return;
+      tg.ready(); tg.expand();
+      if (tg.colorScheme && !theme) applyTheme();                              // Telegram's own day/night decides until the user picks one
+      if (tg.onEvent) tg.onEvent("themeChanged", function () { if (!theme) applyTheme(); });
+    };
     document.head.appendChild(sc);
   }
 
@@ -226,11 +232,15 @@
   var theme = null;
   try { theme = localStorage.getItem("theme"); } catch (e) {}
   var darkMQ = window.matchMedia ? matchMedia("(prefers-color-scheme: dark)") : null;
-  function isDark() { return theme ? theme === "dark" : !!(darkMQ && darkMQ.matches); }
+  function isDark() {
+    if (theme) return theme === "dark";
+    if (tg && tg.colorScheme) return tg.colorScheme === "dark";
+    return !!(darkMQ && darkMQ.matches);
+  }
   function applyTheme() {
     document.documentElement.dataset.theme = isDark() ? "dark" : "light";
     var m = document.querySelector('meta[name="theme-color"]'); if (m) m.content = isDark() ? "#12211e" : "#047857";
-    else if (map && rawStyle) map.setStyle(buildStyle());                       // the map is recoloured at the same view
+    if (map && rawStyle) map.setStyle(buildStyle());                            // the map is recoloured at the same view
   }
   function toggleTheme() { theme = isDark() ? "light" : "dark"; try { localStorage.setItem("theme", theme); } catch (e) {} applyTheme(); }
   if (darkMQ && darkMQ.addEventListener) darkMQ.addEventListener("change", function () { if (!theme) applyTheme(); });

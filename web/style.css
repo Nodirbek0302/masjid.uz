@@ -216,7 +216,8 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--g500);bo
 .card .ad{margin-top:3px;font-size:13.5px;line-height:1.3;color:var(--muted);overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
 .card .mt{margin-top:8px;display:flex;flex-wrap:wrap;gap:4px 12px;font-size:12.5px;font-weight:600;color:var(--g700)}
 #list-hint{max-width:680px;margin:0 auto 10px;padding:12px;border-radius:14px;background:var(--warn-bg);color:var(--warn);font-size:13px}
-#list-more{height:1px}
+#list-more{min-height:1px;max-width:680px;margin:0 auto}                 /* the scroll sentinel; it also holds the skeletons, "none found" and errors */
+#list-more>p{margin:24px 0;text-align:center}
 #list .sk-card{height:92px;margin:0 0 10px;border-radius:20px}
 
 /* ---------- which page shows what ---------- */

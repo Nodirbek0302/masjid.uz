@@ -9,6 +9,10 @@
 - Mosque card: "📋 Copy the times" (`copy_text`) and "📍 On the Telegram map" (`sendVenue`, the map inside Telegram with directions in any maps app).
 - The bot's description and short description in Uzbek, Russian and English (`setMyDescription`, `setMyShortDescription`), set at start.
 - Mini App: inside Telegram (Bot API 8.0+) the position comes from Telegram's `LocationManager` (the browser's location prompt can be blocked in Telegram's webview); elsewhere from the browser, as before.
+### Fixed
+- Web: switching between night and day mode left the map in its old colours (black after leaving night mode): since 1.0.0 the map was only restyled when the page had no `theme-color` tag.
+- Web: the "No mosques found nearby" line under an empty list was squeezed into a 1-pixel box and could not be seen.
+- Mini App: until the user picks day or night, it follows Telegram's own theme (`colorScheme`, `themeChanged`) instead of the phone's.
 ### Migrations
 - none
 
