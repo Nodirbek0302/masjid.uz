@@ -787,7 +787,7 @@ class ConfigValidation(unittest.TestCase):
         self.assertEqual((c.api_base, c.cors_origins, c.admin_token, c.moderator_ids, c.gemini_keys), ("/masjiduz/v1", [], "", set(), []))
         self.assertTrue(c.show_tile_mosques)
         self.assertEqual(self.cfg(TIMUS_ENV="").env, "dev")
-        self.assertEqual(c.version, "1.0.4")
+        self.assertEqual(c.version, "1.0.5")
 
     def test_port_zero_is_accepted_in_dev(self):
         self.assertEqual(self.cfg(PORT="0").port, 0)
@@ -1301,6 +1301,42 @@ class Imports(ServerCase):
         self.assertRegex(out.getvalue(), r"^import-osm done: added=1 updated=0 unchanged=0 protected_edited=0 near_existing=0 missing_in_osm=0 photos=1\n$")
         self.assertEqual(s["photos"], 1)
         self.assertIn("A_b.jpg", db("SELECT photo_url FROM mosques")[0][0])
+
+
+    def test_overpass_is_asked_again_while_it_is_busy(self):
+        import urllib.error
+        import import_osm
+
+        class Resp(io.BytesIO):
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+        good = {"elements": [{"type": "node", "id": 1, "lat": 41.0, "lon": 69.0, "tags": {}}]}
+        answers = [urllib.error.HTTPError("u", 504, "Gateway Timeout", {}, None), urllib.error.URLError("reset"),
+                   Resp(b"<html>busy</html>"), Resp(json.dumps({"elements": [], "remark": "runtime error: Query timed out"}).encode()),
+                   Resp(json.dumps(good).encode())]
+        seen, waits = [], []
+
+        def fake(req, timeout=None):
+            seen.append((req.full_url, req.get_header("User-agent")))
+            a = answers.pop(0)
+            if isinstance(a, Exception):
+                raise a
+            return a
+        with mock.patch("urllib.request.urlopen", fake):
+            self.assertEqual(import_osm.fetch("https://overpass.example/api", sleep=waits.append), good)
+        self.assertEqual(waits, [30, 60, 120, 240])                                        # four retries, growing waits
+        self.assertTrue(all("info@timus.uz" in ua for _, ua in seen))
+        for code in (400, 403):                                                             # a wrong request is not retried
+            with mock.patch("urllib.request.urlopen", side_effect=urllib.error.HTTPError("u", code, "x", {}, None)):
+                waits.clear()
+                with self.assertRaises(urllib.error.HTTPError):
+                    import_osm.fetch("https://overpass.example/api", sleep=waits.append)
+                self.assertEqual(waits, [])
+        with mock.patch("urllib.request.urlopen", side_effect=urllib.error.HTTPError("u", 502, "x", {}, None)):
+            waits.clear()
+            with self.assertRaises(urllib.error.HTTPError):                                 # still busy after all retries: the command fails
+                import_osm.fetch("https://overpass.example/api", sleep=waits.append)
+            self.assertEqual(len(waits), 4)
 
 
 class Commands(unittest.TestCase):

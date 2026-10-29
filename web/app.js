@@ -120,18 +120,23 @@
   }
 
   // ---- own mosque icon (drawn here; no third-party artwork): green badge with dome and minaret
-  function mosqueIcon(color) {
-    var S = 64, c = document.createElement("canvas"); c.width = c.height = S;
+  function mosqueIcon(color) {                       // the same pin as the mobile app: a drop with a mosque, its tip on the spot
+    var W = 96, H = 120, c = document.createElement("canvas"); c.width = W; c.height = H;
     var g = c.getContext("2d");
-    g.fillStyle = color; g.strokeStyle = "#fff"; g.lineWidth = 4;
-    g.beginPath(); g.arc(32, 32, 28, 0, 7); g.fill(); g.stroke();
+    g.save(); g.fillStyle = "rgba(0,0,0,.22)"; g.shadowColor = "rgba(0,0,0,.35)"; g.shadowBlur = 6;            // soft ground shadow
+    g.beginPath(); g.ellipse(48, 109.5, 18, 5.5, 0, 0, 2 * Math.PI); g.fill(); g.restore();
+    function drop() { g.beginPath(); g.moveTo(48, 112); g.bezierCurveTo(30, 92, 12, 72, 12, 46); g.arc(48, 46, 36, Math.PI, 0); g.bezierCurveTo(84, 72, 66, 92, 48, 112); g.closePath(); }
+    drop(); g.strokeStyle = "#fff"; g.lineWidth = 8; g.lineJoin = "round"; g.stroke();
+    drop(); g.fillStyle = color; g.fill();
+    g.save(); g.translate(48 - 31 * 0.72, 46 - 31 * 0.72); g.scale(0.72, 0.72);
     g.fillStyle = "#fff";
     g.beginPath(); g.moveTo(14, 46); g.lineTo(14, 36); g.arc(27, 36, 13, Math.PI, 0); g.lineTo(40, 46); g.closePath(); g.fill();   // dome + base
-    g.fillRect(27 - 1, 16, 2, 6);                                                                                                    // finial
+    g.fillRect(26, 16, 2, 6);                                                                                                        // finial
     g.fillRect(43, 24, 5, 22);                                                                                                       // minaret
-    g.beginPath(); g.moveTo(43, 24); g.lineTo(45.5, 18); g.lineTo(48, 24); g.fill();
-    g.fillStyle = color; g.beginPath(); g.moveTo(24, 46); g.lineTo(24, 40); g.arc(27, 40, 3, Math.PI, 0); g.lineTo(30, 46); g.fill();  // door
-    return g.getImageData(0, 0, S, S);
+    g.beginPath(); g.moveTo(43, 24); g.lineTo(45.5, 18); g.lineTo(48, 24); g.closePath(); g.fill();
+    g.fillStyle = color; g.beginPath(); g.moveTo(24, 46); g.lineTo(24, 40); g.arc(27, 40, 3, Math.PI, 0); g.lineTo(30, 46); g.closePath(); g.fill();  // door
+    g.restore();
+    return g.getImageData(0, 0, W, H);
   }
 
   // ---- map
@@ -216,14 +221,15 @@
       var words = ["masjid", "machit", "mechet", "mosque", "jome", "jame", "мечеть", "масжид", "масджид", "мачит", "жоме", "жаме", "مسجد"];
       style.layers.push({ id: "osm-mosques", type: "symbol", source: "openmaptiles", "source-layer": "poi", minzoom: 12,
         filter: ["all", ["==", ["get", "class"], "place_of_worship"], ["any"].concat(words.map(function (w) { return ["in", w, nm]; }))],
-        layout: { "icon-image": "mosque-osm", "icon-size": ["interpolate", ["linear"], ["zoom"], 12, 0.6, 16, 1.1], "icon-allow-overlap": true,
-          "text-field": ["step", ["zoom"], "", 14, ["get", "name"]], "text-font": font, "text-size": 11, "text-offset": [0, 1.5], "text-anchor": "top", "text-optional": true },
+        layout: { "icon-image": "mosque-osm", "icon-size": ["interpolate", ["linear"], ["zoom"], 12, 0.6, 16, 0.85], "icon-anchor": "bottom", "icon-allow-overlap": true,
+          "text-field": ["step", ["zoom"], "", 14, ["get", "name"]], "text-font": font, "text-size": 11, "text-offset": [0, 0.4], "text-anchor": "top", "text-optional": true },
         paint: halo });
     }
     style.layers.push({ id: "mosques", type: "symbol", source: "mosques",
       layout: { "icon-image": ["match", ["get", "status"], "reported", "mosque-amber", "mosque-green"],
-        "icon-size": ["interpolate", ["linear"], ["zoom"], 8, 0.75, 14, 1.25], "icon-allow-overlap": true,
-        "text-field": ["step", ["zoom"], "", 13, ["get", "name"]], "text-font": font, "text-size": 12, "text-offset": [0, 1.6], "text-anchor": "top", "text-optional": true },
+        // the image is 48 x 60 CSS px (pixel ratio 2): 36-64 px tall like the app's pins, the tip on the mosque
+        "icon-size": ["interpolate", ["linear"], ["zoom"], 8, 0.6, 14, 0.92, 17, 1.07], "icon-anchor": "bottom", "icon-allow-overlap": true,
+        "text-field": ["step", ["zoom"], "", 13, ["get", "name"]], "text-font": font, "text-size": 12, "text-offset": [0, 0.5], "text-anchor": "top", "text-optional": true },
       paint: halo });
     return style;
   }

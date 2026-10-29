@@ -10,6 +10,8 @@ The only outbound call is the Overpass query (User-Agent names info@timus.uz); p
 """
 import json
 import logging
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -45,12 +47,31 @@ def osm_address(tags):
         return None
 
 
-def fetch(endpoint):
-    """One Overpass query (the only outbound call of this command)."""
-    req = urllib.request.Request(endpoint, data=urllib.parse.urlencode({"data": QUERY}).encode(),
-                                 headers={"User-Agent": UA})
-    with urllib.request.urlopen(req, timeout=240) as r:
-        return json.load(r)
+RETRY_WAITS_S = (30, 60, 120, 240)          # Overpass often answers 429/502/503/504 when it is busy; it usually works a little later
+
+
+def fetch(endpoint, sleep=time.sleep):
+    """The Overpass query (the only outbound call of this command); a busy or unreachable server is asked again a few times
+    (about 7.5 minutes in all) before the command gives up, so one bad moment does not leave the night without a sync."""
+    for wait in RETRY_WAITS_S + (None,):
+        req = urllib.request.Request(endpoint, data=urllib.parse.urlencode({"data": QUERY}).encode(),
+                                     headers={"User-Agent": UA})
+        try:
+            with urllib.request.urlopen(req, timeout=240) as r:
+                data = json.load(r)
+            if "elements" not in data or "error" in str(data.get("remark", "")).lower():
+                raise ValueError("not a complete Overpass answer")     # e.g. "runtime error: Query timed out": a partial list
+            return data
+        except urllib.error.HTTPError as e:
+            if e.code not in (429, 500, 502, 503, 504) or wait is None:
+                raise
+            why = "HTTP %d" % e.code
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as e:
+            if wait is None:
+                raise
+            why = type(e).__name__
+        log.warning("overpass: %s, trying again in %d s", why, wait)
+        sleep(wait)
 
 
 def sync_photos(data, store):

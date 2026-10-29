@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.5 — the import survives a busy Overpass; app-like pins
+### Fixed
+- `import-osm` gave up at the first busy answer of Overpass (502/504 are common there), so the database could stay empty. It now asks again after 30, 60, 120 and 240 s on 429/5xx, network errors, a non-JSON answer or a partial answer (`remark: runtime error …`), and fails (exit code ≠ 0) only after that. A wrong request (4xx) is not retried.
+### Changed
+- Web map: the mosque pins are the mobile app's pins (a drop with the mosque, its tip on the spot), 36–64 px tall depending on the zoom, instead of small circles.
+### Migrations
+- none
+
 ## 1.0.4 — the bot keeps the chat tidy; newer Telegram features
 ### Changed
 - A button press updates the message it belongs to (`editMessageText` / `editMessageCaption`) instead of sending a new one; on a mosque card the card stays and only its subscribe button flips, with a short notice (`answerCallbackQuery`); the `/subs` list is redrawn without the removed mosque. If Telegram cannot edit, a new message is sent as before.

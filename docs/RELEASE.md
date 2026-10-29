@@ -1,4 +1,12 @@
-# Release v1.0.4
+# Release v1.0.5
+
+- **Commit:** the commit the annotated tag `v1.0.5` points to (`git rev-parse v1.0.5^{commit}`).
+- **Change:** `import-osm` retries a busy Overpass (30/60/120/240 s, about 7.5 minutes at most) instead of failing at the first 502/504; web map pins like the mobile app's (CHANGELOG 1.0.5).
+- **Data:** the database stays empty until `import-osm` has run once. Run it once right after deploying (`python server/cli.py import-osm`, one-off container), then nightly at 02:15. It prints `import-osm done: added=… …`; a first run on an empty database adds about 2 200 mosques in a few seconds (plus the Overpass query, ~50 s).
+- **Migrations:** none. **New env vars:** none.
+- **How it was tested:** 249 tests, ruff; `import-osm` against a fresh database with a real Overpass answer (2 207 mosques added in 1.6 s); the pins in a phone-size browser.
+
+## Release v1.0.4
 
 - **Commit:** the commit the annotated tag `v1.0.4` points to (`git rev-parse v1.0.4^{commit}`).
 - **Change:** bot and web client only (CHANGELOG 1.0.4): a pressed button updates its own message instead of adding a new one; reactions and a temporary draft while a photo/voice is read; coloured buttons; copy-the-times and Telegram-map buttons on the mosque card; bot descriptions in three languages; the Mini App takes the position from Telegram's LocationManager and follows Telegram's day/night theme. Fixes: the bot's menu button opens `…/masjiduz/web/` (it opened the address without the slash, a 404); the map now changes colour with the day/night switch; the "no mosques found" line is visible.
