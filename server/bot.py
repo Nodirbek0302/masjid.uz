@@ -106,7 +106,7 @@ TEXTS = {
         "hello": "Assalomu alaykum! Bu bepul masjid xaritasi: masjidlarni toping, jamoat namozi vaqtlarini koʻring, yangi masjid qoʻshing yoki "
                  "notoʻgʻri maʼlumot haqida xabar bering.\n\n📍 Vaqtlarni yangilash: masjid lokatsiyasini yuboring (📎 → Joylashuv), keyin "
                  "namoz vaqtlari jadvalining rasmini yuboring yoki vaqtlarni ovozli xabar bilan ayting. Oʻzim oʻqib yangilayman.",
-        "pending": "(Mini App hali ulanmagan: HTTPS manzil kutilmoqda.)", "open": "🕌 Xaritani ochish",
+        "pending": "Moderator paneli hozircha ulanmagan: uning manzili (ADMIN_URL) berilmagan. Masjidlar botda va xaritada yangilanaveradi.", "open": "🕌 Xaritani ochish",
         "pick": "200 m ichida quyidagi masjidlar bor. Qaysi biri?", "none": "200 m ichida masjid topilmadi. Yangi masjid sifatida qoʻshamizmi?",
         "new": "➕ Yangi masjid qoʻshish", "noname": "Nomsiz masjid",
         "ask_name": "Masjid nomini yozing (yoki /skip: nomsiz qoʻshish):", "created": "✅ Masjid qoʻshildi.",
@@ -136,7 +136,7 @@ TEXTS = {
         "hello": "Ассаламу алайкум! Это бесплатная карта мечетей: находите мечети, смотрите время джамаат-намазов, добавляйте новые мечети "
                  "и сообщайте о неверных данных.\n\n📍 Обновить время: отправьте геопозицию мечети (📎 → Геопозиция), затем фото расписания "
                  "намазов или назовите время голосом. Я прочитаю и обновлю.",
-        "pending": "(Mini App ещё не подключено: ожидается HTTPS-адрес.)", "open": "🕌 Открыть карту",
+        "pending": "Панель модератора пока не подключена: не задан её адрес (ADMIN_URL). Мечети по-прежнему обновляются в боте и на карте.", "open": "🕌 Открыть карту",
         "pick": "В радиусе 200 м есть такие мечети. Какая из них?", "none": "В радиусе 200 м мечетей нет. Добавить как новую?",
         "new": "➕ Добавить новую мечеть", "noname": "Мечеть без названия",
         "ask_name": "Напишите название мечети (или /skip: добавить без названия):", "created": "✅ Мечеть добавлена.",
@@ -166,7 +166,7 @@ TEXTS = {
         "hello": "Assalamu alaykum! This is a free mosque map: find mosques, see congregation prayer times, add new mosques and report "
                  "incorrect information.\n\n📍 To update times: share the mosque's location (📎 → Location), then send a photo of its "
                  "prayer timetable or say the times in a voice message. I will read them and update.",
-        "pending": "(The Mini App is not connected yet: waiting for an HTTPS address.)", "open": "🕌 Open the map",
+        "pending": "The moderator panel is not connected yet: its address (ADMIN_URL) is not set. Mosques are still updated in the bot and on the map.", "open": "🕌 Open the map",
         "pick": "These mosques are within 200 m. Which one?", "none": "No mosque within 200 m. Add it as a new mosque?",
         "new": "➕ Add a new mosque", "noname": "Unnamed mosque",
         "ask_name": "Type the mosque's name (or /skip to add it without a name):", "created": "✅ Mosque added.",
@@ -229,9 +229,10 @@ def fmt_times(tx, times):
 class Bot:
     """All conversation logic; the Telegram API, the database and the OCR are injected so it can be tested without a network."""
 
-    def __init__(self, api, store, ocr_read=None, fetch_photo=None, webapp_url="", admin_ids=(), stt_read=None):
+    def __init__(self, api, store, ocr_read=None, fetch_photo=None, webapp_url="", admin_ids=(), stt_read=None, admin_url=""):
         self.api, self.store, self.ocr_read, self.fetch_photo, self.stt_read = api, store, ocr_read, fetch_photo, stt_read
         self.webapp_url, self.admin_ids = webapp_url, set(admin_ids)
+        self.admin_url = admin_url                    # the moderator page: its own address (TIMUS keeps it off the API domain)
         self.db = botdb.BotDB(store)
         self.state, self.photo_log, self.msg_log, self.pending = {}, {}, {}, {}
         self._locks, self._locks_guard = {}, threading.Lock()
@@ -402,8 +403,8 @@ class Bot:
         if cmd in ("/start", "/help"):
             if self.webapp_url.startswith("https://"):
                 self.say(chat, tx["hello"], [[{"text": tx["open"], "web_app": {"url": self.web(tx)}}]])
-            else:
-                self.say(chat, tx["hello"] + "\n\n" + tx["pending"])
+            else:                                             # no web client in this deployment: the bot alone, nothing to apologise for
+                self.say(chat, tx["hello"])
             # persistent button under the input box: one tap sends the user's current location (they are standing at the mosque)
             self.say(chat, tx["loc_hint"], reply_keyboard=[[{"text": tx["loc_btn"], "request_location": True}]])
         elif cmd == "/lang":
@@ -412,8 +413,8 @@ class Bot:
             self.say(chat, tx["id"].format(id=uid))
         elif cmd == "/admin":
             if uid in self.admin_ids:
-                if self.webapp_url.startswith("https://"):
-                    self.say(chat, tx["admin_text"], [[{"text": tx["admin_btn"], "web_app": {"url": self.web(tx, "/admin.html")}}]])
+                if self.admin_url.startswith("https://"):
+                    self.say(chat, tx["admin_text"], [[{"text": tx["admin_btn"], "web_app": {"url": web_url(self.admin_url, tx["_lang"], "")}}]])
                 else:
                     self.say(chat, tx["pending"])
         elif cmd == "/nearest":
@@ -762,7 +763,7 @@ def main(cfg):
     real_ocr = (lambda data: gemini.read_photo(cfg, data, "image/jpeg")) if gemini.available(cfg) else None
     real_stt = (lambda data: gemini.read_voice(cfg, data, "audio/ogg")) if gemini.available(cfg) else None
     me = call("getMe")
-    log("bot @%s started; mini app url: %s; photo and voice reading: %s" % (me["username"], WEBAPP_URL or "(not set)", "on" if real_ocr else "off (no Gemini key)"))
+    log("bot @%s started; mini app url: %s; moderator page: %s; photo and voice reading: %s" % (me["username"], WEBAPP_URL or "(not set)", cfg.admin_url or "(not set)", "on" if real_ocr else "off (no Gemini key)"))
     call("deleteWebhook", drop_pending_updates=False)    # long polling and webhooks are mutually exclusive
     for lc, table in CMDS.items():                # global command menu (users who chose a language get their own, see apply_language)
         if lc == "uz-cyrl":
@@ -782,7 +783,7 @@ def main(cfg):
     lock = psycopg.connect(cfg.conninfo(), autocommit=True)       # the bot runs as ONE replica: a second one would fight over getUpdates
     if not lock.execute("SELECT pg_try_advisory_lock(727004)").fetchone()[0]:
         raise RuntimeError("another bot instance is already running (only one replica is allowed)")
-    bot = Bot(call, store, real_ocr, download, WEBAPP_URL, ADMIN_IDS, real_stt)
+    bot = Bot(call, store, real_ocr, download, WEBAPP_URL, ADMIN_IDS, real_stt, admin_url=cfg.admin_url)
     notifier = Notifier(call, bot.db, WEBAPP_URL)
 
     def notify_loop():

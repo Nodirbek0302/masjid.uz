@@ -1,4 +1,13 @@
-# Release v1.0.2
+# Release v1.0.3
+
+- **Commit:** the commit the annotated tag `v1.0.3` points to (`git rev-parse v1.0.3^{commit}`).
+- **Change:** bot only. New env `TIMUS_APP_MASJIDUZ_ADMIN_URL` (https address of the moderator page; empty for now): the bot's `/admin` button no longer points to `WEBAPP_URL/admin.html`, which is closed (404) on the API domain. Without `WEBAPP_URL` the bot no longer mentions a missing HTTPS address.
+- **Moderator actions** (verify, archive, restore, dismiss, reports, map keys) have one user interface: `admin.html`. The `/admin/...` API works with the Telegram signature from any domain, so the page can move to its own domain later: then set `ADMIN_URL` to it, add the domain to `CORS_ORIGINS`, and serve it with `API_BASE=https://api.timus.uz/masjiduz/v1`.
+- **Env for this deployment:** `WEBAPP_URL=https://api.timus.uz/masjiduz/web` (staging `https://api-staging.timus.uz/masjiduz/web`), `MODERATOR_IDS=722170186`, `ADMIN_URL` empty. nginx: `/masjiduz/web/` to `serve`, `/masjiduz/web/admin.html` 404.
+- **Migrations:** none. Restart `bot` (and `serve`, same image).
+- **How it was tested:** 238 tests, ruff.
+
+## Release v1.0.2
 
 - **Commit:** the commit the annotated tag `v1.0.2` points to (`git rev-parse v1.0.2^{commit}`).
 - **Fixes acceptance 8b (§13.8):** `/mosques/nearest` p95 < 300 ms with 60 parallel clients. The 660 ms on every endpoint (even `/health` on an empty database) came from waiting on database connections, not from CPU: see CHANGELOG 1.0.2.

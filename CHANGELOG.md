@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.3 — web on, moderator page apart
+### Added
+- `TIMUS_APP_MASJIDUZ_ADMIN_URL`: the bot's `/admin` button opens this address (the moderator page on its own domain). Empty: a moderator is told the panel is not connected; nobody else gets an answer.
+### Fixed
+- The bot no longer builds the moderator link from `WEBAPP_URL` (`/admin.html` is closed on the API domain, the button would open a 404).
+- With `WEBAPP_URL` empty `/start` no longer tells every user that an HTTPS address is missing; it greets normally without a map button.
+### Migrations
+- none
+
 ## 1.0.2 — latency under load
 ### Fixed
 - p95 of every endpoint stayed ~660 ms under 60 parallel clients because requests waited on the database connection, not on the code:

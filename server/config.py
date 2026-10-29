@@ -128,6 +128,7 @@ class Config:
         self.tile_style_url = e("TILE_STYLE_URL", "https://tiles.openfreemap.org/styles/liberty")
         self.bot_username = e("BOT_USERNAME").lstrip("@")
         self.webapp_url = e("WEBAPP_URL")
+        self.admin_url = e("ADMIN_URL")                                    # https address of the moderator page (admin.html), for the bot's /admin button
         # model:requests-per-minute:requests-per-day, in the order they are tried (the limits of the free tier; edit when Google changes them)
         self.gemini_models = _models(e("GEMINI_MODELS", "gemini-3.5-flash-lite:15:500,gemini-3.1-flash-lite:15:500,gemini-3.6-flash:5:20"))
         self.max_photo_bytes = _int(P + "MAX_PHOTO_BYTES", 5 * 1024 * 1024, 1024)

@@ -130,6 +130,24 @@ class BotFlow(unittest.TestCase):
         self.assertEqual(raw_db("SELECT tg_username, platform FROM actors WHERE actor_id='tg:555'"), [("ali_u", "telegram-bot")])        # who/what recorded
         self.assertEqual(raw_db("SELECT actor FROM mosque_history WHERE mosque_id=%s AND action='edit'", self.m["id"])[0][0], "tg:555")
 
+    def test_without_a_web_address_the_bot_says_nothing_about_https(self):
+        self.bot.webapp_url = ""                                                                # TIMUS v1: API + bot only, WEBAPP_URL empty
+        for code in ("uz", "uz-cyrl", "ru", "en"):
+            self.user = {"id": 701, "first_name": "A", "language_code": code}; self.sent.clear()
+            self.bot.db.set_lang(701, code)
+            self.send(text="/start")
+            text = "\n".join(self.msgs())
+            self.assertNotIn("HTTPS", text, code); self.assertNotIn("Mini App", text, code); self.assertNotIn("WEBAPP_URL", text, code)
+            self.assertFalse([b for b in self.buttons() if "web_app" in b], code)                  # no button that cannot work
+        self.user = {"id": 7, "first_name": "Mod", "language_code": "uz"}; self.sent.clear()
+        self.bot.db.set_lang(7, "uz")
+        self.send(text="/admin")
+        self.assertIn("Moderator paneli hozircha ulanmagan", self.msgs()[-1])                   # only a moderator hears why
+        self.user = {"id": 702, "first_name": "B", "language_code": "uz"}; self.sent.clear()
+        self.bot.db.set_lang(702, "uz")
+        self.send(text="/admin")
+        self.assertEqual(self.msgs(), [])
+
     def test_start_offers_the_update_by_location_button(self):
         for code, word in (("uz", "Joylashuv"), ("ru", "геопозиции"), ("en", "location")):
             self.user = {"id": 700, "first_name": "A", "language_code": code}; self.sent.clear()
@@ -162,7 +180,7 @@ class BotFlow(unittest.TestCase):
         self.user = {"id": 7, "first_name": "Owner", "language_code": "uz"}; self.sent.clear()
         bot.db.set_lang(7, "uz")
         bot.handle({"update_id": 9, "message": {"chat": {"id": 7, "type": "private"}, "from": self.user, "text": "/admin"}})
-        self.assertIn("Mini App", self.msgs()[-1])
+        self.assertIn("ADMIN_URL", self.msgs()[-1])
         self.store.moderate(self.m["id"], "archive", "admin:7", "t")
         self.user = {"id": 8, "first_name": "A", "language_code": "uz"}; bot.db.set_lang(8, "uz")
         five = {"fajr": "05:20", "dhuhr": "12:30", "asr": "16:00", "maghrib": "17:35", "isha": "19:00"}
@@ -279,7 +297,15 @@ class BotFlow(unittest.TestCase):
         self.bot.handle({"update_id": 3, "message": {"chat": {"id": -1, "type": "group"}, "from": self.user, "text": "/id"}})
         self.assertEqual(len(self.msgs()), 1)
         self.user = {"id": 7, "first_name": "Owner", "language_code": "ru"}; self.send(text="/admin")
-        self.assertTrue(self.buttons()[0]["web_app"]["url"].endswith("/admin.html?lang=ru"))
+        self.assertIn("ADMIN_URL", self.msgs()[-1])                                              # the web is on, the moderator page is not
+        self.assertFalse([b for b in self.buttons() if "web_app" in b and "admin" in b["web_app"]["url"]])
+        self.assertEqual((make_cfg().admin_url, make_cfg(ADMIN_URL="https://a.example/x").admin_url), ("", "https://a.example/x"))
+        self.bot.admin_url = "https://admin.example.org/masjiduz/web/admin.html"                # its own domain (TIMUS: not on the API domain)
+        self.send(text="/admin")
+        self.assertEqual(self.buttons()[0]["web_app"]["url"], "https://admin.example.org/masjiduz/web/admin.html?lang=ru")
+        self.bot.admin_url = "http://admin.example.org/admin.html"                              # Telegram opens https only
+        self.send(text="/admin")
+        self.assertIn("ADMIN_URL", self.msgs()[-1])
 
     # ---- nearest card, subscriptions, reminders
     def set_times(self, mid=None, times=None, who=("tg:900", {"kind": "telegram", "platform": "telegram-bot"})):

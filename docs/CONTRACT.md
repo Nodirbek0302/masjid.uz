@@ -59,7 +59,7 @@ else `X-Client-Id` (browser id). Only a verified Telegram profile is recorded.
 
 ## 2. Health
 
-`GET /masjiduz/v1/health` → `data: {"status": "UP"|"DEGRADED"|"DOWN", "version": "1.0.2", "commit": "...", "env": "staging", "db": "UP"|"DOWN"}`.
+`GET /masjiduz/v1/health` → `data: {"status": "UP"|"DEGRADED"|"DOWN", "version": "1.0.3", "commit": "...", "env": "staging", "db": "UP"|"DOWN"}`.
 `503` when DOWN (database unreachable). Public, no rate limit. The database is probed in the background (`SELECT 1` every 2 s on its own long-lived connection, 2 s timeout); a request only reads the last result, so it never waits on the database (a probe older than 10 s counts as DOWN).
 
 ## 3. Public endpoints
@@ -112,10 +112,10 @@ Failure → `401 UNAUTHORIZED`; 10 failures / 10 min / IP → `429`. Every actio
 
 ## 5. Web client
 
-**v1 is API + bot only (Eldor, requirements v1.2 §17): the web client, the Mini App and `admin.html` are not deployed in v1; the web domain comes later.** `/masjiduz/web/` serves the map and the Telegram Mini App. `/masjiduz/web/config.js` is generated at request time:
+**Deployment (Eldor, after v1.0.2): the web client and the Telegram Mini App are served at `/masjiduz/web/` on the API domain and `WEBAPP_URL` points there. `admin.html` is not served on the API domain (requirements §8: nginx answers 404); it moves to its own domain later.** `/masjiduz/web/` serves the map and the Telegram Mini App. `/masjiduz/web/config.js` is generated at request time:
 `window.MASJIDUZ_API_BASE = "<TIMUS_APP_MASJIDUZ_API_BASE>"` (default `/masjiduz/v1`). Asset names are content-hashed (`app.1a2b3c4d.js`, 1 year immutable); `index.html` is `no-cache`. MapLibre is bundled (`vendor/`).
 Headers (the web never uses Yandex: the CSP is always this strict one): `Content-Security-Policy: default-src 'self'; img-src 'self' data: blob: https://tiles.openfreemap.org https://upload.wikimedia.org; connect-src 'self' https://tiles.openfreemap.org; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; script-src 'self' https://telegram.org; frame-ancestors 'self' https://web.telegram.org https://*.telegram.org`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, `Permissions-Policy: geolocation=(self)`. No `unsafe-eval`.
-`/masjiduz/web/admin.html` is the moderator page (Telegram signature or bearer token).
+`/masjiduz/web/admin.html` is the moderator page (Telegram signature or bearer token). It is the **only** user interface for moderator actions (verify, archive, restore, dismiss, reports, map keys): the main Mini App and the mobile app have none. The `/admin/...` API accepts the Telegram signature from any page, so the moderator page can live on its own domain without server changes; the bot's `/admin` button opens `ADMIN_URL` (no button while it is empty). For a separate domain: add it to `CORS_ORIGINS`, and serve the page with `API_BASE` set to the absolute API address (`https://api.timus.uz/masjiduz/v1`).
 
 ## 6. Rate limits
 
@@ -166,6 +166,6 @@ Nothing else: no telemetry or analytics. (`telegram.org/js/telegram-web-app.js` 
 
 `TIMUS_ENV` (`dev|staging|prod`), `TIMUS_APP_MASJIDUZ_` + `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` (secret), `DB_POOL_MAX` (40, connections of the whole `serve` container, split between its workers and kept open; `bot`/`import-osm` use at most 10), `WEB_CONCURRENCY` (4, `serve` worker processes sharing the port; 1–16),
 `ADMIN_TOKEN` (secret, optional, ≥32 chars), `TELEGRAM_BOT_TOKEN` (secret), `MODERATOR_IDS` (comma-separated Telegram ids), `ACTOR_SALT` (secret), `CORS_ORIGINS`, `API_BASE`, `TRUSTED_PROXIES`, `COMMIT`,
-`BOT_USERNAME`, `WEBAPP_URL`, `WRITE_RATE_PER_HOUR` (30), `DUPLICATE_RADIUS_M` (50), `REPORT_THRESHOLD` (3), `SHOW_TILE_MOSQUES` (1), `TILE_STYLE_URL`, `AI_DAILY_LIMIT` (300), `GEMINI_API_KEY` (secret, optional, comma-separated keys of separate projects add their limits; reading is off without any key), `GEMINI_MODELS` (`name:rpm:rpd,...` in the order tried), `OVERPASS_URL`, `PRAYER_FAJR_ANGLE`, `PRAYER_ISHA_ANGLE`, `PRAYER_ASR_FACTOR`, `PRAYER_DHUHR_OFFSET_MIN`.
+`BOT_USERNAME`, `WEBAPP_URL` (https address of the web client, e.g. `https://api.timus.uz/masjiduz/web`; empty = the bot shows no map button), `ADMIN_URL` (https address of the moderator page; empty = the bot's `/admin` only says it is not connected), `WRITE_RATE_PER_HOUR` (30), `DUPLICATE_RADIUS_M` (50), `REPORT_THRESHOLD` (3), `SHOW_TILE_MOSQUES` (1), `TILE_STYLE_URL`, `AI_DAILY_LIMIT` (300), `GEMINI_API_KEY` (secret, optional, comma-separated keys of separate projects add their limits; reading is off without any key), `GEMINI_MODELS` (`name:rpm:rpd,...` in the order tried), `OVERPASS_URL`, `PRAYER_FAJR_ANGLE`, `PRAYER_ISHA_ANGLE`, `PRAYER_ASR_FACTOR`, `PRAYER_DHUHR_OFFSET_MIN`.
 In `staging`/`prod` missing secrets (`DB_PASSWORD`, `ACTOR_SALT`, `TELEGRAM_BOT_TOKEN`) stop the process with one log line naming the variable; `CORS_ORIGINS=*` stops it in `prod` (warning in `staging`).
 Names only here; values are never in the repository. See `.env.example`.
