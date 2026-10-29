@@ -119,11 +119,11 @@ Headers (the web never uses Yandex: the CSP is always this strict one): `Content
 
 ## 6. Rate limits
 
-Every `POST`/`PATCH` is rate limited per client IP (the address nginx puts in `X-Forwarded-For`) and per hour; over the limit → `429 RATE_LIMITED` + `Retry-After` (seconds). The counters are kept in the database (table `rate_hits`, the key is a salted hash, never the address), so all `serve` workers and replicas share them.
-* Community writes (create/edit mosques, reports, admin actions): `TIMUS_APP_MASJIDUZ_WRITE_RATE_PER_HOUR` (default 30).
+Every public `POST`/`PATCH` is rate limited per client IP (the address nginx puts in `X-Forwarded-For`) and per hour; over the limit → `429 RATE_LIMITED` + `Retry-After` (seconds). The counters are kept in the database (table `rate_hits`, the key is a salted hash, never the address), so all `serve` workers and replicas share them.
+* Community writes (create/edit mosques, reports): `TIMUS_APP_MASJIDUZ_WRITE_RATE_PER_HOUR` (default 30).
+* `/admin/...`: a signed-in moderator is not counted (actions are logged with the Telegram id); failed admin logins: 10 per 10 minutes per IP → `429`.
 * `POST /me/lang` and `POST /map/yandex-failed`: the same number (`WRITE_RATE_PER_HOUR`), each route its own budget, so they never use up the community budget.
 * `POST /timetable/photo|voice`: 30 per device and 120 per address per hour, plus `AI_DAILY_LIMIT` per day for everybody (see §4).
-* Failed admin logins: 10 per 10 minutes per IP → `429`.
 
 ## 7. Container commands
 

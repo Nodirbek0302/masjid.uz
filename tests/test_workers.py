@@ -79,7 +79,8 @@ class Workers(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, out)
         self.assertEqual(out.count("] app - stopped"), 4, out)
         time.sleep(0.3)
-        self.assertEqual(subprocess.run(["pgrep", "-f", "server/cli.py serve"], capture_output=True, text=True).stdout.split(), [])
+        alive = [p for p in kids if subprocess.run(["kill", "-0", p], capture_output=True).returncode == 0]
+        self.assertEqual(alive, [])                                                           # the workers stopped with the leader
 
 
 if __name__ == "__main__":
