@@ -287,6 +287,11 @@ class BotFlow(unittest.TestCase):
         self.assertEqual((v[0]["latitude"], v[0]["longitude"], v[0]["title"]), (40.0, 66.0, "Bot mosque"))
         self.assertEqual((self.calls("editMessageText"), self.calls("editMessageCaption")), ([], []))   # the card stays
 
+    def test_the_menu_button_opens_the_page_with_its_trailing_slash(self):
+        for base in ("https://api.example/masjiduz/web", "https://api.example/masjiduz/web/", "https://api.example/masjiduz/web//"):
+            self.assertEqual(self.botmod.web_root(base), "https://api.example/masjiduz/web/")
+        self.assertEqual(self.botmod.web_url("https://api.example/masjiduz/web", "ru"), "https://api.example/masjiduz/web/?lang=ru")
+
     def test_descriptions_fit_telegram_limits(self):
         import bottexts
         self.assertEqual(set(bottexts.DESCRIPTIONS), {"uz", "ru", "en"})

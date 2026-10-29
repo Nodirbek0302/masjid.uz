@@ -582,8 +582,10 @@ class Hardening(ServerCase):
         r = self.req("GET", WEB + "/%00")
         self.assertEqual((r.status, r.json["code"]), (404, "NOT_FOUND"))
         self.assertEqual(self.req("GET", WEB + "/app.js%00.css").status, 404)
-        r = self.req("GET", WEB)                                               # no trailing slash: relative links would break, so it is not served
-        self.assertEqual((r.status, r.json["code"]), (404, "NOT_FOUND"))
+        r = self.req("GET", WEB)                                               # no trailing slash: relative links would break, so it is sent there
+        self.assertEqual((r.status, r.header("Location"), r.raw), (301, WEB + "/", b""))
+        self.assertEqual(self.req("GET", WEB + "?lang=ru").header("Location"), WEB + "/?lang=ru")
+        self.assertEqual(self.req("POST", WEB, b"x", {"Content-Type": "text/plain"}).status, 404)
         self.assertEqual(self.req("GET", WEB + "/").status, 200)
 
     def test_405_names_the_allowed_methods(self):

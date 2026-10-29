@@ -1174,11 +1174,23 @@ class Request(BaseHTTPRequestHandler):
             return self.preflight()
         if path == API or path.startswith(API + "/"):
             return self.api(method, path[len(API):] or "/", q)
-        if path.startswith(WEB + "/"):                   # (without the trailing slash relative URLs would break: not served)
+        if path == WEB and method == "GET":              # without the trailing slash the page's relative URLs would break: send it there
+            return self.redirect(WEB + "/" + ("?" + urlparse(self.path).query if urlparse(self.path).query else ""))
+        if path.startswith(WEB + "/"):
             if method != "GET":
                 raise ApiError(405, "method_not_allowed", "method not allowed")
             return self.static(path[len(WEB) + 1:] or "index.html")
         raise ApiError(404, "not_found", "no such endpoint")
+
+    def redirect(self, location):
+        """301 to `location` (a path on this host; the browser keeps the #fragment, e.g. Telegram's launch data)."""
+        self.status = 301
+        self.send_response(301)
+        self.send_header("Location", location)
+        self.send_header("Content-Length", "0")
+        self.send_header("Cache-Control", "public, max-age=3600")
+        self.common_headers()
+        self.end_headers()
 
     def body_limit(self, method, path):
         """64 KiB for JSON; the two reading routes document a larger raw body (a photo / a recording)."""

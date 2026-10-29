@@ -98,6 +98,11 @@ LANG_NAMES = [("uz", "Oʻzbekcha"), ("uz-cyrl", "Ўзбекча"), ("ru", "Ру�
 LANG_ASK = "🌐 Tilni tanlang · Тилни танланг · Выберите язык · Choose a language"
 
 
+def web_root(base):
+    """The web client's start page: it is served only under the trailing slash (CONTRACT §5), whatever WEBAPP_URL ends with."""
+    return base.rstrip("/") + "/"
+
+
 def web_url(base, lang, path="/", **q):
     """Link into the Mini App that opens in the user's chosen language (the web page reads ?lang=)."""
     return base.rstrip("/") + path + "?" + urlencode(dict(q, lang=lang))
@@ -916,7 +921,7 @@ def main(cfg):
         except Exception as e:
             log("could not set admin commands for %s: %s" % (aid, type(e).__name__))
     if WEBAPP_URL.startswith("https://"):
-        call("setChatMenuButton", menu_button={"type": "web_app", "text": "Xarita", "web_app": {"url": WEBAPP_URL}})
+        call("setChatMenuButton", menu_button={"type": "web_app", "text": "Xarita", "web_app": {"url": web_root(WEBAPP_URL)}})
     cfg.db_pool_max = min(cfg.db_pool_max, 8)             # the bot needs a handful of connections: 4 handlers, the notifier, the poller
     store = app.Store(cfg, name="masjiduz-bot")
     lock = psycopg.connect(cfg.conninfo(), autocommit=True)       # the bot runs as ONE replica: a second one would fight over getUpdates
