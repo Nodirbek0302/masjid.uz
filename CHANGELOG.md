@@ -1,17 +1,12 @@
 # Changelog
 
-## 1.0.7 — a moderator can delete a mosque from the Mini App
-### Added
-- Mini App: a moderator (`MODERATOR_IDS`, Telegram signature) sees "🗑 Delete (moderator)" in a mosque card. Telegram's own popup asks first ("Yes, delete" / Cancel), so a stray tap never deletes; "delete" archives the mosque (gone from the map and the list, history kept) and the notice offers "Undo" for 10 s. Nobody else sees the button, and the server checks the moderator again.
-- `GET /me` also says `moderator: true|false`.
-### Migrations
-- none
-
-## 1.0.6 — the bell in the Mini App, clearer voice reading, a moderator sync button
+## 1.0.6 — the bell in the Mini App, moderator delete, clearer voice reading, a moderator sync button
 ### Added
 - Mini App: the subscribe button is a bell that works right there (`GET`/`POST /me/subscriptions/{id}`, signed by Telegram): it turns green and rings when switched on, says so in a notice and vibrates (Telegram haptics); before, it opened the bot behind the Mini App and nothing visible happened. In a plain browser it still opens the bot.
 - Bot: moderators (`MODERATOR_IDS`) get an "update the mosque database" button under `/admin` that runs the OpenStreetMap sync and reports the result. Off unless `TIMUS_APP_MASJIDUZ_BOT_OSM_IMPORT=1` (it makes the bot call Overpass).
 - `import-osm` holds a database lock: the nightly run and the bot button never run at the same time (the second one prints `import-osm skipped: another import is running`).
+- Mini App: a moderator (`MODERATOR_IDS`, Telegram signature) sees "🗑 Delete (moderator)" in a mosque card. Telegram's own popup asks first ("Yes, delete" / Cancel), so a stray tap never deletes; "delete" archives the mosque (gone from the map and the list, history kept) and the notice offers "Undo" for 10 s. Nobody else sees the button, and the server checks the moderator again.
+- `GET /me` also says `moderator: true|false`.
 ### Changed
 - Voice reading: the prompt names the prayers in all their usual forms and explains clock phrases (`besh yarim`, `oltiga o'n besh kam`, `chorak`, `половина шестого`, `без пятнадцати шесть`, `half past`, `quarter to`) and self-corrections. Tested with Gemini: a Russian recording with "половина шестого" and "без пятнадцати четыре" read 5/5 right.
 ### Migrations

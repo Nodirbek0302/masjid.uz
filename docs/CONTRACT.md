@@ -59,7 +59,7 @@ else `X-Client-Id` (browser id). Only a verified Telegram profile is recorded.
 
 ## 2. Health
 
-`GET /masjiduz/v1/health` → `data: {"status": "UP"|"DEGRADED"|"DOWN", "version": "1.0.7", "commit": "...", "env": "staging", "db": "UP"|"DOWN"}`.
+`GET /masjiduz/v1/health` → `data: {"status": "UP"|"DEGRADED"|"DOWN", "version": "1.0.6", "commit": "...", "env": "staging", "db": "UP"|"DOWN"}`.
 `503` when DOWN (database unreachable). Public, no rate limit. The database is probed in the background (`SELECT 1` every 2 s on its own long-lived connection, 2 s timeout); a request only reads the last result, so it never waits on the database (a probe older than 10 s counts as DOWN).
 
 ## 3. Public endpoints
