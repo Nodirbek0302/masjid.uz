@@ -10,6 +10,7 @@ The token comes from the environment (TIMUS_APP_MASJIDUZ_TELEGRAM_BOT_TOKEN) and
 import json
 import logging
 import os
+import random
 import signal
 import sys
 import threading
@@ -19,6 +20,7 @@ import urllib.request
 from urllib.parse import urlencode
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -236,15 +238,80 @@ class Bot:
         self.db = botdb.BotDB(store)
         self.state, self.photo_log, self.msg_log, self.pending = {}, {}, {}, {}
         self._locks, self._locks_guard = {}, threading.Lock()
+        self._tap = threading.local()                 # the button press being handled: its message is updated instead of sending a new one
 
     # ---- helpers
     def say(self, chat_id, text, buttons=None, reply_keyboard=None):
+        """Sends a message; while a button press is handled, the first answer replaces the pressed message instead (no pile of messages)."""
+        target = getattr(self._tap, "edit", None)
+        if target and target["chat"] == chat_id and not reply_keyboard:
+            self._tap.edit = None
+            if self.edit(target, text, buttons):
+                return
         kw = {}
         if buttons:
             kw["reply_markup"] = {"inline_keyboard": buttons}
         elif reply_keyboard:
             kw["reply_markup"] = {"keyboard": reply_keyboard, "resize_keyboard": True, "is_persistent": True}
         self.api("sendMessage", chat_id=chat_id, text=text, **kw)
+
+    def edit(self, target, text, buttons=None):
+        """Replaces the text (or a photo's caption) and the buttons of a message -> False when Telegram cannot, so the caller sends anew."""
+        photo = target.get("photo")
+        if photo and len(text) > 1024:
+            return False
+        params = {"chat_id": target["chat"], "message_id": target["id"], "reply_markup": {"inline_keyboard": buttons or []}}
+        params["caption" if photo else "text"] = text
+        try:
+            self.api("editMessageCaption" if photo else "editMessageText", **params)
+            return True
+        except TelegramError as e:
+            return "not modified" in e.description.lower()        # the same text again: nothing to change, that is fine
+        except Exception:
+            return False
+
+    def react(self, chat, msg_id, emoji):
+        """A reaction on the user's own message (👀 received, 👌 read): says it without another message in the chat."""
+        if not msg_id:
+            return
+        try:
+            self.api("setMessageReaction", chat_id=chat, message_id=msg_id, reaction=[{"type": "emoji", "emoji": emoji}])
+        except Exception:
+            pass
+
+    @contextmanager
+    def working(self, chat, text):
+        """While a slow reading runs: a draft line ("Reading…", gone once the answer arrives) and the "typing" status, renewed until it ends.
+        Clients or chats that do not take drafts just see the status."""
+        stop, draft = threading.Event(), random.randint(1, 2 ** 31 - 1)
+
+        def keep():
+            n = 0
+            while not stop.is_set():
+                for method, kw in (("sendChatAction", {"action": "typing"}),) + ((("sendMessageDraft", {"draft_id": draft, "text": text}),) if n % 5 == 0 else ()):
+                    try:
+                        self.api(method, chat_id=chat, **kw)
+                    except Exception:
+                        pass
+                n += 1
+                stop.wait(4)                                       # the status lasts 5 s, a draft 30 s
+        t = threading.Thread(target=keep, daemon=True)
+        t.start()
+        try:
+            yield
+        finally:
+            stop.set()
+            t.join(2)
+
+    def toast(self, text, alert=False):
+        """The short notice Telegram shows over the chat for a button press (instead of a message)."""
+        cb_id = getattr(self._tap, "cb", None)
+        if cb_id and not getattr(self._tap, "answered", False):
+            self._tap.answered = True
+            try:
+                self.api("answerCallbackQuery", callback_query_id=cb_id, text=text[:200], show_alert=alert)
+            except Exception:
+                pass
 
     def say_card(self, chat_id, text, buttons, photo_url=None):
         """A mosque card; with the mosque's picture above it when there is one (Telegram loads it from Wikimedia). If Telegram
@@ -367,13 +434,13 @@ class Bot:
             if msg.get("location"):
                 return self.on_location(chat, user, tx, msg["location"])
             if msg.get("photo"):
-                return self.on_photo(chat, user, tx, msg["photo"])
+                return self.on_photo(chat, user, tx, msg["photo"], msg.get("message_id"))
             voice = msg.get("voice") or msg.get("audio")
             if voice:
-                return self.on_voice(chat, user, tx, voice)
+                return self.on_voice(chat, user, tx, voice, msg.get("message_id"))
             doc = msg.get("document")
             if doc and str(doc.get("mime_type", "")).startswith("image/"):       # a picture sent "as a file" (common on desktop)
-                return self.on_photo(chat, user, tx, [{"file_id": doc["file_id"], "file_size": doc.get("file_size", 0)}])
+                return self.on_photo(chat, user, tx, [{"file_id": doc["file_id"], "file_size": doc.get("file_size", 0)}], msg.get("message_id"))
             text = (msg.get("text") or "").strip()
             if text.startswith("/"):
                 return self.on_command(chat, user, tx, text)
@@ -402,7 +469,7 @@ class Bot:
             return self.say(chat, self.ask_times(tx, self.state[uid]["name"]))
         if cmd in ("/start", "/help"):
             if self.webapp_url.startswith("https://"):
-                self.say(chat, tx["hello"], [[{"text": tx["open"], "web_app": {"url": self.web(tx)}}]])
+                self.say(chat, tx["hello"], [[{"text": tx["open"], "web_app": {"url": self.web(tx)}, "style": "primary"}]])
             else:                                             # no web client in this deployment: the bot alone, nothing to apologise for
                 self.say(chat, tx["hello"])
             # persistent button under the input box: one tap sends the user's current location (they are standing at the mosque)
@@ -443,20 +510,26 @@ class Bot:
             self.say_card(chat, tx["card_head"] + "\n\n" + self.card_text(tx, found[0]), self.card_buttons(tx, found[0], user["id"]), found[0].get("photo_url"))
         near = [m for m in found if m["distance_m"] <= NEAR_M]
         rows = [[{"text": "%s · %d m" % (m["name"] or tx["noname"], round(m["distance_m"])), "callback_data": "pick:" + m["id"]}] for m in near]
-        rows.append([{"text": tx["new"], "callback_data": "new:%.6f,%.6f" % (lat, lon)}])
+        rows.append([{"text": tx["new"], "callback_data": "new:%.6f,%.6f" % (lat, lon), "style": "primary"}])
         self.say(chat, tx["pick"] if near else tx["none"], rows)
 
     def on_callback(self, cb):
         user, data = cb["from"], cb.get("data", "")
         if not cb.get("message"):
             return
-        chat = cb["message"]["chat"]["id"]
+        msg = cb["message"]
+        chat = msg["chat"]["id"]
         uid = user["id"]
+        self._tap.cb, self._tap.answered = cb["id"], False
+        self._tap.edit = {"chat": chat, "id": msg["message_id"], "photo": "photo" in msg} if msg.get("message_id") else None
         try:
-            self.api("answerCallbackQuery", callback_query_id=cb["id"])
-        except Exception:
-            pass
-        if not self.allow_msg(uid):                            # taps count towards the flood limit too (answered above so the button stops spinning)
+            self._on_callback(cb, user, chat, uid, data, msg)
+        finally:
+            self.toast("")                                     # every press is answered (the button stops spinning), once
+            self._tap.cb = self._tap.edit = None
+
+    def _on_callback(self, cb, user, chat, uid, data, msg):
+        if not self.allow_msg(uid):                            # taps count towards the flood limit too
             return
         kind, _, arg = data.partition(":")
         lang = self.lang_of(uid)
@@ -489,12 +562,20 @@ class Bot:
                     st["times"] = times
                     return self.preview(chat, tx, st)
                 self.save(chat, user, tx, st)
+            elif kind == "loc":
+                self.send_venue(chat, tx, arg)
+            elif kind in ("sub", "unsub") and self.is_card(msg):    # pressed on a mosque card: the card stays, only its button flips
+                self.card_sub_toggle(chat, user, tx, kind, arg, msg)
             elif kind == "sub":
                 self.subscribe(chat, user, tx, arg)
             elif kind == "unsub":
                 m = self.store.get(arg)
                 self.db.unsubscribe(uid, m["id"])
-                self.say(chat, tx["unsubscribed"].format(name=m["name"] or tx["noname"]))
+                if len(self.inline_data(msg)) > 1:             # the /subs list: the list is shown again without it
+                    self.toast(tx["unsubscribed"].format(name=m["name"] or tx["noname"]))
+                    self.subs_list(chat, user, tx)
+                else:
+                    self.say(chat, tx["unsubscribed"].format(name=m["name"] or tx["noname"]))
             elif kind == "reg" and arg.isdigit() and int(arg) < len(prayertimes.REGIONS):
                 self.db.set_user(uid, region=int(arg))
                 self.reminders_menu(chat, user, tx)
@@ -506,10 +587,43 @@ class Bot:
                 self.state.pop(uid, None)
                 self.say(chat, tx["cancelled"])
         except app.ApiError as e:
-            self.say(chat, tx["archived"] if e.code == "archived" else tx["error"])
+            self.complain(chat, tx["archived"] if e.code == "archived" else tx["error"])
         except Exception as e:
             log("callback error: %s" % type(e).__name__)
-            self.say(chat, tx["error"])
+            self.complain(chat, tx["error"])
+
+    def complain(self, chat, text):
+        """A failed press: a notice over the chat while the pressed message is still as it was, otherwise a message."""
+        if getattr(self._tap, "edit", None):
+            self.toast(text, alert=True)
+        else:
+            self.say(chat, text)
+
+    @staticmethod
+    def inline_data(msg):
+        return [b.get("callback_data", "") for row in (msg.get("reply_markup") or {}).get("inline_keyboard", []) for b in row]
+
+    def is_card(self, msg):
+        return any(d.startswith("pick:") for d in self.inline_data(msg))
+
+    def card_sub_toggle(self, chat, user, tx, kind, mosque_id, msg):
+        m = self.store.get(mosque_id)
+        name = m["name"] or tx["noname"]
+        if kind == "unsub":
+            self.db.unsubscribe(user["id"], m["id"])
+            self.toast(tx["unsubscribed"].format(name=name))
+        else:
+            if m["status"] == "archived":
+                return self.toast(tx["archived"], alert=True)
+            res = self.db.subscribe(user["id"], m["id"])
+            if res == "limit":
+                return self.toast(tx["sub_limit"].format(n=botdb.MAX_SUBS), alert=True)
+            self.toast(tx["sub_already" if res == "already" else "subscribed"].format(name=name))
+        try:
+            self.api("editMessageReplyMarkup", chat_id=chat, message_id=msg.get("message_id"), reply_markup={"inline_keyboard": self.card_buttons(tx, m, user["id"])})
+        except Exception:
+            pass
+        self._tap.edit = None
 
     def create_mosque(self, chat, user, tx, st, name):
         actor, info = self.identity(user)
@@ -540,7 +654,7 @@ class Bot:
         return text + "\n\n" + tx["ai_notice"] if (self.ocr_read or self.stt_read) and tx.get("ai_notice") else text
 
     # ---- photo -> OCR -> preview
-    def on_photo(self, chat, user, tx, photos):
+    def on_photo(self, chat, user, tx, photos, msg_id=None):
         st = self.session(user["id"])
         if not st or st["step"] not in ("await_times", "confirm"):
             return self.say(chat, tx["need_loc"])
@@ -548,17 +662,19 @@ class Bot:
             return self.say(chat, tx["limit"])
         if not self.ocr_read or not self.fetch_photo:
             return self.say(chat, tx["no_ocr"])
-        self.say(chat, tx["reading"])
+        self.react(chat, msg_id, "👀")                       # seen; the reading shows as a draft, not as a message that stays
         best = max(photos, key=lambda p: p.get("file_size", 0) or p.get("width", 0))
         try:
-            r = self.ocr_read(self.fetch_photo(best["file_id"]))
+            with self.working(chat, tx["reading"]):
+                r = self.ocr_read(self.fetch_photo(best["file_id"]))
         except gemini.Unavailable:
             return self.say(chat, tx["no_ocr"])
+        self.react(chat, msg_id, "👌" if r["complete"] or r.get("alt") else "🤔")
         if r.get("alt"):
             st.update(step="confirm", times=r["times"], alt=r["alt"], ts=time.time())
             return self.say(chat, tx["two_cols"].format(a=fmt_times(tx, r["times"]), b=fmt_times(tx, r["alt"])),
-                            [[{"text": tx["v1"], "callback_data": "col1"}, {"text": tx["v2"], "callback_data": "col2"}],
-                             [{"text": tx["manual"], "callback_data": "manual"}, {"text": tx["cancel"], "callback_data": "cancel"}]])
+                            [[{"text": tx["v1"], "callback_data": "col1", "style": "primary"}, {"text": tx["v2"], "callback_data": "col2", "style": "primary"}],
+                             [{"text": tx["manual"], "callback_data": "manual"}, {"text": tx["cancel"], "callback_data": "cancel", "style": "danger"}]])
         if not r["complete"]:
             found = tx["found"].format(t=", ".join("%s %s" % (n, r["times"][k]) for n, k in zip(tx["names"], timetable.ORDER) if k in r["times"])) if r["times"] else ""
             return self.say(chat, tx["unreadable"].format(found=found))
@@ -566,7 +682,7 @@ class Bot:
         self.preview(chat, tx, st)
 
     # ---- voice -> speech-to-text -> spoken numbers (AM/PM resolved) -> preview
-    def on_voice(self, chat, user, tx, voice):
+    def on_voice(self, chat, user, tx, voice, msg_id=None):
         st = self.session(user["id"])
         if not st or st["step"] not in ("await_times", "confirm"):
             return self.say(chat, tx["need_loc"])
@@ -576,11 +692,13 @@ class Bot:
             return self.say(chat, tx["limit"])
         if not self.stt_read or not self.fetch_photo:
             return self.say(chat, tx["no_stt"])
-        self.say(chat, tx["voice_reading"])
+        self.react(chat, msg_id, "👀")
         try:
-            r = self.stt_read(self.fetch_photo(voice["file_id"]))
+            with self.working(chat, tx["voice_reading"]):
+                r = self.stt_read(self.fetch_photo(voice["file_id"]))
         except gemini.Unavailable:
             return self.say(chat, tx["no_stt"])
+        self.react(chat, msg_id, "👌" if r["complete"] and not r["alt"] else "🤔")
         heard = r.get("heard") or ""
         if not r["complete"] or r["alt"]:
             found = tx["found"].format(t=", ".join("%s %s" % (n, r["times"][k]) for n, k in zip(tx["names"], timetable.ORDER) if k in r["times"])) if r["times"] else ""
@@ -591,7 +709,8 @@ class Bot:
     def preview(self, chat, tx, st, heard=None):
         head = (tx["voice_heard"].format(t=heard[:300]) + "\n\n") if heard else ""
         self.say(chat, head + tx["confirm"].format(name=st["name"], t=fmt_times(tx, st["times"])),
-                 [[{"text": tx["yes"], "callback_data": "save"}], [{"text": tx["manual"], "callback_data": "manual"}, {"text": tx["cancel"], "callback_data": "cancel"}]])
+                 [[{"text": tx["yes"], "callback_data": "save", "style": "success"}],
+                  [{"text": tx["manual"], "callback_data": "manual"}, {"text": tx["cancel"], "callback_data": "cancel", "style": "danger"}]])
 
     # ---- save
     def save(self, chat, user, tx, st):
@@ -624,9 +743,22 @@ class Bot:
 
     def card_buttons(self, tx, m, uid):
         subbed = self.db.is_subscribed(uid, m["id"])
-        return [[{"text": tx["route"], "url": "https://yandex.com/maps/?rtext=~%s,%s&rtt=auto" % (m["lat"], m["lon"])}],
-                [{"text": tx["upd_btn"], "callback_data": "pick:" + m["id"]},
+        rows = [[{"text": tx["route"], "url": "https://yandex.com/maps/?rtext=~%s,%s&rtt=auto" % (m["lat"], m["lon"])},
+                 {"text": tx["venue_btn"], "callback_data": "loc:" + m["id"]}],
+                [{"text": tx["upd_btn"], "callback_data": "pick:" + m["id"], "style": "primary"},
                  {"text": tx["unsub_btn"] if subbed else tx["sub_btn"], "callback_data": ("unsub:" if subbed else "sub:") + m["id"]}]]
+        times = m.get("prayer_times") or {}
+        if any(k in times for k in timetable.ORDER):              # one tap copies the five times (to paste in a group chat, say)
+            copy = (m["name"] or tx["noname"]) + "\n" + fmt_times(tx, times)
+            rows.append([{"text": tx["copy_btn"], "copy_text": {"text": copy[:256]}}])
+        return rows
+
+    def send_venue(self, chat, tx, mosque_id):
+        """The mosque as a Telegram venue: the map inside Telegram, and from there directions in any maps app on the phone."""
+        m = self.store.get(mosque_id)
+        self.api("sendVenue", chat_id=chat, latitude=m["lat"], longitude=m["lon"], title=(m["name"] or tx["noname"])[:100],
+                 address=(m.get("address") or "%.5f, %.5f" % (m["lat"], m["lon"]))[:200])
+        self._tap.edit = None                                     # the card stays as it is
 
     # ---- subscriptions
     def subscribe(self, chat, user, tx, mosque_id):
@@ -656,7 +788,7 @@ class Bot:
         self.say(chat, text, [[{"text": tx["rem_region"], "callback_data": "rm:region"}],
                               [{"text": tx["rem_daily"].format(s=onoff(not u["daily"])), "callback_data": "rm:daily"}],
                               [{"text": tx["rem_before"].format(s=onoff(not u["before_prayer"])), "callback_data": "rm:before"}],
-                              [{"text": tx["rem_off_all"], "callback_data": "rm:off"}]])
+                              [{"text": tx["rem_off_all"], "callback_data": "rm:off", "style": "danger"}]])
 
     def region_picker(self, chat, lang, tx):
         names = bottexts.REGION_NAMES[lang]
@@ -770,6 +902,13 @@ def main(cfg):
             continue
         kw = {} if lc == "uz" else {"language_code": lc}
         call("setMyCommands", commands=[{"command": c, "description": d} for c, d in table], **kw)
+    for lc, (desc, short) in bottexts.DESCRIPTIONS.items():   # what an empty chat and the bot's profile say, per language (uz: everybody else)
+        kw = {} if lc == "uz" else {"language_code": lc}
+        try:
+            call("setMyDescription", description=desc, **kw)
+            call("setMyShortDescription", short_description=short, **kw)
+        except Exception as e:
+            log("bot description not set (%s): %s" % (lc, type(e).__name__))
     for aid in ADMIN_IDS:                         # the extra /admin command is visible to allow-listed admins only
         try:
             call("setMyCommands", commands=[{"command": "start", "description": "Start"}, {"command": "admin", "description": "Moderator"},

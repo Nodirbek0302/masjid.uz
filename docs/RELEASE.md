@@ -1,4 +1,12 @@
-# Release v1.0.3
+# Release v1.0.4
+
+- **Commit:** the commit the annotated tag `v1.0.4` points to (`git rev-parse v1.0.4^{commit}`).
+- **Change:** bot and web client only (CHANGELOG 1.0.4): a pressed button updates its own message instead of adding a new one; reactions and a temporary draft while a photo/voice is read; coloured buttons; copy-the-times and Telegram-map buttons on the mosque card; bot descriptions in three languages; the Mini App takes the position from Telegram's LocationManager.
+- **External services:** unchanged. Every new call goes to the Telegram Bot API (`api.telegram.org`) from the `bot` container; the Mini App's location comes from the Telegram client itself.
+- **Migrations:** none. **New env vars:** none. Restart `bot` and `serve` (same image).
+- **How it was tested:** 247 tests (the bot with a fake Telegram API, including Telegram refusing edits, reactions or drafts), ruff; the Mini App location logic in a browser with a stubbed Telegram (granted, denied, no GPS, Telegram older than 8.0, plain browser). Not tried in a real Telegram client yet.
+
+## Release v1.0.3
 
 - **Commit:** the commit the annotated tag `v1.0.3` points to (`git rev-parse v1.0.3^{commit}`).
 - **Change:** bot only. New env `TIMUS_APP_MASJIDUZ_ADMIN_URL` (https address of the moderator page; empty for now): the bot's `/admin` button no longer points to `WEBAPP_URL/admin.html`, which is closed (404) on the API domain. Without `WEBAPP_URL` the bot no longer mentions a missing HTTPS address.

@@ -9,6 +9,9 @@ import helpers  # noqa: E402,F401  (puts server/ on sys.path)
 from helpers import make_cfg, reset_db, db as raw_db  # noqa: E402
 import app  # noqa: E402
 import gemini  # noqa: E402
+import bot as _botmod  # noqa: E402
+
+TEXTS_UZ = _botmod.TEXTS["uz"]
 
 FIVE = {"fajr": "05:20", "dhuhr": "12:30", "asr": "16:00", "maghrib": "17:35", "isha": "19:00"}
 
@@ -148,6 +151,83 @@ class BotFlow(unittest.TestCase):
         self.send(text="/admin")
         self.assertEqual(self.msgs(), [])
 
+    def tap(self, data, message_id=42, markup=None, photo=False):
+        """A button press on a real message (with its id), as Telegram sends it."""
+        self.ensure_lang()
+        msg = {"chat": {"id": 555}, "message_id": message_id}
+        if markup:
+            msg["reply_markup"] = {"inline_keyboard": markup}
+        if photo:
+            msg["photo"] = [{"file_id": "p"}]
+        self.sent.clear()
+        self.bot.handle({"update_id": 2, "callback_query": {"id": "q%d" % message_id, "from": self.user, "data": data, "message": msg}})
+
+    def test_a_button_press_updates_its_message_instead_of_sending_a_new_one(self):
+        self.send(location={"latitude": 40.0004, "longitude": 66.0})
+        self.tap("pick:" + self.m["id"])
+        self.assertEqual(self.calls("sendMessage"), [])                                          # nothing new in the chat
+        e = self.calls("editMessageText")
+        self.assertEqual(len(e), 1)
+        self.assertEqual((e[0]["chat_id"], e[0]["message_id"]), (555, 42))
+        self.assertIn("Bot mosque", e[0]["text"])
+        self.assertEqual(e[0]["reply_markup"], {"inline_keyboard": []})                           # the old buttons are gone
+        self.assertEqual(len(self.calls("answerCallbackQuery")), 1)                              # the press is answered exactly once
+        # the reminders menu: every toggle redraws the same message
+        self.bot.db.set_user(555, region=0)
+        self.tap("rm:daily", message_id=50)
+        self.assertEqual(self.calls("sendMessage"), [])
+        self.assertEqual(self.calls("editMessageText")[0]["message_id"], 50)
+        self.assertIn("rm:daily", [b["callback_data"] for row in self.calls("editMessageText")[0]["reply_markup"]["inline_keyboard"] for b in row])
+
+    def test_subscribing_on_a_card_flips_the_button_and_keeps_the_card(self):
+        card = self.bot.card_buttons(TEXTS_UZ, self.store.get(self.m["id"]), 555)
+        self.tap("sub:" + self.m["id"], message_id=60, markup=card, photo=True)
+        self.assertEqual((self.calls("sendMessage"), self.calls("editMessageText"), self.calls("editMessageCaption")), ([], [], []))
+        rm = self.calls("editMessageReplyMarkup")
+        self.assertEqual(rm[0]["message_id"], 60)
+        self.assertIn("unsub:" + self.m["id"], [b.get("callback_data") for row in rm[0]["reply_markup"]["inline_keyboard"] for b in row])
+        a = self.calls("answerCallbackQuery")
+        self.assertEqual(len(a), 1); self.assertIn("obuna", a[0]["text"])                          # said as a short notice
+        self.assertTrue(self.bot.db.is_subscribed(555, self.m["id"]))
+        self.tap("unsub:" + self.m["id"], message_id=60, markup=self.bot.card_buttons(TEXTS_UZ, self.store.get(self.m["id"]), 555))
+        self.assertFalse(self.bot.db.is_subscribed(555, self.m["id"]))
+        self.assertIn("sub:" + self.m["id"], [b.get("callback_data") for row in self.calls("editMessageReplyMarkup")[0]["reply_markup"]["inline_keyboard"] for b in row])
+
+    def test_the_subs_list_is_redrawn_without_the_one_removed(self):
+        other = self.store.create({"lat": 41.0, "lon": 69.0, "name": "Ikkinchi"}, "client:test0000", {"kind": "web", "platform": "web"})
+        for mid in (self.m["id"], other["id"]):
+            self.bot.db.subscribe(555, mid)
+        listing = [[{"text": "x", "callback_data": "unsub:" + self.m["id"]}], [{"text": "y", "callback_data": "unsub:" + other["id"]}]]
+        self.tap("unsub:" + self.m["id"], message_id=70, markup=listing)
+        e = self.calls("editMessageText")
+        self.assertEqual([b["callback_data"] for row in e[0]["reply_markup"]["inline_keyboard"] for b in row], ["unsub:" + other["id"]])
+        self.assertEqual(self.calls("sendMessage"), [])
+
+    def test_when_telegram_cannot_edit_a_new_message_is_sent(self):
+        import bot as botmod
+
+        def api(m, **kw):
+            self.sent.append((m, kw))
+            if m == "editMessageText":
+                raise botmod.TelegramError(m, 400, "Bad Request: message to edit not found")
+        self.bot.api = api
+        self.tap("cancel")
+        self.assertEqual(len(self.calls("sendMessage")), 1)
+
+        def same(m, **kw):
+            self.sent.append((m, kw))
+            if m == "editMessageText":
+                raise botmod.TelegramError(m, 400, "Bad Request: message is not modified")
+        self.bot.api = same
+        self.tap("cancel")
+        self.assertEqual(self.calls("sendMessage"), [])                                          # the same text again is fine
+
+    def test_a_failed_press_is_a_notice_and_the_message_stays(self):
+        self.tap("pick:00000000-0000-0000-0000-000000000000")
+        self.assertEqual((self.calls("sendMessage"), self.calls("editMessageText")), ([], []))
+        a = self.calls("answerCallbackQuery")
+        self.assertEqual(len(a), 1); self.assertTrue(a[0]["show_alert"])
+
     def test_start_offers_the_update_by_location_button(self):
         for code, word in (("uz", "Joylashuv"), ("ru", "геопозиции"), ("en", "location")):
             self.user = {"id": 700, "first_name": "A", "language_code": code}; self.sent.clear()
@@ -159,6 +239,61 @@ class BotFlow(unittest.TestCase):
         # pressing it sends a location message -> the normal flow starts
         self.send(location={"latitude": 40.0004, "longitude": 66.0})
         self.assertTrue(any(b["callback_data"].startswith("pick:") for b in self.buttons()))
+
+    def test_a_photo_gets_reactions_and_a_draft_instead_of_a_reading_message(self):
+        self.send(location={"latitude": 40.0, "longitude": 66.0}); self.click("pick:" + self.m["id"])
+        self.sent.clear()
+        self.send(photo=[{"file_id": "a"}], message_id=77)
+        reacts = [kw["reaction"][0]["emoji"] for kw in self.calls("setMessageReaction") if kw["message_id"] == 77]
+        self.assertEqual(reacts, ["👀", "👌"])                                                  # seen, then read
+        self.assertTrue(self.calls("sendChatAction"))
+        self.assertTrue(all(kw["action"] == "typing" for kw in self.calls("sendChatAction")))
+        d = self.calls("sendMessageDraft")
+        self.assertTrue(d and d[0]["draft_id"] > 0 and d[0]["chat_id"] == 555)
+        self.assertEqual(len(self.msgs()), 1)                                                   # only the preview stays in the chat
+        self.assertIn("05:20", self.msgs()[0])
+        styles = {b["callback_data"]: b.get("style") for b in self.buttons()}
+        self.assertEqual((styles["save"], styles["cancel"]), ("success", "danger"))
+        # an unclear reading: 🤔 instead of 👌
+        self.read = result(times={"fajr": "05:20"}, complete=False); self.sent.clear()
+        self.send(photo=[{"file_id": "b"}], message_id=78)
+        self.assertEqual([kw["reaction"][0]["emoji"] for kw in self.calls("setMessageReaction")], ["👀", "🤔"])
+
+    def test_telegram_refusing_reactions_or_drafts_changes_nothing(self):
+        import bot as botmod
+
+        def api(m, **kw):
+            self.sent.append((m, kw))
+            if m in ("setMessageReaction", "sendMessageDraft", "sendChatAction"):
+                raise botmod.TelegramError(m, 400, "Bad Request: method not available")
+        self.bot.api = api
+        self.send(location={"latitude": 40.0, "longitude": 66.0}); self.click("pick:" + self.m["id"])
+        self.send(photo=[{"file_id": "a"}], message_id=79)
+        self.assertIn("05:20", self.msgs()[-1])
+
+    def test_card_has_copy_and_telegram_map_buttons(self):
+        self.store.edit(self.m["id"], {"prayer_times": FIVE}, "client:test0000", {"kind": "web", "platform": "web"})
+        m = self.store.get(self.m["id"])
+        flat = [b for row in self.bot.card_buttons(TEXTS_UZ, m, 555) for b in row]
+        copy = [b for b in flat if "copy_text" in b][0]
+        self.assertIn("Bot mosque", copy["copy_text"]["text"]); self.assertIn("05:20", copy["copy_text"]["text"])
+        self.assertLessEqual(len(copy["copy_text"]["text"]), 256)
+        self.assertIn("loc:" + m["id"], [b.get("callback_data") for b in flat])
+        self.assertEqual([b.get("style") for b in flat if b.get("callback_data") == "pick:" + m["id"]], ["primary"])
+        bare = self.store.create({"lat": 41.5, "lon": 69.5, "name": "Bo'sh"}, "client:test0000", {"kind": "web", "platform": "web"})
+        self.assertFalse([b for row in self.bot.card_buttons(TEXTS_UZ, bare, 555) for b in row if "copy_text" in b])   # nothing to copy yet
+        self.tap("loc:" + m["id"], message_id=90, markup=self.bot.card_buttons(TEXTS_UZ, m, 555), photo=True)
+        v = self.calls("sendVenue")
+        self.assertEqual((v[0]["latitude"], v[0]["longitude"], v[0]["title"]), (40.0, 66.0, "Bot mosque"))
+        self.assertEqual((self.calls("editMessageText"), self.calls("editMessageCaption")), ([], []))   # the card stays
+
+    def test_descriptions_fit_telegram_limits(self):
+        import bottexts
+        self.assertEqual(set(bottexts.DESCRIPTIONS), {"uz", "ru", "en"})
+        for lc, (desc, short) in bottexts.DESCRIPTIONS.items():
+            self.assertLessEqual(len(desc), 512, lc); self.assertLessEqual(len(short), 120, lc)
+        for lang in ("uz", "uz-cyrl", "ru", "en"):
+            self.assertTrue(self.botmod.TEXTS[lang]["copy_btn"] and self.botmod.TEXTS[lang]["venue_btn"])
 
     def test_image_sent_as_file_is_read_like_a_photo(self):
         self.send(location={"latitude": 40.0, "longitude": 66.0}); self.click("pick:" + self.m["id"])

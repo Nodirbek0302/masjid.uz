@@ -24,6 +24,32 @@
     document.head.appendChild(sc);
   }
 
+  // The device position: inside Telegram (Bot API 8.0+) its own LocationManager (it asks once and remembers the answer; a browser prompt may be
+  // blocked in Telegram's webview), elsewhere, or when Telegram has no location, the browser's. `ok` gets {coords: {latitude, longitude}}.
+  function tgLocation() {
+    var lm = tg && tg.LocationManager;
+    return lm && tg.isVersionAtLeast && tg.isVersionAtLeast("8.0") ? lm : null;
+  }
+  function canLocate() { return !!(tgLocation() || navigator.geolocation); }
+  function getPosition(ok, fail, opts) {
+    fail = fail || function () {};
+    var lm = tgLocation();
+    function browser() { if (navigator.geolocation) navigator.geolocation.getCurrentPosition(ok, fail, opts); else fail(); }
+    if (!lm) { browser(); return; }
+    var done = false;
+    function once(fn) { return function (x) { if (!done) { done = true; fn(x); } }; }
+    var okOnce = once(ok), failOnce = once(fail);
+    setTimeout(function () { failOnce(); }, (opts && opts.timeout) || 8000);
+    function ask() {
+      if (!lm.isLocationAvailable) { if (!done) { done = true; browser(); } return; }
+      lm.getLocation(function (d) {
+        if (d && typeof d.latitude === "number") okOnce({ coords: { latitude: d.latitude, longitude: d.longitude } });
+        else failOnce();                                               // the user said no: Telegram remembers it, do not ask the browser too
+      });
+    }
+    if (lm.isInited) ask(); else lm.init(ask);
+  }
+
   // Every endpoint answers {success, httpStatus, code, message:{code,text,reason?}, data}: success returns `data`,
   // failure throws {status, code, message, data} (data carries e.g. the duplicates). A network failure stays a TypeError.
   var API = window.MASJIDUZ_API_BASE || "/masjiduz/v1";
@@ -352,8 +378,8 @@
     location.href = u.toString();                                                // keeps the #tgWebAppData hash inside Telegram
   }
   function refreshAll() {                                                        // a fresh device position, then everything that depends on it
-    if (prayerSel === "me" && navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(function (p) {
+    if (prayerSel === "me" && canLocate()) {
+      getPosition(function (p) {
         if (inRegion(p.coords.longitude, p.coords.latitude)) try { localStorage.setItem("lastpos", JSON.stringify({ lat: p.coords.latitude, lon: p.coords.longitude })); } catch (e) {}
         renderPrayer(); if (list.built) reloadList();
       }, function () { renderPrayer(); }, { maximumAge: 0, timeout: 6000 });
@@ -488,8 +514,8 @@
 
   // The device position decides the prayer times and the list's distances: asked once at the start, never blocking anything.
   function watchPosition() {
-    if (!navigator.geolocation) return;
-    navigator.geolocation.getCurrentPosition(function (p) {
+    if (!canLocate()) return;
+    getPosition(function (p) {
       var lon = p.coords.longitude, lat = p.coords.latitude;
       if (!inRegion(lon, lat)) return;
       try { localStorage.setItem("lastpos", JSON.stringify({ lat: lat, lon: lon })); } catch (e) {}
@@ -500,8 +526,8 @@
 
   // On the map: if the user has not touched it yet and the device is somewhere else than the cached start, jump there.
   function locate(start) {
-    if (!navigator.geolocation) return;
-    navigator.geolocation.getCurrentPosition(function (p) {
+    if (!canLocate()) return;
+    getPosition(function (p) {
       var lon = p.coords.longitude, lat = p.coords.latitude;
       if (!inRegion(lon, lat)) return;
       try { localStorage.setItem("lastpos", JSON.stringify({ lat: lat, lon: lon })); } catch (e) {}
@@ -1030,8 +1056,8 @@
       }).catch(function (e) { done(); toast(errText(e)); });
     }
     function fromMap() { var c = map.getCenter(); go(+c.lat.toFixed(6), +c.lng.toFixed(6), true); }
-    if (!navigator.geolocation) { fromMap(); return; }
-    navigator.geolocation.getCurrentPosition(function (p) {
+    if (!canLocate()) { fromMap(); return; }
+    getPosition(function (p) {
       var lat = +p.coords.latitude.toFixed(6), lon = +p.coords.longitude.toFixed(6);
       if (inRegion(lon, lat)) try { localStorage.setItem("lastpos", JSON.stringify({ lat: lat, lon: lon })); } catch (e) {}
       go(lat, lon, false);

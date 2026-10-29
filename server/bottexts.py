@@ -11,7 +11,7 @@ REGION_NAMES = {
 
 MORE = {
     "uz": {
-        "ai_notice": "🔒 Yuborgan rasm yoki ovozingiz oʻqish uchun Google (Gemini) ga joʻnatiladi va oʻqilgach saqlanmaydi.", "m": "m", "km": "km", "no_times": "Jamoat vaqtlari hali kiritilmagan.", "updated": "🕒 Yangilangan: {d}",
+        "venue_btn": "📍 Telegram xaritasida", "copy_btn": "📋 Vaqtlarni nusxalash", "ai_notice": "🔒 Yuborgan rasm yoki ovozingiz oʻqish uchun Google (Gemini) ga joʻnatiladi va oʻqilgach saqlanmaydi.", "m": "m", "km": "km", "no_times": "Jamoat vaqtlari hali kiritilmagan.", "updated": "🕒 Yangilangan: {d}",
         "route": "🧭 Yoʻnalish", "upd_btn": "✏️ Vaqtlarni yangilash", "sub_btn": "🔔 Obuna boʻlish", "unsub_btn": "🔕 Obunani bekor qilish",
         "card_head": "Eng yaqin masjid:", "near_ask": "Eng yaqin masjidni topish uchun joylashuvingizni yuboring 👇",
         "near_none": "Yaqin atrofda masjid topilmadi.",
@@ -30,7 +30,7 @@ MORE = {
         "sub_offer": "🔔 Bu masjid vaqtlari oʻzgarsa, xabar olish",
     },
     "ru": {
-        "ai_notice": "🔒 Отправленные фото или голос передаются в Google (Gemini) для распознавания и после обработки не сохраняются.", "m": "м", "km": "км", "no_times": "Время джамаата ещё не указано.", "updated": "🕒 Обновлено: {d}",
+        "venue_btn": "📍 На карте Telegram", "copy_btn": "📋 Скопировать время", "ai_notice": "🔒 Отправленные фото или голос передаются в Google (Gemini) для распознавания и после обработки не сохраняются.", "m": "м", "km": "км", "no_times": "Время джамаата ещё не указано.", "updated": "🕒 Обновлено: {d}",
         "route": "🧭 Маршрут", "upd_btn": "✏️ Обновить время", "sub_btn": "🔔 Подписаться", "unsub_btn": "🔕 Отписаться",
         "card_head": "Ближайшая мечеть:", "near_ask": "Чтобы найти ближайшую мечеть, отправьте свою геопозицию 👇",
         "near_none": "Поблизости мечетей не найдено.",
@@ -49,7 +49,7 @@ MORE = {
         "sub_offer": "🔔 Получать сообщения, если время этой мечети изменится",
     },
     "en": {
-        "ai_notice": "🔒 A photo or voice message you send is passed to Google (Gemini) to be read and is not kept afterwards.", "m": "m", "km": "km", "no_times": "Congregation times have not been entered yet.", "updated": "🕒 Updated: {d}",
+        "venue_btn": "📍 On the Telegram map", "copy_btn": "📋 Copy the times", "ai_notice": "🔒 A photo or voice message you send is passed to Google (Gemini) to be read and is not kept afterwards.", "m": "m", "km": "km", "no_times": "Congregation times have not been entered yet.", "updated": "🕒 Updated: {d}",
         "route": "🧭 Directions", "upd_btn": "✏️ Update the times", "sub_btn": "🔔 Subscribe", "unsub_btn": "🔕 Unsubscribe",
         "card_head": "Nearest mosque:", "near_ask": "Share your location to find the nearest mosque 👇",
         "near_none": "No mosque found nearby.",
@@ -68,3 +68,22 @@ MORE = {
         "sub_offer": "🔔 Get a message when this mosque's times change",
     },
 }
+
+
+# The bot's profile: the description is shown in an empty chat before /start (<= 512 characters), the short one on the profile and with a
+# shared link (<= 120). Uzbek is the default for every other language.
+DESCRIPTIONS = {
+    "uz": ("🕌 Masjid xaritasi: eng yaqin masjidni toping, jamoat namozi vaqtlarini koʻring va yangilang.\n\n"
+           "📍 Joylashuvingizni yuboring, masjidni tanlang, keyin vaqtlar jadvalining rasmini yuboring yoki vaqtlarni ovozli xabar bilan ayting. "
+           "🔔 Masjidga obuna boʻlsangiz, vaqtlar oʻzgarganda xabar beraman; ⏰ namoz oldidan eslatma ham bor.",
+           "Eng yaqin masjid va jamoat namozi vaqtlari. Vaqtlarni rasm yoki ovoz bilan yangilang."),
+    "ru": ("🕌 Карта мечетей: найдите ближайшую мечеть, смотрите и обновляйте время коллективного намаза.\n\n"
+           "📍 Отправьте геопозицию, выберите мечеть, затем пришлите фото расписания или назовите время голосом. "
+           "🔔 Подпишитесь на мечеть, и я сообщу, когда время изменится; ⏰ есть и напоминания перед намазом.",
+           "Ближайшая мечеть и время коллективного намаза. Обновляйте время фото или голосом."),
+    "en": ("🕌 Mosque map: find the nearest mosque, see and update its congregation prayer times.\n\n"
+           "📍 Share your location, choose the mosque, then send a photo of its timetable or say the times in a voice message. "
+           "🔔 Subscribe to a mosque and I will tell you when its times change; ⏰ reminders before prayers too.",
+           "The nearest mosque and its congregation prayer times. Update them with a photo or your voice."),
+}
+

@@ -785,7 +785,7 @@ class ConfigValidation(unittest.TestCase):
         self.assertEqual((c.api_base, c.cors_origins, c.admin_token, c.moderator_ids, c.gemini_keys), ("/masjiduz/v1", [], "", set(), []))
         self.assertTrue(c.show_tile_mosques)
         self.assertEqual(self.cfg(TIMUS_ENV="").env, "dev")
-        self.assertEqual(c.version, "1.0.3")
+        self.assertEqual(c.version, "1.0.4")
 
     def test_port_zero_is_accepted_in_dev(self):
         self.assertEqual(self.cfg(PORT="0").port, 0)

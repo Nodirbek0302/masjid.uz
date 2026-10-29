@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.4 — the bot keeps the chat tidy; newer Telegram features
+### Changed
+- A button press updates the message it belongs to (`editMessageText` / `editMessageCaption`) instead of sending a new one; on a mosque card the card stays and only its subscribe button flips, with a short notice (`answerCallbackQuery`); the `/subs` list is redrawn without the removed mosque. If Telegram cannot edit, a new message is sent as before.
+- Reading a photo or voice message: 👀 / 👌 (or 🤔) reactions on the user's own message and a temporary "Reading…" draft (`sendMessageDraft`) with the typing status, instead of a "Reading…" message that stayed in the chat.
+### Added
+- Button colours (`style`, Bot API 9.4): save green, cancel and "switch everything off" red, the main actions blue. Older apps show them as before.
+- Mosque card: "📋 Copy the times" (`copy_text`) and "📍 On the Telegram map" (`sendVenue`, the map inside Telegram with directions in any maps app).
+- The bot's description and short description in Uzbek, Russian and English (`setMyDescription`, `setMyShortDescription`), set at start.
+- Mini App: inside Telegram (Bot API 8.0+) the position comes from Telegram's `LocationManager` (the browser's location prompt can be blocked in Telegram's webview); elsewhere from the browser, as before.
+### Migrations
+- none
+
 ## 1.0.3 — web on, moderator page apart
 ### Added
 - `TIMUS_APP_MASJIDUZ_ADMIN_URL`: the bot's `/admin` button opens this address (the moderator page on its own domain). Empty: a moderator is told the panel is not connected; nobody else gets an answer.
