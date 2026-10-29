@@ -401,7 +401,8 @@ class Bot:
         tx = TEXTS[lang]
         cmds = [{"command": c, "description": d} for c, d in CMDS[lang]]
         if user["id"] in self.admin_ids:
-            cmds += [{"command": "admin", "description": "Moderator"}, {"command": "id", "description": "Telegram ID"}]
+            cmds += [{"command": "admin", "description": "Moderator"}] + ([{"command": "update", "description": tx["imp_cmd"]}] if self.osm_import else []) \
+                + [{"command": "id", "description": "Telegram ID"}]
         try:
             self.api("setMyCommands", commands=cmds, scope={"type": "chat", "chat_id": chat})
             if self.webapp_url.startswith("https://"):
@@ -485,6 +486,12 @@ class Bot:
             self.ask_language(chat)
         elif cmd == "/id":
             self.say(chat, tx["id"].format(id=uid))
+        elif cmd == "/update":                                # moderators: the OpenStreetMap sync right now (the same as the /admin button)
+            if uid in self.admin_ids:
+                if self.osm_import:
+                    self.start_import(chat, tx)
+                else:
+                    self.say(chat, tx["imp_off"])
         elif cmd == "/admin":
             if uid in self.admin_ids:
                 rows = []
@@ -770,7 +777,7 @@ class Bot:
     def start_import(self, chat, tx):
         """The moderator's button: the OpenStreetMap sync runs in the background (Overpass takes a minute or more), then says what it did."""
         if not self._importing.acquire(blocking=False):
-            return self.toast(tx["imp_busy"], alert=True)
+            return self.toast(tx["imp_busy"], alert=True) if getattr(self._tap, "cb", None) else self.say(chat, tx["imp_busy"])
         self.say(chat, tx["imp_start"])
 
         def work():
@@ -782,7 +789,8 @@ class Bot:
                     text = tx["imp_done"].format(**{k: r.get(k, 0) for k in ("added", "updated", "unchanged", "protected_edited", "near_existing", "photos")})
             except Exception as e:
                 log("bot import failed: %s" % type(e).__name__)
-                text = tx["imp_fail"].format(why=type(e).__name__)
+                net = isinstance(e, (urllib.error.URLError, ConnectionError)) and not isinstance(e, urllib.error.HTTPError)   # no way out to Overpass
+                text = tx["imp_net"] if net else tx["imp_fail"].format(why=type(e).__name__)
             finally:
                 self._importing.release()
             try:
@@ -949,8 +957,9 @@ def main(cfg):
             log("bot description not set (%s): %s" % (lc, type(e).__name__))
     for aid in ADMIN_IDS:                         # the extra /admin command is visible to allow-listed admins only
         try:
-            call("setMyCommands", commands=[{"command": "start", "description": "Start"}, {"command": "admin", "description": "Moderator"},
-                                            {"command": "id", "description": "Telegram ID"}], scope={"type": "chat", "chat_id": aid})
+            call("setMyCommands", commands=[{"command": "start", "description": "Start"}, {"command": "admin", "description": "Moderator"}]
+                 + ([{"command": "update", "description": "Masjidlar bazasini yangilash"}] if cfg.bot_osm_import else [])
+                 + [{"command": "id", "description": "Telegram ID"}], scope={"type": "chat", "chat_id": aid})
         except Exception as e:
             log("could not set admin commands for %s: %s" % (aid, type(e).__name__))
     if WEBAPP_URL.startswith("https://"):

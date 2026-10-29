@@ -324,6 +324,35 @@ class BotFlow(unittest.TestCase):
             __import__("time").sleep(0.05)
         self.assertIn("TimeoutError", self.msgs()[-1])
 
+    def test_update_command_for_moderators(self):
+        import urllib.error
+        done = []
+        self.bot.osm_import = lambda: done.append(1) or {"added": 5}
+        self.user = {"id": 556, "first_name": "Eve", "language_code": "uz"}; self.sent.clear()
+        self.send(text="/update")                                                              # not a moderator: no answer, nothing runs
+        __import__("time").sleep(0.2)
+        self.assertEqual((self.msgs(), done), ([], []))
+        self.user = {"id": 7, "first_name": "Mod", "language_code": "uz"}; self.sent.clear()
+        self.send(text="/update")
+        for _ in range(50):
+            if any("yangilandi" in t for t in self.msgs()):
+                break
+            __import__("time").sleep(0.05)
+        self.assertIn("1–8 daqiqa", self.msgs()[0]); self.assertIn("5 ta qoʻshildi", self.msgs()[-1]); self.assertEqual(done, [1])
+        # the deployment does not let the bot out to Overpass: said plainly
+        self.bot.osm_import = lambda: (_ for _ in ()).throw(urllib.error.URLError("no route"))
+        self.sent.clear(); self.send(text="/update")
+        for _ in range(50):
+            if any("OpenStreetMapʼga ulana olmadi" in t for t in self.msgs()):
+                break
+            __import__("time").sleep(0.05)
+        self.assertIn("overpass-api.de", self.msgs()[-1])
+        # the moderator's command menu lists it
+        self.bot.osm_import = lambda: {}
+        self.bot.apply_language(555, self.user, "uz")
+        cmds = [c["command"] for c in self.calls("setMyCommands")[-1]["commands"]]
+        self.assertIn("update", cmds)
+
     def test_only_moderators_see_and_use_the_update_button(self):
         ran = []
         self.bot.osm_import = lambda: ran.append(1) or {}
@@ -337,7 +366,9 @@ class BotFlow(unittest.TestCase):
         self.user = {"id": 7, "first_name": "Mod", "language_code": "uz"}; self.sent.clear()
         self.send(text="/admin")
         self.assertNotIn("osm:sync", [b.get("callback_data") for b in self.buttons()])
-        self.assertEqual((make_cfg().bot_osm_import, make_cfg(BOT_OSM_IMPORT="1").bot_osm_import), (False, True))
+        self.assertEqual((make_cfg().bot_osm_import, make_cfg(BOT_OSM_IMPORT="0").bot_osm_import), (True, False))   # on unless switched off
+        self.send(text="/update")
+        self.assertIn("BOT_OSM_IMPORT=0", self.msgs()[-1])
 
     def test_descriptions_fit_telegram_limits(self):
         import bottexts

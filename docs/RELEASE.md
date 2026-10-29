@@ -1,4 +1,12 @@
-# Release v1.0.6
+# Release v1.0.7
+
+- **Commit:** the commit the annotated tag `v1.0.7` points to (`git rev-parse v1.0.7^{commit}`).
+- **Change:** the moderators' manual OpenStreetMap sync in the bot (`/update`, and the button under `/admin`) is on by default; it only answers the ids in `MODERATOR_IDS` (CHANGELOG 1.0.7).
+- **Server side:** nothing to set. The `bot` container needs to reach `overpass-api.de` (the same host `import-osm` uses); if it cannot, the bot tells the moderator, and the nightly `import-osm` keeps the database up to date anyway. `TIMUS_APP_MASJIDUZ_BOT_OSM_IMPORT=0` switches it off.
+- **Migrations:** none. **New env vars:** none (the default of `BOT_OSM_IMPORT` changed from 0 to 1).
+- **How it was tested:** 257 tests, ruff.
+
+## Release v1.0.6
 
 
 - **Commit:** the commit the annotated tag `v1.0.6` points to (`git rev-parse v1.0.6^{commit}`).

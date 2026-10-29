@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.7 — the moderators' database update works out of the box
+### Changed
+- The bot's "update the mosque database" (OpenStreetMap sync) is on by default for the moderators in `MODERATOR_IDS`: a button under `/admin` and the new command `/update` (in the moderators' command menu). `TIMUS_APP_MASJIDUZ_BOT_OSM_IMPORT=0` switches it off.
+- When the bot cannot reach Overpass (the network is closed), it says so plainly instead of naming an error.
+### Migrations
+- none
+
 ## 1.0.6 — the bell in the Mini App, moderator delete, clearer voice reading, a moderator sync button
 ### Added
 - Mini App: the subscribe button is a bell that works right there (`GET`/`POST /me/subscriptions/{id}`, signed by Telegram): it turns green and rings when switched on, says so in a notice and vibrates (Telegram haptics); before, it opened the bot behind the Mini App and nothing visible happened. In a plain browser it still opens the bot.
