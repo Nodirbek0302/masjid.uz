@@ -1428,7 +1428,8 @@ class Request(BaseHTTPRequestHandler):
         return self.bdb.lang_of(int(actor[3:]))
 
     def r_me(self, q):
-        self.send_ok({"lang": self.me_lang()})
+        actor = self.admin_actor()                               # only a signature-verified Telegram moderator (never the bearer token here)
+        self.send_ok({"lang": self.me_lang(), "moderator": bool(actor and actor.startswith("admin:") and actor != "admin:token")})
 
     def r_me_lang(self, q):
         actor, _ = self.identity()

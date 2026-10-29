@@ -82,6 +82,22 @@ class MiniAppSubscriptions(ServerCase):
         self.assertEqual(self.call("POST", path, {"on": False}, headers=self.tg())[1]["data"], {"subscribed": False})
         self.assertEqual(db("SELECT count(*) FROM bot_subs"), [(0,)])
 
+    def test_me_tells_the_mini_app_who_moderates_and_a_moderator_can_delete_and_undo(self):
+        me = lambda h=None: self.call("GET", "/me", headers=h)[1]["data"]           # noqa: E731
+        self.assertEqual(me(), {"lang": None, "moderator": False})                  # a plain browser
+        self.assertFalse(me(self.tg())["moderator"])                                 # a Telegram user who does not moderate
+        mod = {"X-Telegram-Init-Data": helpers.sign_init_data({"id": helpers.ADMIN_ID, "first_name": "Owner"})}
+        self.assertTrue(me(mod)["moderator"])
+        # what the Mini App's delete button does: archive (gone from the map and the list), then undo
+        s, r = self.call("POST", "/admin/mosques/%s/archive" % self.mid, {"note": "Deleted by a moderator in the Mini App"}, headers=mod)
+        self.assertEqual((s, r["data"]["status"]), (200, "archived"))
+        self.assertNotIn(self.mid, [m["id"] for m in self.call("GET", "/mosques/nearest?lat=40.5&lon=66.5&limit=5")[1]["data"]["items"]])
+        self.assertEqual(db("SELECT actor FROM mosque_history WHERE mosque_id=%s AND action='archive'", self.mid), [("admin:%d" % helpers.ADMIN_ID,)])
+        s, r = self.call("POST", "/admin/mosques/%s/restore" % self.mid, {"note": "Restored by a moderator in the Mini App"}, headers=mod)
+        self.assertEqual((s, r["data"]["status"]), (200, "unverified"))
+        s, r = self.call("POST", "/admin/mosques/%s/archive" % self.mid, {"note": "x"}, headers=self.tg(), ip="203.0.113.77")
+        self.assertIn(s, (401, 403))                                                     # anybody else cannot
+
     def test_refusals(self):
         path = "/me/subscriptions/" + self.mid
         for method, body in (("GET", None), ("POST", {"on": True})):

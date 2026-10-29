@@ -79,12 +79,14 @@
   function api(method, path, body, opts) { return send(method, path, "application/json", body ? JSON.stringify(body) : undefined, opts); }
 
   // (placed after api() so the request really goes to the API base)
+  // Inside Telegram: who this is (once per page): the language chosen in the bot and whether they moderate
+  var me = tgData ? api("GET", "/me").catch(function () { return {}; }) : Promise.resolve({});
   try {
     if (tgData && !sessionStorage.getItem("langSync")) {
       sessionStorage.setItem("langSync", "1");
-      api("GET", "/me").then(function (d) {
+      me.then(function (d) {
         if (d && d.lang && d.lang !== I18N.lang()) { I18N.set(d.lang); location.reload(); }
-      }).catch(function () {});
+      });
     }
   } catch (e) {}
 
@@ -700,7 +702,7 @@
     opts = opts || {};
     showPanel(skeleton());
     api("GET", "/mosques/" + id).then(function (m) {
-      var lb = label(m);
+      var lb = label(m), modRow = el("div", { class: "row mod" });
       var node = el("div", {}, [
         photoBlock(m),
         el("h2", m.name ? { text: m.name } : { class: "missing", text: T("m.name_unknown") }),
@@ -723,8 +725,10 @@
           m.origin === "imported" ? null : btn("", T("btn.edit"), function () { editForm(m); }),     // map-data mosques: only the times are editable (see the button above)
           btn("ghost", T("btn.history"), function () { historyView(m); }),
           btn("danger", T("btn.report"), function () { reportForm(m); })
-        ])
+        ]),
+        modRow
       ]);
+      me.then(function (d) { if (d && d.moderator) modRow.appendChild(btn("danger", "🗑 " + T("del.btn"), function () { confirmDelete(m); })); });
       showPanel(node);
       if (opts.fit) {                                   // show both "me" and the mosque, clear of the panel
         var pad = mapPadding();
@@ -751,6 +755,39 @@
       subButton(m)
     ];
   }
+  // Moderators only (the server checks again): "delete" archives the mosque, so it leaves the map and the list but keeps its history and
+  // can be brought back. Telegram's own popup asks first (a stray tap never deletes); for a few seconds the notice offers to undo it.
+  function confirmDelete(m) {
+    var name = m.name || T("m.name_unknown"), text = T("del.ask", { name: name });
+    function go() {
+      api("POST", "/admin/mosques/" + m.id + "/archive", { note: "Deleted by a moderator in the Mini App" }).then(function () {
+        try { tg.HapticFeedback.notificationOccurred("success"); } catch (e) {}
+        hidePanel(); refreshAfterChange();
+        undoBar(T("del.done"), function () {
+          return api("POST", "/admin/mosques/" + m.id + "/restore", { note: "Restored by a moderator in the Mini App" }).then(function () {
+            toast(T("del.restored")); refreshAfterChange(); openMosque(m.id);
+          });
+        });
+      }).catch(function (e) { toast(errText(e)); });
+    }
+    if (tg && tg.showPopup && tg.isVersionAtLeast && tg.isVersionAtLeast("6.2")) {
+      tg.showPopup({ title: T("del.title"), message: text.slice(0, 256), buttons: [{ id: "del", type: "destructive", text: T("del.yes") }, { type: "cancel" }] },
+        function (id) { if (id === "del") go(); });
+    } else if (window.confirm(text)) go();
+  }
+  function refreshAfterChange() {
+    if (map) loadMosques();
+    if (list.built) reloadList();
+  }
+  function undoBar(text, undo) {
+    var t = $("toast"); clearTimeout(toast.t);
+    t.textContent = ""; t.hidden = false;
+    var b = el("button", { type: "button", class: "undo", text: T("del.undo") });
+    b.onclick = function () { b.disabled = true; undo().catch(function (e) { toast(errText(e)); }); t.hidden = true; };
+    t.appendChild(el("span", { text: text + " " })); t.appendChild(b);
+    toast.t = setTimeout(function () { t.hidden = true; }, 10000);
+  }
+
   // The bell: inside Telegram the subscription is set right here (signed by Telegram) and the button shows it; in a plain browser it opens the bot.
   function subButton(m) {
     var bot = cfg.botUsername;

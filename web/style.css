@@ -301,4 +301,5 @@ body.panel-open #view-fab{bottom:calc(var(--nav-h) + var(--panel-h,0px) + 14px)}
 .btn.bell.ring .bell-i{animation:bell-ring .9s ease-in-out}
 @keyframes bell-ring{0%{transform:rotate(0)}15%{transform:rotate(18deg)}30%{transform:rotate(-16deg)}45%{transform:rotate(12deg)}60%{transform:rotate(-8deg)}75%{transform:rotate(4deg)}100%{transform:rotate(0)}}
 @media(prefers-reduced-motion:reduce){.btn.bell.ring .bell-i{animation:none}}
-
+#toast .undo{margin-left:8px;padding:4px 10px;border:0;border-radius:99px;background:#fff;color:var(--g800);font:inherit;font-weight:700;cursor:pointer}
+.row.mod:empty{display:none}

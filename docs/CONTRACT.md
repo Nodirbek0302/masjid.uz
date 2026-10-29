@@ -59,7 +59,7 @@ else `X-Client-Id` (browser id). Only a verified Telegram profile is recorded.
 
 ## 2. Health
 
-`GET /masjiduz/v1/health` → `data: {"status": "UP"|"DEGRADED"|"DOWN", "version": "1.0.6", "commit": "...", "env": "staging", "db": "UP"|"DOWN"}`.
+`GET /masjiduz/v1/health` → `data: {"status": "UP"|"DEGRADED"|"DOWN", "version": "1.0.7", "commit": "...", "env": "staging", "db": "UP"|"DOWN"}`.
 `503` when DOWN (database unreachable). Public, no rate limit. The database is probed in the background (`SELECT 1` every 2 s on its own long-lived connection, 2 s timeout); a request only reads the last result, so it never waits on the database (a probe older than 10 s counts as DOWN).
 
 ## 3. Public endpoints
@@ -88,7 +88,7 @@ Body (any of): `lat`, `lon`, `name`, `address`, `prayerTimes` (merged key by key
 ### `GET /masjiduz/v1/mosques/{id}/history?limit&cursor` → list (newest first) of `{seq, mosqueId, version, action, actor: "user"|"moderator"|"osm"|"system"|null, at, changes: {field: [old, new]}, note}`. No personal identifiers.
 ### `POST /masjiduz/v1/mosques/{id}/reports` → 201 `{"ok": true}`
 Body: `kind` (`incorrect|duplicate|relocated|closed|other`), `reason` (1–1000, required). A client identity header is required (400 otherwise). Errors: `error.alreadyReported` (CONFLICT). Three open reports from different people move an unverified mosque to `reported`.
-### `GET /masjiduz/v1/me` → `{"lang": "uz"|"uz-cyrl"|"ru"|"en"|null}` (verified Telegram user only; else null).
+### `GET /masjiduz/v1/me` → `{"lang": "uz"|"uz-cyrl"|"ru"|"en"|null, "moderator": bool}` (`lang` for a verified Telegram user, else null; `moderator` true only for a signature-verified Telegram user in `MODERATOR_IDS`: the Mini App then shows the moderator's delete button, which calls `POST /admin/mosques/{id}/archive` and offers `…/restore` to undo).
 ### `POST /masjiduz/v1/me/lang` body `{"lang": …}` → `{"lang": …}`.
 ### `GET /masjiduz/v1/me/subscriptions/{id}` → `{"subscribed": bool}`; `POST /masjiduz/v1/me/subscriptions/{id}` body `{"on": bool}` → `{"subscribed": bool}`
 The Mini App's bell: the bot's subscription to a mosque (the bot announces when its congregation times change). Signature-verified Telegram user only (`X-Telegram-Init-Data`), else `401`. `404` unknown mosque, `409 MASJIDUZ_MOSQUE_ARCHIVED` (subscribing to an archived one), `409 error.subLimit` (at most 20).

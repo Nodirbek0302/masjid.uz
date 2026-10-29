@@ -1,4 +1,11 @@
-# Release v1.0.6
+# Release v1.0.7
+
+- **Commit:** the commit the annotated tag `v1.0.7` points to (`git rev-parse v1.0.7^{commit}`).
+- **Change:** a moderator can delete (archive) a mosque from the Mini App, with a confirmation popup and undo; `GET /me` says `moderator` (CHANGELOG 1.0.7). It uses the existing `/admin/mosques/{id}/archive|restore` API with the Telegram signature, so `admin.html` can stay closed.
+- **Migrations:** none. **New env vars:** none. `MODERATOR_IDS` must hold the moderator's Telegram id (722170186).
+- **How it was tested:** 256 tests, ruff; in a phone-size browser with a signed Telegram launch: no button for a non-moderator; for the moderator the popup, Cancel (nothing changes), Yes (archived, gone from the list), Undo (restored).
+
+## Release v1.0.6
 
 - **Commit:** the commit the annotated tag `v1.0.6` points to (`git rev-parse v1.0.6^{commit}`).
 - **Change:** the Mini App's subscribe bell works in place (new `GET`/`POST /me/subscriptions/{id}`, Telegram signature, own rate budget); voice reading understands clock phrases; an optional moderator button in the bot that runs the OpenStreetMap sync; `import-osm` never runs twice at once (CHANGELOG 1.0.6).

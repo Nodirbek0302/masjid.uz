@@ -395,7 +395,7 @@ class Api(ServerCase):
         self.assertEqual(set(c["prayer"]), {"fajrAngle", "ishaAngle", "asrFactor", "dhuhrOffsetMin"})
         self.assertEqual((c["adminTokenLogin"], c["photoReading"], c["voiceReading"]), (False, False, False))      # no admin token, no Gemini key here
         self.assertEqual(c["duplicateRadiusM"], 50)
-        self.assertEqual(self.call("GET", "/me")[1]["data"], {"lang": None})
+        self.assertEqual(self.call("GET", "/me")[1]["data"], {"lang": None, "moderator": False})
 
     def test_mosque_lists_are_cursor_lists_and_the_map_list_is_compact(self):
         for i in range(4):
@@ -583,11 +583,12 @@ class Moderation(ServerCase):
         user = {"id": 880001, "first_name": "Lang"}
         h = {"X-Telegram-Init-Data": sign_init_data(user)}
         call = lambda method, path, headers=None, body=None: self.call(method, path, body, headers=headers, addr=addr)    # noqa: E731
-        self.assertEqual(call("GET", "/me", h)[1]["data"], {"lang": None})                      # not asked yet in the bot
+        self.assertEqual(call("GET", "/me", h)[1]["data"], {"lang": None, "moderator": False})  # not asked yet in the bot
         botdb.BotDB(srv.store).set_lang(880001, "uz-cyrl")
-        self.assertEqual(call("GET", "/me", h)[1]["data"], {"lang": "uz-cyrl"})
-        self.assertEqual(call("GET", "/me", {"X-Telegram-Init-Data": sign_init_data(user, token="1:OTHER")})[1]["data"], {"lang": None})   # forged: nothing
-        self.assertEqual(call("GET", "/me")[1]["data"], {"lang": None})
+        self.assertEqual(call("GET", "/me", h)[1]["data"], {"lang": "uz-cyrl", "moderator": False})
+        forged = {"X-Telegram-Init-Data": sign_init_data(user, token="1:OTHER")}
+        self.assertEqual(call("GET", "/me", forged)[1]["data"], {"lang": None, "moderator": False})       # forged: nothing
+        self.assertEqual(call("GET", "/me")[1]["data"], {"lang": None, "moderator": False})
         s, r = call("POST", "/me/lang", h, {"lang": "ru"})                                      # chosen on the web: the bot follows
         self.assertEqual((s, r["data"]), (200, {"lang": "ru"}))
         self.assertEqual(botdb.BotDB(srv.store).lang_of(880001), "ru")
