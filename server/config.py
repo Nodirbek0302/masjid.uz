@@ -81,7 +81,7 @@ class Config:
         # -- database
         self.db = {"host": e("DB_HOST", "127.0.0.1"), "port": _int(P + "DB_PORT", 5432, 1, 65535), "dbname": e("DB_NAME", "masjid"),
                    "user": e("DB_USER", "masjid"), "password": e("DB_PASSWORD") or None}
-        self.db_pool_max = _int(P + "DB_POOL_MAX", 10, 1, 100)          # connections of the whole container (split between the workers)
+        self.db_pool_max = _int(P + "DB_POOL_MAX", 40, 1, 200)          # connections of the whole serve container (split between the workers, kept open)
         self.web_concurrency = _int(P + "WEB_CONCURRENCY", 4, 1, 16)      # serve worker processes sharing one socket
         self.worker_fd = _int(P + "WORKER_FD", 0, 0, 65535)               # set by the leader process for its workers (the inherited socket); never by hand
 

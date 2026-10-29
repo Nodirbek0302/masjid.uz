@@ -1,4 +1,19 @@
-# Release v1.0.1
+# Release v1.0.2
+
+- **Commit:** the commit the annotated tag `v1.0.2` points to (`git rev-parse v1.0.2^{commit}`).
+- **Fixes acceptance 8b (§13.8):** `/mosques/nearest` p95 < 300 ms with 60 parallel clients. The 660 ms on every endpoint (even `/health` on an empty database) came from waiting on database connections, not from CPU: see CHANGELOG 1.0.2.
+- **Migrations:** none.
+- **Env vars:** `TIMUS_APP_MASJIDUZ_WEB_CONCURRENCY` (since v1.0.1, default 4 = four cores; CONTRACT §10). `TIMUS_APP_MASJIDUZ_DB_POOL_MAX` default is now **40** for the serve container (10 per worker, all opened at start and kept open). With `bot` (at most 10) the service holds about 50 connections to the cluster: please check the cluster allows that, or set `DB_POOL_MAX` lower (at least 2 per worker; fewer connections means more waiting under load).
+- **How it was tested:** 237 tests, ruff. Load (`ab -n 900 -c 60`, 16-core laptop, 2205 mosques, `WEB_CONCURRENCY=4`, `DB_POOL_MAX=40`), p95:
+
+  | database | `/mosques/nearest` | `/health` | `/mosques?limit=20` |
+  |---|---|---|---|
+  | local | 34 ms | 5 ms | 21 ms |
+  | simulated remote: 0.6 s per new connection, +5 ms per reply | 44 ms | 5 ms | 30 ms |
+  | simulated remote, +20 ms per reply | 143 ms | 13 ms | 140 ms |
+  | v1.0.1 against the +5 ms database (reproduces the 660 ms) | 638 ms | 659 ms | — |
+
+## Release v1.0.1
 
 - **Commit:** the commit the annotated tag `v1.0.1` points to (`git rev-parse v1.0.1^{commit}`).
 - **Fixes the v1.0.0 acceptance findings:** (1) `POST /map/yandex-failed` had no rate limit: it and `POST /me/lang` now answer 429 + `Retry-After` past `WRITE_RATE_PER_HOUR` per address and hour (CONTRACT §6); (2) latency: `WEB_CONCURRENCY` worker processes, a lighter `/mosques/nearest`, a cached `/health` probe.

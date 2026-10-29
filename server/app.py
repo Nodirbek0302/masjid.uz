@@ -22,6 +22,7 @@ import threading
 import time
 import unicodedata
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -55,6 +56,14 @@ LANGS = ("uz", "uz-cyrl", "ru", "en")
 
 def now():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+# the `n` nearest non-archived mosques within `r` metres (the same great-circle formula as haversine_m), nearest first, equal distances by id
+NEAREST_SQL = """SELECT * FROM (
+  SELECT m.*, 2 * 6371000.0 * asin(sqrt(power(sin(radians(m.lat - %(lat)s) / 2), 2)
+         + cos(radians(%(lat)s)) * cos(radians(m.lat)) * power(sin(radians(m.lon - %(lon)s) / 2), 2))) AS _d
+  FROM mosques m WHERE m.status <> 'archived' AND m.lat BETWEEN %(la1)s AND %(la2)s AND m.lon BETWEEN %(lo1)s AND %(lo2)s) x
+WHERE _d <= %(r)s ORDER BY round(_d::numeric, 1), id::text LIMIT %(n)s"""
 
 
 def haversine_m(lat1, lon1, lat2, lon2):
@@ -213,30 +222,50 @@ def iso(v):
     return v.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") if isinstance(v, datetime) else str(v)    # always UTC, whatever the session time zone
 
 
+def _no_autocommit(conn):
+    """Pool reset: every connection handed out is transactional again (Store.reading turns autocommit on for one read)."""
+    conn.autocommit = False
+
+
 class Store:
-    def __init__(self, cfg, name="masjiduz", statement_timeout_ms=5000, check=True):
+    def __init__(self, cfg, name="masjiduz", statement_timeout_ms=5000, check=True, warm=False):
         self.cfg = cfg
         if check:
             todo = migrate.pending(cfg)
             if todo:
                 raise ConfigError("database migrations are pending (%s): run the migrate command first" % ", ".join(todo))
         opts = "-c search_path=%s -c statement_timeout=%d -c application_name=%s" % (migrate.SCHEMA, statement_timeout_ms, name)
-        self.pool = ConnectionPool(cfg.conninfo(), min_size=1, max_size=cfg.db_pool_max, timeout=5, open=True,
+        # serve keeps every connection open (warm): opening one to a remote cluster can take longer than the whole request budget, so it must not
+        # happen while requests wait. The other commands open connections on demand and need few.
+        size = cfg.db_pool_max if warm else min(cfg.db_pool_max, 10)
+        self.pool = ConnectionPool(cfg.conninfo(), min_size=size if warm else 1, max_size=size, timeout=5, open=True, reset=_no_autocommit,
                                    kwargs={"row_factory": dict_row, "options": opts})
         self._backfill_search()
 
     def close(self):
         self.pool.close()
 
+    @contextmanager
+    def reading(self):
+        """A pooled connection for a single read: autocommit, so no COMMIT round trip to the database after it."""
+        with self.pool.connection() as c:
+            c.autocommit = True                          # the pool's reset turns it off again before anybody else gets the connection
+            yield c
+
     _ping = (0.0, True)
     _ping_lock = threading.Lock()
+    _probe = None                         # (when, ok) of the background probe, once serve has started it
 
     def ping_cached(self, ttl=1.0):
-        """Health checks hammer this: the answer is reused for a second (one probe per second, not one new connection per request)."""
-        with self._ping_lock:
-            t, ok = self._ping
-            if time.monotonic() - t < ttl:
-                return ok
+        """Health checks hammer this and must never wait on the database. Under serve a background probe keeps the answer (a probe older than
+        10 s counts as DOWN); without it the answer is reused for a second, and while one request probes the others get the last answer."""
+        if self._probe is not None:
+            t, ok = self._probe
+            return ok and time.monotonic() - t < 10
+        t, ok = self._ping
+        if time.monotonic() - t < ttl or not self._ping_lock.acquire(blocking=False):
+            return ok
+        try:
             try:
                 self.ping()
                 ok = True
@@ -244,6 +273,37 @@ class Store:
                 ok = False
             self._ping = (time.monotonic(), ok)
             return ok
+        finally:
+            self._ping_lock.release()
+
+    def start_health_probe(self, every=2.0):
+        """`SELECT 1` every `every` seconds on its own long-lived connection (reopened after an error): a busy pool is not an outage, and no
+        request ever pays for opening a connection."""
+        opts = "-c search_path=%s -c statement_timeout=2000 -c application_name=masjiduz-health" % migrate.SCHEMA
+
+        stop = threading.Event()
+
+        def loop():
+            conn = None
+            while not stop.is_set():
+                try:
+                    if conn is None or conn.closed:
+                        conn = psycopg.connect(self.cfg.conninfo(2), autocommit=True, options=opts)
+                    conn.execute("SELECT 1")
+                    self._probe = (time.monotonic(), True)
+                except Exception:
+                    self._probe = (time.monotonic(), False)
+                    try:
+                        conn and conn.close()
+                    except Exception:
+                        pass
+                    conn = None
+                stop.wait(every)
+            if conn is not None:
+                conn.close()
+        self._probe = (time.monotonic(), True)
+        threading.Thread(target=loop, daemon=True, name="health-probe").start()
+        return stop
 
     def _rate_key(self, bucket, key):
         return hmac.new(self.cfg.actor_salt.encode(), (bucket + "|" + key).encode(), hashlib.sha256).hexdigest()[:24]
@@ -335,13 +395,13 @@ class Store:
         return self.row(r)
 
     def get(self, m_id):
-        with self.pool.connection() as c:
+        with self.reading() as c:
             return self._fetch(c.cursor(), m_id)
 
     def map_items(self, bbox):
         """Compact points for the map inside a bounding box: (items, truncated). Archived records are left out."""
         w, s, e, n = bbox
-        with self.pool.connection() as c:
+        with self.reading() as c:
             rows = c.execute("SELECT id, lat, lon, name, status FROM mosques WHERE status<>'archived' AND lat BETWEEN %s AND %s "
                              "AND lon BETWEEN %s AND %s ORDER BY id LIMIT %s", (s, n, w, e, MAP_LIMIT + 1)).fetchall()
         return [dict(r, id=str(r["id"])) for r in rows[:MAP_LIMIT]], len(rows) > MAP_LIMIT
@@ -353,7 +413,7 @@ class Store:
                 uuid.UUID(after)
             except ValueError:
                 raise ApiError(400, "validation", "invalid cursor", reason="cursor") from None
-        with self.pool.connection() as c:
+        with self.reading() as c:
             rows = c.execute("SELECT * FROM mosques WHERE status<>'archived'" + (" AND id > %s" if after else "") + " ORDER BY id LIMIT %s",
                              ([after] if after else []) + [limit + 1]).fetchall()
         items = [self.row(r) for r in rows[:limit]]
@@ -373,21 +433,6 @@ class Store:
                 out.append(item)
         return sorted(out, key=lambda x: (x["distance_m"], x["id"]))      # a fixed order for equal distances: pages never repeat or skip
 
-    def _near_ids(self, cur, lat, lon, radius):
-        """[(distance_m rounded to 0.1, id)] of the mosques inside the circle, nearest first (equal distances by id). Only id, lat and lon are read:
-        the full rows are fetched for the one page that is returned, not for everything inside the circle."""
-        dlat = radius / 111320.0
-        dlon = radius / (111320.0 * max(math.cos(math.radians(lat)), 0.01))
-        cur.execute("SELECT id, lat, lon FROM mosques WHERE status<>'archived' AND lat BETWEEN %s AND %s AND lon BETWEEN %s AND %s",
-                    (lat - dlat, lat + dlat, lon - dlon, lon + dlon))
-        out = []
-        for r in cur.fetchall():
-            d = haversine_m(lat, lon, r["lat"], r["lon"])
-            if d <= radius:
-                out.append((round(d, 1), r["id"]))
-        out.sort(key=lambda x: (x[0], str(x[1])))
-        return out
-
     MAX_DEPTH = 500
 
     def nearest(self, lat, lon, limit=5, max_m=3000000.0, offset=0):
@@ -396,27 +441,28 @@ class Store:
         ones (not an approximation)."""
         limit = max(1, min(int(limit), 101))
         offset = max(0, min(int(offset), self.MAX_DEPTH))
-        found = []
-        with self.pool.connection() as c:
-            cur = c.cursor()
-            for r in (500.0, 2000.0, 8000.0, 30000.0, 100000.0, max_m):
-                found = self._near_ids(cur, lat, lon, min(r, max_m))
-                if len(found) >= limit + offset:
+        need = limit + offset
+        rows = []
+        with self.reading() as c:
+            # one statement (one round trip to the database): every mosque within 100 km is ranked by the database; only when fewer than needed
+            # are that close, the whole search radius is ranked
+            for r in (min(100000.0, max_m), max_m):
+                dlat = r / 111320.0
+                dlon = r / (111320.0 * max(math.cos(math.radians(lat)), 0.01))
+                rows = c.execute(NEAREST_SQL, {"lat": lat, "lon": lon, "r": r, "n": need, "la1": lat - dlat, "la2": lat + dlat,
+                                               "lo1": lon - dlon, "lo2": lon + dlon}).fetchall()
+                if len(rows) >= need or r >= max_m:
                     break
-            page = found[offset:offset + limit]
-            if not page:
-                return []
-            rows = {str(r["id"]): r for r in cur.execute("SELECT * FROM mosques WHERE id = ANY(%s)", ([i for _, i in page],)).fetchall()}
         out = []
-        for d, i in page:
-            if str(i) in rows:                                   # (archived between the two reads: skipped)
-                item = self.row(rows[str(i)])
-                item["distance_m"] = d
-                out.append(item)
+        for row in rows[offset:offset + limit]:
+            row.pop("_d", None)
+            item = self.row(row)
+            item["distance_m"] = round(haversine_m(lat, lon, row["lat"], row["lon"]), 1)
+            out.append(item)
         return out
 
     def nearby(self, lat, lon, radius):
-        with self.pool.connection() as c:
+        with self.reading() as c:
             return self._nearby(c.cursor(), lat, lon, radius)[:100]
 
     def create(self, body, actor, client=None):
@@ -1602,7 +1648,8 @@ def serve(cfg):
         cli_py = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cli.py")
         children = [subprocess.Popen([sys.executable, cli_py, "serve"], env=env, pass_fds=[sock.fileno()]) for _ in range(workers - 1)]
         cfg.db_pool_max = max(2, -(-cfg.db_pool_max // workers))       # DB_POOL_MAX is the total of the container
-    store = Store(cfg)
+    store = Store(cfg, warm=True)
+    store.start_health_probe()
     srv = build_server(cfg, store, sock)
 
     def purge_loop():

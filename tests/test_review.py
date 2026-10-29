@@ -6,6 +6,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(__file__))
 import helpers  # noqa: E402
+from unittest import mock  # noqa: E402
 from helpers import API, WEB, ServerCase, db, make_cfg, reset_db  # noqa: E402
 import import_osm  # noqa: E402
 
@@ -136,6 +137,36 @@ class OsmRefresh(ServerCase):
         self.assertEqual((r["updated"], r["unchanged"]), (0, 1))
         import_osm.run(el("Second", **{"addr:full": "Street 2, City"}), make_cfg(), store)      # a new address from OSM does replace the old one
         self.assertEqual(self.call("GET", "/mosques/" + mid)[1]["data"]["address"], "Street 2, City")
+
+
+class ReadsAndTransactions(ServerCase):
+    def setUp(self):
+        reset_db()
+        self.use()
+
+    def test_a_connection_used_for_a_read_is_transactional_again_for_the_next_user(self):
+        store = self.srv.store
+        for _ in range(store.pool.max_size * 2):
+            with store.reading() as c:
+                self.assertTrue(c.autocommit)
+        for _ in range(store.pool.max_size * 2):
+            with store.pool.connection() as c:
+                self.assertFalse(c.autocommit)                                   # writes still run in one transaction
+
+    def test_nearest_is_one_statement(self):
+        for i in range(30):
+            self.made(41.0 + i * 0.001, 69.0, name="Q%d" % i, force=True)
+        calls = []
+        real = helpers.app.psycopg.Connection.execute
+
+        def spy(conn, *a, **k):
+            calls.append(a[0])
+            return real(conn, *a, **k)
+        with mock.patch.object(helpers.app.psycopg.Connection, "execute", spy):
+            got = self.srv.store.nearest(41.0, 69.0, 21)
+        self.assertEqual(len(got), 21)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual([m["name"] for m in got], ["Q%d" % i for i in range(21)])
 
 
 class NearestTies(ServerCase):

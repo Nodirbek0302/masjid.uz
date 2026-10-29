@@ -59,8 +59,8 @@ else `X-Client-Id` (browser id). Only a verified Telegram profile is recorded.
 
 ## 2. Health
 
-`GET /masjiduz/v1/health` → `data: {"status": "UP"|"DEGRADED"|"DOWN", "version": "1.0.1", "commit": "...", "env": "staging", "db": "UP"|"DOWN"}`.
-`503` when DOWN (database unreachable, checked with `SELECT 1`, 2 s timeout). Public, no rate limit. The database probe is reused for one second, so a burst of health checks costs one probe per second.
+`GET /masjiduz/v1/health` → `data: {"status": "UP"|"DEGRADED"|"DOWN", "version": "1.0.2", "commit": "...", "env": "staging", "db": "UP"|"DOWN"}`.
+`503` when DOWN (database unreachable). Public, no rate limit. The database is probed in the background (`SELECT 1` every 2 s on its own long-lived connection, 2 s timeout); a request only reads the last result, so it never waits on the database (a probe older than 10 s counts as DOWN).
 
 ## 3. Public endpoints
 
@@ -164,7 +164,7 @@ Nothing else: no telemetry or analytics. (`telegram.org/js/telegram-web-app.js` 
 
 ## 10. Environment variables
 
-`TIMUS_ENV` (`dev|staging|prod`), `TIMUS_APP_MASJIDUZ_` + `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` (secret), `DB_POOL_MAX` (10, connections of the whole `serve` container, split between its workers), `WEB_CONCURRENCY` (4, `serve` worker processes sharing the port; 1–16),
+`TIMUS_ENV` (`dev|staging|prod`), `TIMUS_APP_MASJIDUZ_` + `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` (secret), `DB_POOL_MAX` (40, connections of the whole `serve` container, split between its workers and kept open; `bot`/`import-osm` use at most 10), `WEB_CONCURRENCY` (4, `serve` worker processes sharing the port; 1–16),
 `ADMIN_TOKEN` (secret, optional, ≥32 chars), `TELEGRAM_BOT_TOKEN` (secret), `MODERATOR_IDS` (comma-separated Telegram ids), `ACTOR_SALT` (secret), `CORS_ORIGINS`, `API_BASE`, `TRUSTED_PROXIES`, `COMMIT`,
 `BOT_USERNAME`, `WEBAPP_URL`, `WRITE_RATE_PER_HOUR` (30), `DUPLICATE_RADIUS_M` (50), `REPORT_THRESHOLD` (3), `SHOW_TILE_MOSQUES` (1), `TILE_STYLE_URL`, `AI_DAILY_LIMIT` (300), `GEMINI_API_KEY` (secret, optional, comma-separated keys of separate projects add their limits; reading is off without any key), `GEMINI_MODELS` (`name:rpm:rpd,...` in the order tried), `OVERPASS_URL`, `PRAYER_FAJR_ANGLE`, `PRAYER_ISHA_ANGLE`, `PRAYER_ASR_FACTOR`, `PRAYER_DHUHR_OFFSET_MIN`.
 In `staging`/`prod` missing secrets (`DB_PASSWORD`, `ACTOR_SALT`, `TELEGRAM_BOT_TOKEN`) stop the process with one log line naming the variable; `CORS_ORIGINS=*` stops it in `prod` (warning in `staging`).

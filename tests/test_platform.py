@@ -16,6 +16,7 @@ import threading
 import unittest
 import uuid
 from pathlib import Path
+import time
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -209,6 +210,44 @@ class Envelope(ServerCase):
             self.assertEqual(self.call("GET", "/mosques/" + NOBODY)[0], 503)    # busy pool: the data endpoints retry-later
             h = self.call("GET", "/health", full=True)                          # ... but the database itself is fine (own connection)
             self.assertEqual((h.status, h.json["data"]["status"], h.json["data"]["db"]), (200, "UP", "UP"))
+
+    def test_health_never_waits_for_a_slow_probe(self):
+        import threading as th
+        store = self.srv.store
+        store._ping = (0.0, True)
+        gate = th.Event()
+        with mock.patch.object(store, "ping", lambda: gate.wait(5)):              # a probe that hangs (a slow remote database)
+            t = th.Thread(target=store.ping_cached)
+            t.start()
+            time.sleep(0.2)
+            t0 = time.monotonic()
+            for _ in range(20):
+                self.assertEqual(self.call("GET", "/health")[0], 200)             # the last answer, at once
+            self.assertLess(time.monotonic() - t0, 2)
+            gate.set()
+            t.join(5)
+
+    def test_background_probe_keeps_the_answer(self):
+        store = self.srv.store
+        self.addCleanup(setattr, store, "_probe", None)
+        store._probe = (time.monotonic(), True)
+        self.assertEqual(self.call("GET", "/health")[0], 200)
+        store._probe = (time.monotonic(), False)
+        self.assertEqual(self.call("GET", "/health")[0], 503)
+        store._probe = (time.monotonic() - 30, True)                                 # the probe stopped answering: not trusted
+        self.assertEqual(self.call("GET", "/health")[0], 503)
+        stop = store.start_health_probe(every=0.05)                                 # the real probe
+        self.addCleanup(stop.set)
+        time.sleep(0.3)
+        self.assertEqual(self.call("GET", "/health")[0], 200)
+        with mock.patch.dict(store.cfg.db, {"port": 1}):                            # the database goes away: the probe notices
+            store._probe = None
+            stop.set()
+            stop = store.start_health_probe(every=0.05)
+            self.addCleanup(stop.set)
+            time.sleep(0.5)
+            self.assertEqual(self.call("GET", "/health")[0], 503)
+        stop.set()
 
     def test_health_is_down_when_the_database_cannot_be_reached(self):
         self.srv.store._ping = (0.0, True)                                       # the answer is cached for a second: start without it
@@ -741,12 +780,12 @@ class ConfigValidation(unittest.TestCase):
 
     def test_dev_needs_no_secrets_and_has_defaults(self):
         c = self.cfg()
-        self.assertEqual((c.env, c.rate_limit, c.dup_radius_m, c.report_threshold, c.db_pool_max), ("dev", 30, 50.0, 3, 10))
+        self.assertEqual((c.env, c.rate_limit, c.dup_radius_m, c.report_threshold, c.db_pool_max), ("dev", 30, 50.0, 3, 40))
         self.assertEqual((c.db["host"], c.db["port"], c.db["dbname"], c.db["user"], c.db["password"]), ("127.0.0.1", 5432, "masjid", "masjid", None))
         self.assertEqual((c.api_base, c.cors_origins, c.admin_token, c.moderator_ids, c.gemini_keys), ("/masjiduz/v1", [], "", set(), []))
         self.assertTrue(c.show_tile_mosques)
         self.assertEqual(self.cfg(TIMUS_ENV="").env, "dev")
-        self.assertEqual(c.version, "1.0.1")
+        self.assertEqual(c.version, "1.0.2")
 
     def test_port_zero_is_accepted_in_dev(self):
         self.assertEqual(self.cfg(PORT="0").port, 0)
@@ -847,7 +886,7 @@ class ConfigValidation(unittest.TestCase):
         self.assertEqual(self.staging().admin_token, "")                      # optional
 
     def test_numbers_and_lists(self):
-        for name, bad in (("DB_PORT", "abc"), ("DB_PORT", "0"), ("DB_PORT", "70000"), ("DB_POOL_MAX", "0"), ("DB_POOL_MAX", "101"), ("WRITE_RATE_PER_HOUR", "0"),
+        for name, bad in (("DB_PORT", "abc"), ("DB_PORT", "0"), ("DB_PORT", "70000"), ("DB_POOL_MAX", "0"), ("DB_POOL_MAX", "201"), ("WRITE_RATE_PER_HOUR", "0"),
                           ("REPORT_THRESHOLD", "0"), ("DUPLICATE_RADIUS_M", "far"), ("PRAYER_ASR_FACTOR", "3"), ("MAX_PHOTO_BYTES", "10")):
             with self.assertRaises(config.ConfigError, msg=(name, bad)) as e:
                 self.cfg(**{name: bad})

@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.0.2 — latency under load
+### Fixed
+- p95 of every endpoint stayed ~660 ms under 60 parallel clients because requests waited on the database connection, not on the code:
+  `/health` probed the database while every other health request waited behind it, the pool opened connections while requests waited (slow on a
+  remote cluster), and with 10 connections for the container (3 per worker) requests queued for a connection.
+### Changed
+- `/health` reads the result of a background probe (`SELECT 1` every 2 s on its own connection); it never waits on the database.
+- The `serve` pool is opened in full at start and kept open; `DB_POOL_MAX` default 10 → 40 for the container (10 per worker with `WEB_CONCURRENCY=4`). `bot` and `import-osm` use at most 10.
+- `/mosques/nearest` is one SQL statement (the database ranks the mosques within 100 km; the whole radius only when fewer are that close); reads run in autocommit (no COMMIT round trip).
+- Measured locally, 60 parallel clients, 900 requests, with a simulated remote database (0.6 s per new connection, +5 ms per reply): `/mosques/nearest` p95 638 ms → 44 ms, `/health` 659 ms → 5 ms; with +20 ms per reply: 143 ms and 13 ms.
+### Migrations
+- none
+
 ## 1.0.1 — acceptance fixes
 ### Fixed
 - `POST /map/yandex-failed` and `POST /me/lang` are rate limited (per address and hour, `WRITE_RATE_PER_HOUR`, each its own budget): 429 + `Retry-After` over the limit (CONTRACT §6).
