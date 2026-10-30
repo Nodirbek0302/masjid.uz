@@ -783,11 +783,22 @@
     var bot = cfg.botUsername;
     function fallback(code) { return bot ? function () { window.open("https://t.me/" + encodeURIComponent(bot) + "?start=m_" + m.id, "_blank", "noopener"); } : function () { toast(errText({ message: { code: code } })); }; }
     var canVoice = cfg.voiceReading && navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder;
+    // Inside Telegram the page may not use the microphone (Telegram's web view refuses it on many phones): the voice message is sent in the bot,
+    // with Telegram's own record button, the mosque already chosen.
+    var inTelegram = !!((tg && tg.initData) || tgData);
     return [
       btn("ghost small", "📷 " + T("photo.btn"), cfg.photoReading ? function () { photoSource(m); } : fallback("error.ocrUnavailable")),
-      btn("ghost small", "🎙 " + T("voice.btn"), canVoice ? function () { voiceFlow(m); } : fallback("error.sttUnavailable")),
+      btn("ghost small", "🎙 " + T("voice.btn"), inTelegram && bot ? function () { voiceInBot(m); } : canVoice ? function () { voiceFlow(m); } : fallback("error.sttUnavailable")),
       subButton(m)
     ];
+  }
+  function voiceInBot(m) {
+    var link = "https://t.me/" + encodeURIComponent(cfg.botUsername) + "?start=m_" + m.id;
+    toast(T("voice.in_bot"));
+    try { tg.HapticFeedback.impactOccurred("light"); } catch (e) {}
+    setTimeout(function () {
+      if (tg && tg.openTelegramLink) { tg.openTelegramLink(link); try { tg.close(); } catch (e) {} } else window.open(link, "_blank", "noopener");
+    }, 600);
   }
   // Moderators only (the server checks again): "delete" archives the mosque, so it leaves the map and the list but keeps its history and
   // can be brought back. Telegram's own popup asks first (a stray tap never deletes); for a few seconds the notice offers to undo it.
@@ -962,7 +973,11 @@
       };
       rec.start(); t0 = Date.now();
       timer = setInterval(function () { var sec = Math.floor((Date.now() - t0) / 1000); clock.textContent = Math.floor(sec / 60) + ":" + two(sec % 60); if (sec >= 60) finish(); }, 250);
-    }).catch(function () { if (!cancelled) { toast(T("voice.denied")); openMosque(m.id); } });
+    }).catch(function () {
+      if (cancelled) return;
+      if (cfg.botUsername) { voiceInBot(m); return; }                             // no microphone here: Telegram's voice message instead
+      toast(T("voice.denied")); openMosque(m.id);
+    });
   }
   function voiceRead(m, blob) {
     readSheet(m, {

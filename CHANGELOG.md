@@ -5,6 +5,7 @@
 - Bot: "🧭 Directions" on a mosque card sends the mosque as a Telegram venue (one button instead of a Yandex link plus a map button). Telegram's own map then offers "Directions" in every maps app installed on the phone (Google Maps, Yandex, 2GIS, Waze, Apple Maps …); a short notice says so. Cards sent by 1.0.7 keep working.
 - Web / Mini App: "🧭 Directions" opens a list to pick the app: Google Maps, Yandex Maps, Yandex Navigator (phones, outside Telegram), 2GIS, Waze, Apple Maps (Apple devices), OpenStreetMap. The last choice is marked; the list always stays on the screen.
 ### Fixed
+- Mini App: "Read from voice" did nothing useful inside Telegram: Telegram's web view refuses the microphone on many phones, so the page could not record and only said "no microphone access". Inside Telegram the button now opens the bot with the mosque already chosen, where the five times are said with Telegram's own voice-message button (which always works); in a browser where the microphone is refused, the same. Checked against Gemini: Telegram voice (Ogg/Opus), browser recordings (WebM/Opus) and the app's (M4A/AAC) are all read (a Russian test recording 5/5 in 4–6 s).
 - Tests: the reminder tests used a fixed date and failed once that date was more than three days ago (the bot clears its "already sent" ledger by the real date); they now run on today's date. The bot itself was right.
 ### Migrations
 - none

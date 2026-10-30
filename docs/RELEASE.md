@@ -1,7 +1,7 @@
 # Release v1.0.8
 
 - **Commit:** the commit the annotated tag `v1.0.8` points to (`git rev-parse v1.0.8^{commit}`).
-- **Change:** directions in any maps app: the bot sends a Telegram venue (Telegram's own "Directions" lists the installed maps apps); the web client lets the user pick the app (CHANGELOG 1.0.8).
+- **Change:** voice reading in the Mini App goes through the bot (Telegram's web view refuses the microphone); directions in any maps app: the bot sends a Telegram venue (Telegram's own "Directions" lists the installed maps apps); the web client lets the user pick the app (CHANGELOG 1.0.8).
 - **Server side:** nothing. **Migrations:** none. **New env vars:** none. Restart `serve` and `bot`.
 - **External services:** unchanged; the map apps are opened by the user's device, never by the server.
 - **How it was tested:** 258 tests, ruff; the web list in a phone-size browser (position on screen, the link opened, the last choice marked).
