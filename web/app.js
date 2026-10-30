@@ -116,9 +116,43 @@
   }
 
   // ---- navigation: opens an external app/site; nothing is requested from or stored by Yandex
+  // Directions: the user picks the maps app (the same choice as the mobile app); the last one picked is marked. Web links open the app
+  // when it is installed; Yandex Navigator has only its own scheme, so it is offered on phones outside Telegram.
+  function routeApps(la, lo) {
+    var ua = navigator.userAgent, phone = /Android|iPhone|iPad/.test(ua), apple = /iPhone|iPad|Macintosh/.test(ua);
+    return [
+      ["google", "Google Maps", "https://www.google.com/maps/dir/?api=1&destination=" + la + "," + lo + "&travelmode=driving"],
+      ["yandex", "Yandex Maps", "https://yandex.com/maps/?rtext=~" + la + "," + lo + "&rtt=auto"],
+      phone && !tgData ? ["yandexnavi", "Yandex Navigator", "yandexnavi://build_route_on_map?lat_to=" + la + "&lon_to=" + lo] : null,
+      ["2gis", "2GIS", "https://2gis.uz/routeSearch/rsType/car/to/" + lo + "," + la],
+      ["waze", "Waze", "https://waze.com/ul?ll=" + la + "," + lo + "&navigate=yes"],
+      apple ? ["apple", "Apple Maps", "https://maps.apple.com/?daddr=" + la + "," + lo + "&dirflg=d"] : null,
+      ["osm", "OpenStreetMap", "https://www.openstreetmap.org/directions?engine=fossgis_osrm_car&route=%3B" + la + "%2C" + lo]
+    ].filter(Boolean);
+  }
+  function openRoute(url) {
+    if (!/^https:/.test(url)) { location.href = url; return; }                        // an app's own scheme
+    if (tg && tg.openLink) tg.openLink(url); else window.open(url, "_blank", "noopener");
+  }
   function routeLinks(m) {
-    return [el("a", { class: "btn ghost", target: "_blank", rel: "noopener noreferrer",
-      href: "https://yandex.com/maps/?rtext=~" + m.lat + "," + m.lon + "&rtt=auto", text: "🧭 " + T("link.route") })];
+    var b = btn("ghost", "🧭 " + T("link.route"), function (e) {
+      e.stopPropagation();
+      var last = null;
+      try { last = localStorage.getItem("routeApp"); } catch (x) {}
+      var apps = routeApps(m.lat, m.lon);
+      menuPick(T("route.choose"), apps.map(function (a) { return [a[0], a[1]]; }), last, function (id) {
+        var a = apps.filter(function (x) { return x[0] === id; })[0];
+        try { localStorage.setItem("routeApp", id); } catch (x) {}
+        openRoute(a[2]);
+      });
+      var menu = $("menu"), r = b.getBoundingClientRect();
+      menu.hidden = false; menu.style.right = "auto";
+      var w = menu.offsetWidth, h = menu.offsetHeight;                              // next to the button, always inside the screen:
+      menu.style.left = Math.round(Math.min(Math.max(12, r.left), innerWidth - w - 12)) + "px";
+      var top = r.bottom + 6 + h > innerHeight - 12 ? r.top - 6 - h : r.bottom + 6; // below it when it fits, above it otherwise
+      menu.style.top = Math.round(Math.min(Math.max(12, top), innerHeight - h - 12)) + "px";
+    });
+    return [b];
   }
 
   // ---- own mosque icon (drawn here; no third-party artwork): green badge with dome and minaret

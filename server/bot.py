@@ -583,8 +583,9 @@ class Bot:
                 self.save(chat, user, tx, st)
             elif kind == "osm" and uid in self.admin_ids and self.osm_import:
                 self.start_import(chat, tx)
-            elif kind == "loc":
+            elif kind in ("loc", "route"):                       # ("route": cards sent by an earlier version)
                 self.send_venue(chat, tx, arg)
+                self.toast(tx["route_hint"])
             elif kind in ("sub", "unsub") and self.is_card(msg):    # pressed on a mosque card: the card stays, only its button flips
                 self.card_sub_toggle(chat, user, tx, kind, arg, msg)
             elif kind == "sub":
@@ -764,8 +765,8 @@ class Bot:
 
     def card_buttons(self, tx, m, uid):
         subbed = self.db.is_subscribed(uid, m["id"])
-        rows = [[{"text": tx["route"], "url": "https://yandex.com/maps/?rtext=~%s,%s&rtt=auto" % (m["lat"], m["lon"])},
-                 {"text": tx["venue_btn"], "callback_data": "loc:" + m["id"]}],
+        # directions: the mosque as a Telegram venue; Telegram's own "Directions" then offers every maps app installed on the phone
+        rows = [[{"text": tx["route"], "callback_data": "loc:" + m["id"]}],
                 [{"text": tx["upd_btn"], "callback_data": "pick:" + m["id"], "style": "primary"},
                  {"text": tx["unsub_btn"] if subbed else tx["sub_btn"], "callback_data": ("unsub:" if subbed else "sub:") + m["id"]}]]
         times = m.get("prayer_times") or {}

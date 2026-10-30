@@ -12,6 +12,8 @@ import gemini  # noqa: E402
 import bot as _botmod  # noqa: E402
 
 TEXTS_UZ = _botmod.TEXTS["uz"]
+# the reminder tests run on today's date: the bot clears its "already sent" ledger by the real date (older than 3 days)
+DAY = __import__("datetime").date.today()
 
 FIVE = {"fajr": "05:20", "dhuhr": "12:30", "asr": "16:00", "maghrib": "17:35", "isha": "19:00"}
 
@@ -370,6 +372,19 @@ class BotFlow(unittest.TestCase):
         self.send(text="/update")
         self.assertIn("BOT_OSM_IMPORT=0", self.msgs()[-1])
 
+    def test_directions_use_telegrams_own_map(self):
+        m = self.store.get(self.m["id"])
+        card = self.bot.card_buttons(TEXTS_UZ, m, 555)
+        flat = [b for row in card for b in row]
+        self.assertEqual([b["text"] for b in flat if b.get("callback_data") == "loc:" + m["id"]], [TEXTS_UZ["route"]])   # one "Directions" button
+        self.assertFalse([b for b in flat if "url" in b])                                                  # no single app chosen for the user
+        for data in ("loc:" + m["id"], "route:" + m["id"]):                                                 # ("route:" on cards from 1.0.7)
+            self.tap(data, message_id=91, markup=card, photo=True)
+            v = self.calls("sendVenue")
+            self.assertEqual((len(v), v[0]["latitude"], v[0]["longitude"], v[0]["title"]), (1, 40.0, 66.0, "Bot mosque"))
+            self.assertIn("Yoʻnalish", self.calls("answerCallbackQuery")[0]["text"])                       # how to get to the app list
+            self.assertEqual((self.calls("editMessageText"), self.calls("editMessageCaption")), ([], []))   # the card stays
+
     def test_descriptions_fit_telegram_limits(self):
         import bottexts
         self.assertEqual(set(bottexts.DESCRIPTIONS), {"uz", "ru", "en"})
@@ -559,7 +574,8 @@ class BotFlow(unittest.TestCase):
         for part in ("Bot mosque", "Muqimiy 166", " m", "05:20", "19:00", "Yangilangan"):
             self.assertIn(part, card["text"])
         urls = [b["url"] for row in card["reply_markup"]["inline_keyboard"] for b in row if "url" in b]
-        self.assertEqual(urls, ["https://yandex.com/maps/?rtext=~40.0,66.0&rtt=auto"])
+        self.assertEqual(urls, [])                                                             # directions: Telegram's own map (a venue)
+        self.assertIn("loc:" + self.m["id"], [b.get("callback_data") for row in card["reply_markup"]["inline_keyboard"] for b in row])
         self.assertIn("sub:" + self.m["id"], [b.get("callback_data") for row in card["reply_markup"]["inline_keyboard"] for b in row])
         self.assertEqual([b["callback_data"][:4] for b in self.buttons()], ["new:"])          # the update flow still follows
         self.sent.clear(); self.user = {"id": 556, "first_name": "R", "language_code": "ru"}   # Russian, and a mosque without times
@@ -627,8 +643,8 @@ class BotFlow(unittest.TestCase):
     def test_scheduler_sends_each_reminder_once_in_the_users_language(self):
         import prayertimes as P
         from datetime import datetime, timedelta, timezone
-        tt = P.times(2026, 10, 26, *P.REGIONS[0])
-        local = lambda h: datetime(2026, 10, 26, tzinfo=timezone.utc) + timedelta(hours=h - 5)   # local (UTC+5) clock hour -> UTC instant  # noqa: E731
+        tt = P.times(DAY.year, DAY.month, DAY.day, *P.REGIONS[0])
+        local = lambda h: datetime(DAY.year, DAY.month, DAY.day, tzinfo=timezone.utc) + timedelta(hours=h - 5)   # local (UTC+5) clock hour -> UTC instant  # noqa: E731
         self.bot.db.set_user(555, region=0, daily=True, before_prayer=True, lang="uz")
         self.bot.db.set_user(556, region=0, daily=False, before_prayer=True, lang="ru")
         self.bot.db.set_user(557, region=None, daily=True, before_prayer=True, lang="en")      # no region: nothing can be sent
@@ -666,8 +682,8 @@ class BotFlow(unittest.TestCase):
     def test_a_passing_send_failure_gives_the_claim_back_and_the_next_tick_retries(self):
         import prayertimes as P
         from datetime import datetime, timedelta, timezone
-        tt = P.times(2026, 10, 26, *P.REGIONS[0])
-        local = lambda h: datetime(2026, 10, 26, tzinfo=timezone.utc) + timedelta(hours=h - 5)      # noqa: E731
+        tt = P.times(DAY.year, DAY.month, DAY.day, *P.REGIONS[0])
+        local = lambda h: datetime(DAY.year, DAY.month, DAY.day, tzinfo=timezone.utc) + timedelta(hours=h - 5)      # noqa: E731
         self.bot.db.set_user(555, region=0, daily=True, before_prayer=True, lang="uz")
         state = {"fail": True}
         def api(method, **kw):
@@ -701,12 +717,12 @@ class BotFlow(unittest.TestCase):
     def test_a_blocked_user_is_forgotten_not_retried(self):
         import prayertimes as P
         from datetime import datetime, timedelta, timezone
-        tt = P.times(2026, 10, 26, *P.REGIONS[0])
+        tt = P.times(DAY.year, DAY.month, DAY.day, *P.REGIONS[0])
         self.bot.db.set_user(555, region=0, daily=True, lang="uz")
         def api(method, **kw):
             raise self.botmod.TelegramError(method, 403, "Forbidden: bot was blocked by the user")
         n = self.botmod.Notifier(api, self.bot.db); n.pause = 0
-        n.tick(datetime(2026, 10, 26, tzinfo=timezone.utc) + timedelta(hours=tt["fajr"] - 0.4 - 5))
+        n.tick(datetime(DAY.year, DAY.month, DAY.day, tzinfo=timezone.utc) + timedelta(hours=tt["fajr"] - 0.4 - 5))
         self.assertIsNone(self.bot.db.user(555))
         self.assertEqual(raw_db("SELECT count(*) FROM bot_sent"), [(0,)])
 
@@ -746,7 +762,7 @@ class BotFlow(unittest.TestCase):
         for tid in range(1000, 1060):
             self.bot.db.set_user(tid, region=tid % 14, daily=True, before_prayer=True)
         n = self.botmod.Notifier(lambda m, **kw: self.sent.append((m, kw)), self.bot.db)           # default pause between messages
-        t0 = time.time(); n.tick(datetime(2026, 10, 26, 9, 0, tzinfo=timezone.utc))               # 14:00 local: nothing is due
+        t0 = time.time(); n.tick(datetime(DAY.year, DAY.month, DAY.day, 9, 0, tzinfo=timezone.utc))               # 14:00 local: nothing is due
         self.assertEqual(self.sent, []); self.assertLess(time.time() - t0, 2.0)                  # no sleeping while nothing is sent
 
     def test_subscribers_hear_about_time_changes_but_not_the_editor(self):

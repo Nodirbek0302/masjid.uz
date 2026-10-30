@@ -1,4 +1,12 @@
-# Release v1.0.7
+# Release v1.0.8
+
+- **Commit:** the commit the annotated tag `v1.0.8` points to (`git rev-parse v1.0.8^{commit}`).
+- **Change:** directions in any maps app: the bot sends a Telegram venue (Telegram's own "Directions" lists the installed maps apps); the web client lets the user pick the app (CHANGELOG 1.0.8).
+- **Server side:** nothing. **Migrations:** none. **New env vars:** none. Restart `serve` and `bot`.
+- **External services:** unchanged; the map apps are opened by the user's device, never by the server.
+- **How it was tested:** 258 tests, ruff; the web list in a phone-size browser (position on screen, the link opened, the last choice marked).
+
+## Release v1.0.7
 
 - **Commit:** the commit the annotated tag `v1.0.7` points to (`git rev-parse v1.0.7^{commit}`).
 - **Change:** the moderators' manual OpenStreetMap sync in the bot (`/update`, and the button under `/admin`) is on by default; it only answers the ids in `MODERATOR_IDS` (CHANGELOG 1.0.7).

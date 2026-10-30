@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.8 — directions in any maps app
+### Changed
+- Bot: "🧭 Directions" on a mosque card sends the mosque as a Telegram venue (one button instead of a Yandex link plus a map button). Telegram's own map then offers "Directions" in every maps app installed on the phone (Google Maps, Yandex, 2GIS, Waze, Apple Maps …); a short notice says so. Cards sent by 1.0.7 keep working.
+- Web / Mini App: "🧭 Directions" opens a list to pick the app: Google Maps, Yandex Maps, Yandex Navigator (phones, outside Telegram), 2GIS, Waze, Apple Maps (Apple devices), OpenStreetMap. The last choice is marked; the list always stays on the screen.
+### Fixed
+- Tests: the reminder tests used a fixed date and failed once that date was more than three days ago (the bot clears its "already sent" ledger by the real date); they now run on today's date. The bot itself was right.
+### Migrations
+- none
+
 ## 1.0.7 — the moderators' database update works out of the box
 ### Changed
 - The bot's "update the mosque database" (OpenStreetMap sync) is on by default for the moderators in `MODERATOR_IDS`: a button under `/admin` and the new command `/update` (in the moderators' command menu). `TIMUS_APP_MASJIDUZ_BOT_OSM_IMPORT=0` switches it off.
