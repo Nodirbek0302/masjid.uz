@@ -1,6 +1,6 @@
 # masjid.uz — one image, several commands: serve (default) | bot | migrate | import-osm | import --file F
 # Built by TIMUS from a release tag: `docker build .` (linux/amd64). No secrets, no build args.
-FROM python:3.12-slim-bookworm
+FROM python:3.15-slim-bookworm
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
